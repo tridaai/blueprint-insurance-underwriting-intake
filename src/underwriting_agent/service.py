@@ -1471,6 +1471,55 @@ class SubmissionService:
         )
         return annotate_proposal(proposal)
 
+    def snapshot_sla_calibration(self, actor: str) -> dict:
+        """Keep a snapshot of the SLA calibration report as it
+        stands now (``proposals.build_calibration_snapshot``):
+        the budgets in force, the decided evidence weighed, and
+        per tier which candidate rows were proposal-ready — dated
+        and under the taker's name. Operator-kept, never on a
+        timer; keeping one changes nothing but the snapshot list,
+        and the snapshots are what the calibration diff reads."""
+        from .proposals import CALIBRATION_SNAPSHOTS_KEY, build_calibration_snapshot
+
+        store = self._get_store()
+        document = store.get_document(CALIBRATION_SNAPSHOTS_KEY) or {}
+        snapshots = list(document.get("snapshots") or [])
+        snapshot = build_calibration_snapshot(
+            self.sla_budget_calibration(),
+            f"cal-{len(snapshots) + 1:04d}",
+            actor,
+        )
+        snapshots.append(snapshot)
+        store.save_document(
+            CALIBRATION_SNAPSHOTS_KEY, {"snapshots": snapshots}
+        )
+        return snapshot
+
+    def sla_calibration_snapshots(self) -> list[dict]:
+        """Every stored SLA-calibration snapshot, in the order
+        kept."""
+        from .proposals import CALIBRATION_SNAPSHOTS_KEY
+
+        document = self._get_store().get_document(CALIBRATION_SNAPSHOTS_KEY) or {}
+        return list(document.get("snapshots") or [])
+
+    def sla_calibration_snapshot_diff(self) -> dict:
+        """The proposal-ready movement between the two latest
+        calibration snapshots (``proposals.calibration_snapshot_diff``):
+        per tier, which candidate rows became proposal-ready and
+        which stopped being, beside the budget and decided-count
+        movement. Fewer than two snapshots is not a diff — the
+        report says so instead of inventing movement."""
+        from .proposals import calibration_snapshot_diff
+
+        snapshots = self.sla_calibration_snapshots()
+        if len(snapshots) < 2:
+            return {"snapshot_count": len(snapshots), "diff": None}
+        return {
+            "snapshot_count": len(snapshots),
+            "diff": calibration_snapshot_diff(snapshots[-2], snapshots[-1]),
+        }
+
     def draft_status_note(self, submission_id: str) -> dict:
         """Draft the underwriter status note for an SLA-breached case.
 

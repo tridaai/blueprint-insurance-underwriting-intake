@@ -545,6 +545,32 @@ def draft_sla_proposal_from_row(request: SlaCalibrationDraftRequest) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.post("/queue/sla/calibration/snapshots", dependencies=_AUTH)
+def snapshot_sla_calibration(request: DecisionRequest) -> dict:
+    """Keep a snapshot of the SLA calibration report as it stands
+    now: the budgets in force, the decided cases weighed, and per
+    tier which candidate rows were proposal-ready — stored dated
+    and under the taker's name. Operator-kept, never on a timer;
+    snapshots are what the calibration diff compares."""
+    return service.snapshot_sla_calibration(_decision_actor(request))
+
+
+@app.get("/queue/sla/calibration/snapshots", dependencies=_AUTH)
+def sla_calibration_snapshots() -> dict:
+    """Every stored SLA-calibration snapshot, in the order kept."""
+    return {"snapshots": service.sla_calibration_snapshots()}
+
+
+@app.get("/queue/sla/calibration/snapshots/diff", dependencies=_AUTH)
+def sla_calibration_snapshot_diff() -> dict:
+    """The proposal-ready movement between the two latest
+    calibration snapshots: per tier, which candidate rows became
+    proposal-ready and which stopped being, beside the budget
+    and decided-case movement. Fewer than two snapshots kept is
+    reported as no diff, not as no movement."""
+    return service.sla_calibration_snapshot_diff()
+
+
 @app.post("/queue/sla-proposals/draft", dependencies=_AUTH)
 def draft_sla_budget_proposals() -> dict:
     """Scan the decided cases' waits for proposal-worthy SLA

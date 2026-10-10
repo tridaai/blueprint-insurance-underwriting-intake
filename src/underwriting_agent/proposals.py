@@ -63,7 +63,13 @@ rows, but drafting used to mean running the whole scan and
 accepting its best row per tier.
 :func:`draft_sla_proposal_from_row` drafts a proposal for one
 operator-chosen (tier, value) row instead, carrying the row's
-evidence verbatim — the report is no longer read-only.
+evidence verbatim — the report is no longer read-only. The
+report itself can also be kept:
+:func:`build_calibration_snapshot` stores it dated and under
+the taker's name (like the digest snapshots), and
+:func:`calibration_snapshot_diff` reads two kept reports'
+proposal-ready rows against each other, so a budget debate can
+cite the evidence as of a date.
 """
 
 from __future__ import annotations
@@ -1425,6 +1431,131 @@ def sla_budget_calibration(
             "set is one-sided decided evidence — the same bar the "
             "SLA proposal scan drafts from."
         ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Calibration snapshots — the report, kept, so evidence has a date
+# ---------------------------------------------------------------------------
+
+#: Store document key for the SLA-calibration snapshots (see
+#: :func:`build_calibration_snapshot`): ``{"snapshots": [...]}``,
+#: one appended document per operator-kept report.
+CALIBRATION_SNAPSHOTS_KEY = "sla_calibration_snapshots"
+
+
+def build_calibration_snapshot(
+    report: dict, snapshot_id: str, actor: str, taken_at: str = ""
+) -> dict:
+    """One stored snapshot of the SLA calibration report.
+
+    The report is computed live from the stored records and
+    evaporates on read, like the ops digest did before its
+    snapshots. A budget debate, though, cites evidence *as of a
+    date*: "last month every high-tier row under 3 days was
+    proposal-ready" is a claim about a report nobody kept. A
+    snapshot keeps the report's decision-relevant shape — the
+    budgets in force, how many decided cases were weighed, and
+    per tier the budget, its source, the decided count, the wait
+    distribution, and the candidate values whose rows were
+    ``proposal_ready`` — dated and under the taker's name. The
+    full sweep arithmetic is deliberately not kept: it is
+    reproducible from the records, and what a later reader needs
+    is which moves the evidence supported, not every row's
+    splits. Snapshots are operator-kept, never on a timer — the
+    same discipline as the digest snapshots.
+    """
+    tiers = []
+    for tier_block in report.get("tiers") or []:
+        tiers.append(
+            {
+                "tier": tier_block.get("tier", ""),
+                "budget_in_force": tier_block.get("budget_in_force"),
+                "budget_source": tier_block.get("budget_source", ""),
+                "decided_cases": tier_block.get("decided_cases", 0),
+                "waits": dict(tier_block.get("waits") or {}),
+                "proposal_ready_rows": sorted(
+                    row["value"]
+                    for row in tier_block.get("sweeps") or []
+                    if row.get("proposal_ready")
+                ),
+            }
+        )
+    return {
+        "snapshot_id": snapshot_id,
+        "taken_at": taken_at or _now(),
+        "taken_by": actor,
+        "budgets": dict(report.get("budgets") or {}),
+        "decided_cases_weighed": report.get("decided_cases_weighed", 0),
+        "tiers": tiers,
+    }
+
+
+def calibration_snapshot_diff(older: dict, newer: dict) -> dict:
+    """Two kept calibration reports read against each other.
+
+    The headline product is the **proposal-ready movement**: per
+    tier, which candidate values' rows became proposal-ready
+    between the two snapshots (``entered``) and which stopped
+    being (``cleared``) — the evidence a budget debate actually
+    turns on, stated as movement rather than two reports side by
+    side. The budgets in force and the decided-case counts ride
+    along per tier (from → to, and the change), so a ready row
+    that appeared because the budget moved reads differently
+    from one that appeared because the decided evidence grew.
+    A tier missing from either snapshot reads as no ready rows
+    and unknown values — absence in a snapshot is a fact about
+    the snapshot, not something to invent around.
+    """
+    def _tiers_by_name(snapshot: dict) -> dict[str, dict]:
+        return {
+            block.get("tier", ""): block
+            for block in snapshot.get("tiers") or []
+        }
+
+    before = _tiers_by_name(older)
+    after = _tiers_by_name(newer)
+    tiers: dict[str, dict] = {}
+    for tier in QUEUE_SLA_DEFAULTS:
+        old_block = before.get(tier) or {}
+        new_block = after.get(tier) or {}
+        old_ready = set(old_block.get("proposal_ready_rows") or [])
+        new_ready = set(new_block.get("proposal_ready_rows") or [])
+        old_budget = old_block.get("budget_in_force")
+        new_budget = new_block.get("budget_in_force")
+        old_cases = old_block.get("decided_cases")
+        new_cases = new_block.get("decided_cases")
+        tiers[tier] = {
+            "budget_in_force": {
+                "from": old_budget,
+                "to": new_budget,
+                "changed": (
+                    old_budget != new_budget
+                    and old_budget is not None
+                    and new_budget is not None
+                ),
+            },
+            "decided_cases": {
+                "from": old_cases,
+                "to": new_cases,
+                "change": (
+                    new_cases - old_cases
+                    if old_cases is not None and new_cases is not None
+                    else None
+                ),
+            },
+            "proposal_ready_entered": sorted(new_ready - old_ready),
+            "proposal_ready_cleared": sorted(old_ready - new_ready),
+        }
+    return {
+        "from_snapshot": older.get("snapshot_id", ""),
+        "to_snapshot": newer.get("snapshot_id", ""),
+        "from_taken_at": older.get("taken_at", ""),
+        "to_taken_at": newer.get("taken_at", ""),
+        "budgets_changed": any(
+            row["budget_in_force"]["changed"] for row in tiers.values()
+        ),
+        "tiers": tiers,
     }
 
 
