@@ -211,6 +211,32 @@ with the broker letter's own text families before it is stored,
 and kept on the record as an internal draft. It is never sent;
 drafting it moves nothing else about the case.
 
+A breach can also be **announced**: `POST /queue/sla-notifications`
+runs the breach check, and the first time the queue projection
+observes a case past its budget, one signed `sla_breach` webhook
+fires through the same output-routing seam as approvals (same
+`ACTION_WEBHOOK_URL`, same HMAC signature) and the notice is
+recorded on the record — its own delivery ledger
+(`GET /submissions/{id}/sla-breach`, retry at
+`POST /submissions/{id}/sla-breach/retry`). The record is the
+dedupe: a submission is announced at most once, however often the
+check runs, and a failed firing waits for an operator retry
+carrying the original breach snapshot. The check is invoked, not
+timed — there is no scheduler hiding in the service — and with no
+webhook configured nothing fires and nothing is recorded, so
+configuring one later still announces the standing breaches.
+
+The note, meanwhile, is **followed through**. It snapshots what
+the case was waiting on (missing elements, gap sources, blocking
+lines) in data, not just prose. When a resubmission from the same
+insured arrives, the new run checks that snapshot against its own
+computed facts: the new packet carries a follow-through section —
+what was outstanding then, what arrived with this submission, what
+is still missing — and the note's own record is marked answered /
+partially answered / still outstanding, with the answering
+submission's id. The note's text is never rewritten, so a stale
+note can never quietly read as the current state of the case.
+
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:
 requested limit and deductible, revenue, years in business, line and
@@ -250,7 +276,34 @@ nothing. The **loss-development timeline**
 diffs into one history: an entry per submission (per line) and
 one event stream per claim — appeared, developed, no longer
 listed — so the third renewal reads as an arc, not three separate
-comparisons.
+comparisons. The arc also sits **inside the renewal packet** now:
+composed from the stored timeline with the current submission's
+own diff replayed over it, the packet's loss-history-arc section
+carries the counts, the cumulative net incurred movement, and the
+claims still open — the narrative next to the decision, not only
+behind the console's drill-down.
+
+Calibration can now also **propose**. `POST /calibration/proposals/draft`
+scans the same replay for moves whose gained or lost referrals
+carry one-sided decision evidence — a lower floor whose gained
+referrals are all cases underwriters rejected (and none they
+approved), or a higher floor whose lost referrals are all cases
+they approved anyway — and drafts a threshold-change **proposal**
+(`GET /calibration/proposals`) with the evidence attached. A
+moved set containing an undecided or contradicting case drafts
+nothing; one live proposal per dimension; a rejected direction is
+never re-proposed in another size. A human decides
+(`POST /calibration/proposals/{id}/decide`): rejecting changes
+only the proposal, but **accepting writes the new threshold into
+a settings record the classifier reads** — environment values are
+the base, the record overrides per dimension, and the very next
+renewal triages under the accepted values with no restart. The
+record keeps the audit history (proposal, dimension, from → to,
+actor, timestamp; `GET /calibration/settings`), and the
+calibration replay centres on the thresholds actually in force
+and names their source. Nothing auto-applies: appetite stays a
+human decision — the code just stops making the human do the
+arithmetic.
 
 **Multi-line submissions** — a broker often submits the whole
 account at once, so intake accepts a bundle (`lines` on the
@@ -404,9 +457,10 @@ load-bearing ones:
 | `GUARDRAIL_REPAIR` / `GUARDRAIL_REPAIR_MAX_ATTEMPTS` | `on`/`off` / 0–3 | `on` / `1` |
 | `RUN_TOKEN_BUDGET` | token cap per run (degrades to templates) | off |
 | `DIAGNOSIS_MAX_TOOL_CALLS` | 0–6 | `4` |
-| `DIFF_LIMIT_JUMP_PCT` | renewal limit jump (%) that becomes a referral trigger | `50` |
-| `DIFF_NEW_CLAIM_MIN_INCURRED` | renewal new-claims incurred floor for a referral trigger | `50000` |
-| `ACTION_WEBHOOK_URL` | approval dispatch endpoint | off |
+| `DIFF_LIMIT_JUMP_PCT` | renewal limit jump (%) that becomes a referral trigger (base value — an accepted calibration proposal's settings record overrides it) | `50` |
+| `DIFF_NEW_CLAIM_MIN_INCURRED` | renewal new-claims incurred floor for a referral trigger (same override rule) | `50000` |
+| `DIFF_DEVELOPMENT_MIN_INCREASE` | renewal adverse-development incurred floor for a referral trigger (same override rule) | `50000` |
+| `ACTION_WEBHOOK_URL` | output-routing endpoint: approval packets + `sla_breach` events | off |
 | `ACTION_WEBHOOK_SECRET` | HMAC key signing dispatches (`X-Trida-Signature`) | off (unsigned) |
 | `API_KEY` | optional `X-API-Key` gate for the API | off |
 | `QUEUE_SLA_DAYS_ELEVATED` / `_HIGH` / `_MODERATE` / `_LOW` | queue SLA budget in days by risk tier | 2 / 3 / 5 / 7 |
@@ -525,11 +579,14 @@ src/underwriting_agent/
   object_store.py   submission documents: S3-compatible / in-memory
   observability.py  JSON logs + request IDs
   service.py        run + decision bookkeeping, batch, webhook
+  proposals.py      calibration proposals + the threshold settings
+                    record the classifier reads
   wiring.py         composition root
   ports.py          the seams, as protocols
   api.py / cli.py / demo.py / static/   surfaces
 migrations/         numbered SQL schema (extensions, approvals,
-                    guideline embeddings), applied at startup
+                    guideline embeddings, service documents),
+                    applied at startup
 evals/              golden.jsonl + runners (deterministic + LLM-judge)
 data/sample/        sample submissions + guidelines (mirrors)
 tests/              the pytest suite (hermetic) + DATABASE_URL-gated

@@ -459,6 +459,48 @@ numbers on the submission and its loss records. Line aliases fold too
   (per line) plus one event stream per claim — appeared,
   developed, no longer listed. Both surfaces are read-only; the
   timeline reports stored diffs and never recomputes them.
+- **Round 8 closes three loops those surfaces opened.** (1) A
+  breach is *announced*: `service.notify_sla_breaches` computes
+  crossings from the queue projection at call time (invoked, not
+  timed) and fires one signed `sla_breach` event per submission
+  through the same `_post_webhook` seam approvals use — the
+  signing/posting/ledger code exists exactly once, and the
+  approval payload now names its event (`"event": "approval"`)
+  so a receiver can tell the two apart. The notice lives on the
+  record with its own ledger (`sla_breach_attempts`, separate
+  from the approval ledger — different event, different retry);
+  the recorded notice *is* the dedupe, and a failed firing waits
+  for an operator retry that carries the original breach
+  snapshot rather than today's age. With no webhook configured
+  nothing is recorded, so a later configuration still announces
+  standing breaches. (2) The status note is *followed through*:
+  drafting snapshots its outstanding items in data
+  (`note["outstanding"]`), and a resubmission from the same
+  insured runs `insights.status_note_follow_through` against its
+  computed facts — the packet gains the section (what was
+  outstanding, what arrived, what is still missing) and the
+  note's record gains a `follow_through` marking. One function
+  feeds both surfaces, so packet and record cannot disagree;
+  the note's text is never rewritten. Pre-snapshot notes report
+  `not_recorded` instead of pretending to have been answered.
+  (3) Calibration *proposes*: `proposals.py` scans the replay
+  for one-sided decided evidence (gained referrals all rejected
+  / lost referrals all approved; undecided or contradicting
+  moved cases draft nothing) and stores proposal documents in
+  the new `service_documents` table (migration `0004`; a
+  key/value document capability on the Store port). Accepting a
+  proposal writes the threshold into a settings document, and
+  threshold resolution — environment base, settings override,
+  in `proposals.effective_thresholds` — is the single path the
+  service passes into every analysis and the calibration replay
+  centres on. The trade-off is explicit: thresholds are no
+  longer purely deploy-time configuration, so the settings
+  record carries its own audit history (proposal, from → to,
+  actor, timestamp) and the calibration view names its source.
+  The loss arc, finally, also renders *inside* the packet
+  (`insights.loss_timeline_packet_lines`): the stored timeline
+  with the current diff replayed over its claim states, so the
+  cumulative the packet quotes includes this submission.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 
