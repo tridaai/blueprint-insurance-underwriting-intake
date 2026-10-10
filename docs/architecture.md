@@ -678,6 +678,35 @@ numbers on the submission and its loss records. Line aliases fold too
   growing a second worked-state or a second knob family: the
   operational fact — silence after human contact — is the same
   fact the escalation already prices.
+- **Round 15 closes the round's own loops: every surface that
+  reports now also nudges, previews, or trends.** (1) The status
+  note's drafter is code, so its steered repair is deterministic
+  where the letter's is a model redraft — but the discipline is
+  the same: the steering quotes the guardrail's own hits, the
+  rewrite targets the family's approved *note* shape (an
+  authority sentence is deleted, not rephrased, because a note
+  has no business recording whose authority the case sits in),
+  and the gate revalidates before anything is stored. The line
+  between wording and substance is the design: interpolation can
+  smuggle a phrasing, never a premium, so wording earns a repair
+  and substance keeps its refusal. (2) The advisory trend is a
+  metric family, not a new store: the runs already recorded
+  their advisories and repair flags, so `/metrics` aggregates
+  what the store holds. The clear rate's denominator is runs
+  *with* advisories — a run that never drafted one is not a
+  success, it is not evidence either way. (3) The still-waiting
+  second rung reuses the same window at twice the length rather
+  than inventing a second knob: one operational fact (silence
+  after contact) priced at two severities, and the escalated
+  subset stays out of `total_attention` because a count of work
+  must count cases, not loudness. The queue flag matches by
+  submission, not insured — the acknowledgement lives on the
+  case's own record, unlike the follow-through notes, which are
+  one insured's loop read across their records. (4) The prune
+  preview is the restore/refresh idiom completed: every
+  consequential write in the console now has a dry run that
+  shares the write's own computation, which is what makes
+  "preview, then act" a guarantee rather than a promise.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 

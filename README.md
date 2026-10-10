@@ -168,7 +168,13 @@ submission-quality report from the same records — completeness
 trend, extraction discrepancy rate, top missing elements — with a
 drafted report text (drafted, never sent; the console shows it from
 the inbox), **`/metrics`** totals runs, decisions, tokens, cost,
-and latency, and **`/audit/export`** emits the full decision trail
+and latency — and aggregates the runs' recorded **letter
+advisories** (the borderline phrasings the blocking guardrails
+deliberately miss) into a drafting-quality trend: runs with
+advisories, the total, the per-run rate, the family mix, and how
+often the one steered redraft cleared them, so a model or prompt
+regression shows up as a number before it becomes guardrail
+failures — and **`/audit/export`** emits the full decision trail
 as JSON or CSV. Decisions record **`decided_at`** alongside who
 decided and why — on the result, in the audit export, in the
 feedback entries, and in the webhook payload — and **`/queue`**
@@ -180,7 +186,13 @@ a status note whose loop has aged past the escalation window, the
 item names that note and its age, and the view lists every
 escalated note with the awaiting submissions its insured
 currently has — the rotting loops on the worklist itself, not
-only in the digest.
+only in the digest. And an item whose own breach notice was
+**acknowledged** — the operator already called the broker — and
+is still undecided at twice the follow-through window carries
+the acknowledgement itself (`acknowledged_escalation`: who
+called, when, their note), with those cases listed again in
+`escalated_acknowledgements`: the second touch reads the first
+one's record, never pretends to be the first.
 Webhook dispatches can be HMAC-signed (`ACTION_WEBHOOK_SECRET`) so
 the receiving system can verify the packet's origin. Every dispatch
 is recorded in a **delivery ledger** on the record — attempt number,
@@ -225,7 +237,17 @@ how long the bundle has waited on it. For a breached case,
 status note — composed in code from the record, guardrail-checked
 with the broker letter's own text families before it is stored,
 and kept on the record as an internal draft. It is never sent;
-drafting it moves nothing else about the case.
+drafting it moves nothing else about the case. A note that fails
+on **wording alone** — record prose its composition interpolated
+(a gap source, a missing-element label) carrying a forbidden
+phrasing — earns one **steered redraft** before refusal: the
+offending sentence is rewritten into the family's approved note
+shape (an authority-carrying sentence comes out), the rewrite is
+revalidated against the same gate, and the stored note carries
+the repair — the original validation and the guidance that
+steered it. A note failing anything else (bind language, a
+premium figure, a promise, PII) is refused outright, as it
+always was: steering is for wording, refusal is for substance.
 
 Once an ops-digest snapshot has been kept (below), the queue is
 also **trend-aware**: each breached item is flagged
@@ -330,7 +352,19 @@ discipline**: a keep-last-N prune
 is the only way a kept snapshot leaves, it is recorded on the
 document it pruned (who, when, what left, the surviving range),
 and snapshot ids run one past the highest number still kept, so
-a citation names exactly one kept report forever.
+a citation names exactly one kept report forever. Both prunes
+now **preview** (`POST /ops/digest/snapshots/prune/preview`,
+`POST /queue/sla/calibration/snapshots/prune/preview`, console
+buttons): the ids a keep-N would remove and the range that would
+survive, computed by the prune's own split, writing and
+recording nothing — the prune that follows on the same document
+produces exactly the previewed removals. And the still-waiting
+surface has a **second rung**: at twice the window a still-
+waiting case is flagged `escalated` in the digest, counted in
+`acknowledged_escalated` (a subset of still-waiting — never a
+second helping of `total_attention`), named in the headline,
+and surfaced on the queue with its acknowledgement attached
+(above).
 
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:
