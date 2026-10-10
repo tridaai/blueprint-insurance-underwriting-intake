@@ -1,0 +1,244 @@
+"""FastAPI surface for the Underwriting Submission Intake Agent prototype.
+
+Run:  uvicorn underwriting_agent.api:app    (or `make serve`)
+UI:   http://localhost:8000/                (minimal demo console, no build step)
+Docs: http://localhost:8000/docs
+"""
+
+from __future__ import annotations
+
+import json
+import queue
+import threading
+from pathlib import Path
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+
+from .config import env_str, load_dotenv, silence_langchain_deprecation_warnings
+
+# Must precede the service import (which loads the graph/langgraph).
+silence_langchain_deprecation_warnings()
+
+from .errors import ProviderError
+from .events import CallbackSink, RunEvent
+from .guidelines_data import GUIDELINES
+from .samples import load_sample_submissions
+from .schemas import AgentResult, DecisionRequest, SubmissionInput
+from .wiring import build_service_from_env
+
+# Load the repo-root .env at startup (real environment variables win), so
+# MODEL_BACKEND / RETRIEVER / API keys can live in the file — see .env.example.
+load_dotenv()
+
+
+def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    """Optional API-key gate, enabled by setting ``API_KEY``.
+
+    When ``API_KEY`` is set, every data endpoint (read + mutating)
+    requires the matching ``X-API-Key`` header. When it is unset the
+    API is open — the local-dev default, stated here and in the docs
+    rather than implied. The console page and /health stay open either
+    way; the console carries an API-key field for the gated calls.
+    """
+    expected = env_str("API_KEY")
+    if not expected:
+        return
+    if x_api_key != expected:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key (send the X-API-Key header).",
+        )
+
+
+_AUTH = [Depends(require_api_key)]
+
+app = FastAPI(
+    title="Trida AI Blueprint — Insurance Underwriting Submission Intake Agent",
+    description="Reference prototype. Synthetic data only. Drafts stop at an underwriter gate; the agent never quotes a premium, never binds coverage, and never declines on its own.",
+    version="0.1.0",
+)
+
+service = build_service_from_env()
+
+
+@app.exception_handler(ProviderError)
+def provider_error_handler(request: Request, exc: ProviderError) -> JSONResponse:
+    """A provider failure is a clean 502 with the actionable, translated
+    message (backend, endpoint, likely fix) — never a stack dump."""
+    return JSONResponse(status_code=502, content={"detail": str(exc)})
+
+
+_STATIC_DIR = Path(__file__).parent / "static"
+_INDEX_HTML = _STATIC_DIR / "index.html"
+_BRAND_DIR = _STATIC_DIR / "brand"
+
+# Branded static assets (logo, favicon) for the demo console.
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+def favicon_svg() -> FileResponse:
+    return FileResponse(_BRAND_DIR / "favicon.svg", media_type="image/svg+xml")
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon_ico() -> FileResponse:
+    return FileResponse(_BRAND_DIR / "favicon.ico", media_type="image/x-icon")
+
+
+@app.get("/evals/results", dependencies=_AUTH)
+def eval_results() -> dict:
+    """Latest eval summary, as emitted by ``evals/run_evals.py``.
+
+    Looked up in the packaged copy first (present in installs/Docker),
+    then in a repo checkout's ``evals/results.json``. 404 when no eval
+    run has been recorded yet — the console shows a 'run evals' state.
+    """
+    candidates = [
+        Path(__file__).parent / "data" / "eval_results.json",
+        Path.cwd() / "evals" / "results.json",
+        Path(__file__).resolve().parents[2] / "evals" / "results.json",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return json.loads(candidate.read_text(encoding="utf-8"))
+    raise HTTPException(
+        status_code=404,
+        detail="No eval results yet. Run: python evals/run_evals.py",
+    )
+
+
+def _decision_actor(request: DecisionRequest) -> str:
+    actor = request.actor_name()
+    if not actor:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide 'actor' — the underwriter's name ('approver'/'reviewer' are accepted legacy aliases).",
+        )
+    return actor
+
+
+@app.get("/", response_class=HTMLResponse)
+def index() -> str:
+    return _INDEX_HTML.read_text(encoding="utf-8")
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok", "prototype": "trida-blueprint-insurance-underwriting-intake"}
+
+
+@app.get("/guidelines", dependencies=_AUTH)
+def list_guidelines() -> list[dict]:
+    return GUIDELINES
+
+
+@app.get("/samples", dependencies=_AUTH)
+def list_samples() -> list[dict]:
+    return load_sample_submissions()
+
+
+@app.post("/submissions/analyze", response_model=AgentResult, dependencies=_AUTH)
+def analyze(submission: SubmissionInput) -> AgentResult:
+    return service.analyze(submission)
+
+
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+@app.post("/submissions/analyze/stream", dependencies=_AUTH)
+def analyze_stream(submission: SubmissionInput) -> StreamingResponse:
+    """The same analysis as ``POST /submissions/analyze``, streamed.
+
+    The run executes on a worker thread; its structured events (see
+    ``events.py``) are forwarded as Server-Sent Events as they happen.
+    The final event is ``run_completed`` and carries the full result
+    JSON under ``result`` — the same payload the non-stream endpoint
+    returns. A failed run ends the stream with a ``run_failed`` event
+    carrying the clean, translated error message (no stack dump).
+    """
+    events_queue: queue.Queue = queue.Queue()
+    sink = CallbackSink(events_queue.put)
+    outcome: dict = {}
+
+    def work() -> None:
+        try:
+            outcome["result"] = service.analyze(submission, event_sink=sink)
+        except Exception as exc:  # surfaced as the run_failed event below
+            outcome["error"] = exc
+        finally:
+            events_queue.put(None)  # sentinel: the run is over
+
+    threading.Thread(target=work, daemon=True).start()
+
+    def generate():
+        completed: RunEvent | None = None
+        while True:
+            event = events_queue.get()
+            if event is None:
+                break
+            if event.type == "run_completed":
+                completed = event  # held back: it goes out last, with the result
+                continue
+            yield _sse(event.to_dict())
+        if "error" in outcome:
+            yield _sse(
+                {
+                    "type": "run_failed",
+                    "submission_id": submission.submission_id,
+                    "node": None,
+                    "duration_ms": None,
+                    "detail": {"error": str(outcome["error"])},
+                }
+            )
+            return
+        final = (
+            completed.to_dict()
+            if completed is not None
+            else {
+                "type": "run_completed",
+                "submission_id": submission.submission_id,
+                "node": None,
+                "duration_ms": None,
+                "detail": {"status": outcome["result"].status},
+            }
+        )
+        final["result"] = outcome["result"].model_dump(mode="json")
+        yield _sse(final)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/submissions/{submission_id}", response_model=AgentResult, dependencies=_AUTH)
+def get_result(submission_id: str) -> AgentResult:
+    result = service.get(submission_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Submission not analyzed yet.")
+    return result
+
+
+@app.post("/submissions/{submission_id}/approve", response_model=AgentResult, dependencies=_AUTH)
+def approve(submission_id: str, request: DecisionRequest) -> AgentResult:
+    try:
+        return service.approve(
+            submission_id, approver=_decision_actor(request), reason=request.reason or ""
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/submissions/{submission_id}/reject", response_model=AgentResult, dependencies=_AUTH)
+def reject(submission_id: str, request: DecisionRequest) -> AgentResult:
+    try:
+        return service.reject(
+            submission_id, reviewer=_decision_actor(request), reason=request.reason or ""
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
