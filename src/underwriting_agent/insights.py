@@ -1276,6 +1276,16 @@ def follow_through_digest(
     not become a quieter place to rot — and a further touch can
     be recorded then. The note's text and its follow-through
     marking are never touched by any of this.
+
+    The touches also price the response: each touched note
+    carries a **response latency** — the days from the moment
+    the note first escalated (drafted + one window) to its
+    *first* touch — and the digest aggregates them as
+    ``response_latency`` (notes measured, median / mean / max
+    days). The worked counts say how many notes were touched;
+    this says how fast. A note answered only after it
+    re-escalated carries the whole wait: the first touch is the
+    response the escalation got, whenever it finally came.
     """
     now = now or datetime.now(timezone.utc)
     if escalation_days is None:
@@ -1317,6 +1327,22 @@ def follow_through_digest(
         )
         touches = note.get("escalation_touches") or []
         latest_touch = touches[-1] if touches else None
+        first_touch = touches[0] if touches else None
+        first_touch_at = _parse_timestamp(
+            (first_touch or {}).get("worked_at") or ""
+        )
+        # Response latency (see the docstring): the first
+        # touch against the first escalation moment. Touches
+        # append chronologically, so the first is the response;
+        # later touches re-quiet, they do not re-answer.
+        response_days = None
+        if first_touch_at is not None and drafted is not None:
+            escalated_on = drafted.date() + timedelta(
+                days=escalation_days
+            )
+            response_days = max(
+                0, (first_touch_at.date() - escalated_on).days
+            )
         worked_at = _parse_timestamp(
             (latest_touch or {}).get("worked_at") or ""
         )
@@ -1351,6 +1377,9 @@ def follow_through_digest(
                 "worked": latest_touch,
                 "worked_touches": len(touches),
                 "worked_age_days": worked_age_days,
+                "first_touch_at": (first_touch or {}).get("worked_at")
+                or "",
+                "response_days": response_days,
                 "quieted_by_work": quieted_by_work,
                 "state": state,
                 "outstanding_at_drafting": len(_outstanding_entries(note)),
@@ -1375,6 +1404,33 @@ def follow_through_digest(
         e for e in entries if e["worked"] is not None and not e["escalated"]
     ]
     quieted = [e for e in entries if e["quieted_by_work"]]
+    response_values = sorted(
+        e["response_days"]
+        for e in entries
+        if e["response_days"] is not None
+    )
+    if response_values:
+        mid = len(response_values) // 2
+        median_days = (
+            float(response_values[mid])
+            if len(response_values) % 2
+            else (response_values[mid - 1] + response_values[mid]) / 2
+        )
+        response_latency = {
+            "notes_measured": len(response_values),
+            "median_days": round(median_days, 1),
+            "mean_days": round(
+                sum(response_values) / len(response_values), 1
+            ),
+            "max_days": response_values[-1],
+        }
+    else:
+        response_latency = {
+            "notes_measured": 0,
+            "median_days": None,
+            "mean_days": None,
+            "max_days": None,
+        }
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "total_notes": len(entries),
@@ -1387,6 +1443,7 @@ def follow_through_digest(
         "worked": worked,
         "quieted_count": len(quieted),
         "quieted": quieted,
+        "response_latency": response_latency,
     }
 
 
@@ -2265,8 +2322,14 @@ def ops_digest(
     :func:`follow_through_digest`'s own counts): the problem
     counts alone cannot say whether the response keeps pace
     with the escalations, and the kept snapshots are where that
-    pace is read. Effort, like drafting quality, never enters
-    ``total_attention``.
+    pace is read. The counts also carry how many notes have a
+    measured **response latency** (``follow_through_responses``:
+    escalation to first touch), and the digest body carries the
+    latency aggregate itself
+    (``follow_through_response_latency`` — median / mean / max
+    days), so the morning read prices the response's speed as
+    well as its volume. Effort, like drafting quality, never
+    enters ``total_attention``.
 
     The digest is computed, never sent: it carries the composed
     ``headline`` an operator reads first and the section entries
@@ -2392,6 +2455,17 @@ def ops_digest(
         # which counts work outstanding, not work done.
         "follow_through_worked": follow["worked_count"],
         "follow_through_quieted": follow["quieted_count"],
+        # The pace of that response, counted: how many notes
+        # carry a measured response latency (escalation to
+        # first touch — see follow_through_digest). The count
+        # rides the snapshots like the other effort counts; the
+        # median itself is a statistic, not a count, so it
+        # rides the digest body as follow_through_response_latency
+        # — the same split the letter advisories use (counts in
+        # the snapshots, rates in the aggregate).
+        "follow_through_responses": follow["response_latency"][
+            "notes_measured"
+        ],
         # Drafting quality rides the same counts the snapshots
         # keep (advisory_runs_with / advisory_repaired_runs), so
         # the kept history trends it beside the operations
@@ -2509,6 +2583,7 @@ def ops_digest(
             "acknowledged_breach_notices"
         ],
         "letter_advisories": advisory,
+        "follow_through_response_latency": follow["response_latency"],
         "acknowledged_wait_days": acknowledged_wait_days,
         "proposal_warning_days": proposal_warning_days,
         "movement": movement,
@@ -2538,6 +2613,7 @@ DIGEST_COUNT_KEYS = (
     "follow_through_escalated",
     "follow_through_worked",
     "follow_through_quieted",
+    "follow_through_responses",
     "advisory_runs_with",
     "advisory_repaired_runs",
     "proposals_expiring_soon",
@@ -2576,6 +2652,7 @@ _COUNT_LABELS = {
     "follow_through_escalated": "escalated follow-through notes",
     "follow_through_worked": "worked follow-through notes",
     "follow_through_quieted": "work-quieted follow-through notes",
+    "follow_through_responses": "follow-through responses",
     "advisory_runs_with": "runs drafting letter advisories",
     "advisory_repaired_runs": "advisory repairs",
     "proposals_expiring_soon": "proposals nearing expiry",
