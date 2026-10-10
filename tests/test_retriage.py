@@ -204,6 +204,76 @@ def test_an_unexplained_move_still_names_the_governing_guideline():
     assert reason["guideline_line"]  # an actual line of that document
 
 
+# ---------------------------------------------------------------------------
+# Bundles: re-triaged per line, never flattened, never skipped
+# ---------------------------------------------------------------------------
+
+
+def _property_tightened(sub, facts) -> Triage:
+    """A simulated corpus change that only bites the property line."""
+    triage = classify_submission(sub, facts)
+    if sub.line_of_business == "property" and triage.outcome == "in_appetite":
+        return triage.model_copy(
+            update={
+                "outcome": "borderline",
+                "referral_triggers": [
+                    "largest claim $310,000 exceeds 250,000 (referral trigger: severity)"
+                ],
+            }
+        )
+    return triage
+
+
+def test_bundles_are_checked_not_skipped():
+    service = make_service()
+    service.analyze(SAMPLES["SUB-1014"])  # the multi-line bundle
+    report = service.guideline_change_impact()
+    assert report["checked"] == 1
+    assert report["skipped"] == 0
+    assert report["lines_checked"] == 2
+    assert report["lines_moved"] == 0
+    assert report["moved"] == []
+
+
+def test_a_bundle_move_is_reported_per_line():
+    store = InMemoryStore()
+    service = SubmissionService(store=store, checkpointer=False)
+    service.analyze(SAMPLES["SUB-1014"])  # property in_appetite, cyber borderline
+    report = guideline_change_impact(store.all_records(), classifier=_property_tightened)
+    assert report["moved_count"] == 1
+    assert report["lines_moved"] == 1
+    entry = report["moved"][0]
+    assert entry["submission_id"] == "SUB-1014"
+    assert entry["multi_line"] is True
+    assert entry["lines_checked"] == 2
+    # Only the affected line is listed, with its own movement + reasons.
+    assert len(entry["lines"]) == 1
+    line = entry["lines"][0]
+    assert line["line_of_business"] == "property"
+    assert line["submission_id"] == "SUB-1014-PROPERTY"
+    assert line["from_outcome"] == "in_appetite"
+    assert line["to_outcome"] == "borderline"
+    assert line["reasons"][0]["guideline_id"] == "UW-PROP-01"
+    # The roll-up reflects the per-line movement (cyber still drives).
+    assert entry["to_outcome"] == "borderline"
+
+
+def test_bundle_retriage_mutates_nothing():
+    store = InMemoryStore()
+    service = SubmissionService(store=store, checkpointer=False)
+    result = service.analyze(SAMPLES["SUB-1014"])
+    before = [
+        (a.submission_id, a.result.triage.outcome, a.result.triage.risk_tier)
+        for a in result.line_analyses
+    ]
+    guideline_change_impact(store.all_records(), classifier=_property_tightened)
+    after = [
+        (a.submission_id, a.result.triage.outcome, a.result.triage.risk_tier)
+        for a in store.get("SUB-1014").result.line_analyses
+    ]
+    assert before == after
+
+
 def test_api_change_impact_endpoint(client):
     client.post("/submissions/analyze", json=SAMPLES["SUB-1001"])
     res = client.get("/guidelines/change-impact")
