@@ -585,7 +585,46 @@ def queue_item_for(
     if submitted is not None:
         item["age_days"] = max(0, (now.date() - submitted).days)
     item.update(_sla_for(item, budgets))
+    item["blocking_lines"] = _blocking_line_entries(result, item["age_days"])
     return item
+
+
+def _blocking_line_entries(result, age_days: int | None) -> list[dict]:
+    """A bundle queue item's blocking lines, with their wait.
+
+    The gate record names the lines whose own facts are missing
+    required elements (``AgentResult.blocking_lines``); the queue
+    adds what the underwriter actually chases: each line's missing
+    items, from that line's stored sub-analysis, and how long the
+    bundle has waited on the line. A blocking line has blocked
+    since the bundle was submitted — the line cannot complete
+    before the broker answers, and the broker was asked at intake —
+    so its age is the bundle's queue age, stated per line so a
+    bundle stranded on one line reads differently from a wholly
+    unready submission. Empty for single-line submissions and for
+    bundles no line blocks.
+    """
+    if not result.multi_line or not result.blocking_lines:
+        return []
+    by_line = {
+        normalize_line(a.line_of_business): a for a in result.line_analyses
+    }
+    entries = []
+    for line in result.blocking_lines:
+        analysis = by_line.get(normalize_line(line))
+        entries.append(
+            {
+                "line_of_business": line,
+                "submission_id": analysis.submission_id if analysis else "",
+                "age_days": age_days,
+                "missing_items": (
+                    list(analysis.result.facts.missing_elements)
+                    if analysis
+                    else []
+                ),
+            }
+        )
+    return entries
 
 
 def queue_aging(
@@ -616,6 +655,7 @@ def queue_aging(
     by_outcome: Counter = Counter()
     oldest: dict | None = None
     breaches: list[dict] = []
+    blocked_bundles = 0
     total = 0
     for record in records:
         result = record.result
@@ -625,6 +665,8 @@ def queue_aging(
         by_outcome[result.triage.outcome] += 1
         item = queue_item_for(record, now, budgets)
         assert item is not None  # status checked above
+        if item["blocking_lines"]:
+            blocked_bundles += 1
         if item["age_days"] is None:
             unknown.append(result.submission_id)
             continue
@@ -651,6 +693,7 @@ def queue_aging(
         "sla_budgets": budgets,
         "breach_count": len(breaches),
         "breaches": breaches,
+        "blocked_bundles": blocked_bundles,
     }
 
 
