@@ -561,21 +561,52 @@ def snapshot_sla_calibration(request: CalibrationSnapshotRequest) -> dict:
     and under the taker's name. The request may carry a label
     ("post-budget-change"): the handle a budget debate cites
     beyond the snapshot id, kept verbatim on the snapshot, its
-    list, and its diffs. Operator-kept, never on a timer;
-    snapshots are what the calibration diff compares."""
-    return service.snapshot_sla_calibration(
-        _decision_actor(request), label=request.label or ""
-    )
+    list, and its diffs. A label is an address, so a keep whose
+    label a kept snapshot already carries is refused (422),
+    naming the holder and the labels in use. Operator-kept,
+    never on a timer; snapshots are what the calibration diff
+    compares."""
+    actor = _decision_actor(request)
+    try:
+        return service.snapshot_sla_calibration(
+            actor, label=request.label or ""
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/queue/sla/calibration/snapshots", dependencies=_AUTH)
-def sla_calibration_snapshots() -> dict:
+def sla_calibration_snapshots(label: str | None = None) -> dict:
     """Every stored SLA-calibration snapshot, in the order kept,
-    with the prunes recorded on the document."""
+    with the prunes recorded on the document. With ``?label=``,
+    only the kept reports carrying that label — the citation
+    read (labels are unique among kept snapshots, so at most
+    one)."""
     return {
-        "snapshots": service.sla_calibration_snapshots(),
+        "snapshots": service.sla_calibration_snapshots(label),
         "prunes": service.sla_calibration_snapshot_prunes(),
     }
+
+
+@app.get(
+    "/queue/sla/calibration/snapshots/by-label/{label}",
+    dependencies=_AUTH,
+)
+def sla_calibration_snapshot_by_label(label: str) -> dict:
+    """The one kept report a label cites, addressed by the
+    handle itself. 404 when no kept snapshot carries the label —
+    a citation that names nothing is a broken citation, said
+    plainly rather than answered with an empty list."""
+    snapshot = service.sla_calibration_snapshot_by_label(label)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No kept calibration snapshot carries the label "
+                f"'{label}'."
+            ),
+        )
+    return snapshot
 
 
 @app.post("/queue/sla/calibration/snapshots/prune", dependencies=_AUTH)
@@ -612,13 +643,25 @@ def preview_prune_sla_calibration_snapshots(
 
 
 @app.get("/queue/sla/calibration/snapshots/diff", dependencies=_AUTH)
-def sla_calibration_snapshot_diff() -> dict:
-    """The proposal-ready movement between the two latest
-    calibration snapshots: per tier, which candidate rows became
+def sla_calibration_snapshot_diff(
+    from_label: str = "", to_label: str = ""
+) -> dict:
+    """The proposal-ready movement between two kept calibration
+    snapshots: per tier, which candidate rows became
     proposal-ready and which stopped being, beside the budget
-    and decided-case movement. Fewer than two snapshots kept is
-    reported as no diff, not as no movement."""
-    return service.sla_calibration_snapshot_diff()
+    and decided-case movement. Without selectors the sides are
+    the two latest kept; ``from_label`` / ``to_label`` name a
+    side by the label the debate cites (an unnamed side
+    defaults to its positional partner, and the pair walks in
+    keep order). An unknown label is a 422 naming the labels in
+    use. Fewer than two snapshots kept is reported as no diff,
+    not as no movement."""
+    try:
+        return service.sla_calibration_snapshot_diff(
+            from_label=from_label, to_label=to_label
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/queue/sla-proposals/draft", dependencies=_AUTH)

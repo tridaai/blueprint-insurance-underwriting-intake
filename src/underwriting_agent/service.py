@@ -1976,12 +1976,39 @@ class SubmissionService:
         a handle beyond the snapshot id. Operator-kept, never on
         a timer; keeping one changes nothing but the snapshot
         list, and the snapshots are what the calibration diff
-        reads."""
-        from .proposals import CALIBRATION_SNAPSHOTS_KEY, build_calibration_snapshot
+        reads.
+
+        A label is an address, so it must name one report: a
+        keep whose label a kept snapshot already carries is
+        refused, naming the holder and the labels in use —
+        round 16 stored labels verbatim and never deduped them,
+        which is sound for a display string and unsound for a
+        citation; addressing is what changed. Unlabelled keeps
+        are unlimited, and a prune that removes the holder frees
+        its label, as it frees the id range it pruned."""
+        from .proposals import (
+            CALIBRATION_SNAPSHOTS_KEY,
+            build_calibration_snapshot,
+            calibration_snapshot_by_label,
+            calibration_snapshot_labels,
+        )
 
         store = self._get_store()
         document = store.get_document(CALIBRATION_SNAPSHOTS_KEY) or {}
         snapshots = list(document.get("snapshots") or [])
+        if label:
+            holder = calibration_snapshot_by_label(snapshots, label)
+            if holder is not None:
+                in_use = ", ".join(
+                    f"'{name}'"
+                    for name in calibration_snapshot_labels(snapshots)
+                )
+                raise ValueError(
+                    f"Label '{label}' is already carried by "
+                    f"{holder.get('snapshot_id', '')} — kept "
+                    "calibration labels are unique, so a citation "
+                    f"names one report. Labels in use: {in_use}."
+                )
         snapshot = build_calibration_snapshot(
             self.sla_budget_calibration(),
             next_snapshot_id(snapshots, "cal-"),
@@ -1993,13 +2020,32 @@ class SubmissionService:
         store.save_document(CALIBRATION_SNAPSHOTS_KEY, document)
         return snapshot
 
-    def sla_calibration_snapshots(self) -> list[dict]:
+    def sla_calibration_snapshots(
+        self, label: str | None = None
+    ) -> list[dict]:
         """Every stored SLA-calibration snapshot, in the order
-        kept."""
+        kept — or, with ``label``, only the kept reports
+        carrying it: the citation read (labels are unique among
+        kept snapshots, so at most one)."""
         from .proposals import CALIBRATION_SNAPSHOTS_KEY
 
         document = self._get_store().get_document(CALIBRATION_SNAPSHOTS_KEY) or {}
-        return list(document.get("snapshots") or [])
+        snapshots = list(document.get("snapshots") or [])
+        if label is None:
+            return snapshots
+        return [
+            s for s in snapshots if (s.get("label") or "") == label
+        ]
+
+    def sla_calibration_snapshot_by_label(self, label: str) -> dict | None:
+        """The kept snapshot a label cites, or None when no kept
+        snapshot carries it — the report must be addressable by
+        the handle the debate uses, not only by its id."""
+        from .proposals import calibration_snapshot_by_label
+
+        return calibration_snapshot_by_label(
+            self.sla_calibration_snapshots(), label
+        )
 
     def sla_calibration_snapshot_prunes(self) -> list[dict]:
         """Every prune recorded on the calibration-snapshot
@@ -2033,21 +2079,94 @@ class SubmissionService:
             CALIBRATION_SNAPSHOTS_KEY, keep
         )
 
-    def sla_calibration_snapshot_diff(self) -> dict:
-        """The proposal-ready movement between the two latest
+    def sla_calibration_snapshot_diff(
+        self, from_label: str = "", to_label: str = ""
+    ) -> dict:
+        """The proposal-ready movement between two kept
         calibration snapshots (``proposals.calibration_snapshot_diff``):
         per tier, which candidate rows became proposal-ready and
         which stopped being, beside the budget and decided-count
         movement. Fewer than two snapshots is not a diff — the
-        report says so instead of inventing movement."""
-        from .proposals import calibration_snapshot_diff
+        report says so instead of inventing movement.
+
+        With no selectors the two sides are the two latest kept,
+        as always. A debate, though, cites labels, so either side
+        may instead be named by its ``from_label`` / ``to_label``:
+        a named side resolves to the latest kept snapshot
+        carrying that label (an unknown label is refused, naming
+        the labels in use), and an unnamed side defaults to its
+        positional partner — ``to`` the latest kept, ``from``
+        the one kept just before the resolved ``to``. The pair
+        then walks in keep order whichever way the selectors
+        named them: the diff's older side is the one kept first.
+        Both selectors naming the same snapshot is refused; a
+        lone selector resolving to the only side there is reads
+        as no diff, the same honesty as fewer than two kept."""
+        from .proposals import (
+            calibration_snapshot_by_label,
+            calibration_snapshot_diff,
+            calibration_snapshot_labels,
+        )
 
         snapshots = self.sla_calibration_snapshots()
-        if len(snapshots) < 2:
-            return {"snapshot_count": len(snapshots), "diff": None}
+        if not from_label and not to_label:
+            if len(snapshots) < 2:
+                return {"snapshot_count": len(snapshots), "diff": None}
+            older, newer = snapshots[-2], snapshots[-1]
+        else:
+            if not snapshots:
+                return {"snapshot_count": 0, "diff": None}
+
+            def resolve(label: str, role: str) -> dict:
+                found = calibration_snapshot_by_label(snapshots, label)
+                if found is None:
+                    in_use = calibration_snapshot_labels(snapshots)
+                    names = (
+                        ", ".join(f"'{name}'" for name in in_use)
+                        if in_use
+                        else "none"
+                    )
+                    raise ValueError(
+                        f"No kept calibration snapshot carries the "
+                        f"{role} label '{label}'. Labels in use: "
+                        f"{names}."
+                    )
+                return found
+
+            positions = {
+                s.get("snapshot_id", ""): i
+                for i, s in enumerate(snapshots)
+            }
+            newer = (
+                resolve(to_label, "to") if to_label else snapshots[-1]
+            )
+            if from_label:
+                older = resolve(from_label, "from")
+            else:
+                before = positions[newer.get("snapshot_id", "")] - 1
+                older = snapshots[before] if before >= 0 else None
+            if older is None:
+                return {
+                    "snapshot_count": len(snapshots),
+                    "diff": None,
+                }
+            if older.get("snapshot_id") == newer.get("snapshot_id"):
+                if from_label and to_label:
+                    raise ValueError(
+                        f"Both labels name {older.get('snapshot_id', '')} "
+                        "— a diff needs two different kept reports."
+                    )
+                return {
+                    "snapshot_count": len(snapshots),
+                    "diff": None,
+                }
+            if positions[older.get("snapshot_id", "")] > positions[
+                newer.get("snapshot_id", "")
+            ]:
+                older, newer = newer, older
         return {
             "snapshot_count": len(snapshots),
-            "diff": calibration_snapshot_diff(snapshots[-2], snapshots[-1]),
+            "diff": calibration_snapshot_diff(older, newer),
         }
 
     def draft_status_note(self, submission_id: str) -> dict:

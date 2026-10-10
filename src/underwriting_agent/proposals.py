@@ -1575,6 +1575,35 @@ def calibration_snapshot_diff(older: dict, newer: dict) -> dict:
     }
 
 
+def calibration_snapshot_labels(snapshots: list[dict]) -> list[str]:
+    """The labels in use among the kept snapshots, in keep order.
+
+    The list a refusal names: an operator told a label is taken
+    (or unknown) is shown the handles that actually exist, so
+    the correction is a choice, not a guessing game."""
+    return [s.get("label", "") for s in snapshots if s.get("label")]
+
+
+def calibration_snapshot_by_label(
+    snapshots: list[dict], label: str
+) -> dict | None:
+    """The kept snapshot a label cites, or None.
+
+    Labels are unique among snapshots kept since the discipline
+    landed (keeping refuses a repeat — see the service), so a
+    label addresses one report. Snapshots kept before it could
+    repeat a label; there the latest kept wins, because the
+    citation a debate makes is to the report the label most
+    recently named. An empty label addresses nothing: unlabelled
+    snapshots are cited by id, as they always were."""
+    if not label:
+        return None
+    for snapshot in reversed(snapshots):
+        if (snapshot.get("label") or "") == label:
+            return snapshot
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Deciding a proposal — the one consequential write
 # ---------------------------------------------------------------------------
