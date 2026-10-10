@@ -41,6 +41,7 @@ from .schemas import (
     AgentResult,
     DecisionRequest,
     ProposalDecisionRequest,
+    SettingsRestoreRequest,
     SubmissionInput,
 )
 from .wiring import build_service_from_env
@@ -282,6 +283,33 @@ def revert_sla_budget_settings(request: DecisionRequest) -> dict:
     change, the same append-only way."""
     try:
         return service.revert_sla_budget_settings(_decision_actor(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/calibration/settings/restore", dependencies=_AUTH)
+def restore_threshold_settings(request: SettingsRestoreRequest) -> dict:
+    """Restore the threshold settings record to ANY prior history
+    entry's state — not just the latest change's prior value, as
+    revert does. The restore is one new audited history entry
+    naming the entry it restores to; the entries it passes over
+    stay on the record."""
+    try:
+        return service.restore_diff_threshold_settings(
+            _decision_actor(request), request.history_index
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/queue/sla/settings/restore", dependencies=_AUTH)
+def restore_sla_budget_settings(request: SettingsRestoreRequest) -> dict:
+    """Restore the SLA-budget settings record to a chosen history
+    entry's state, the same append-only way."""
+    try:
+        return service.restore_sla_budget_settings(
+            _decision_actor(request), request.history_index
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

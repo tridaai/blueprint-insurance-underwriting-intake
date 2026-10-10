@@ -319,18 +319,45 @@ def _revert_settings_change(
             "accepted change in its history"
         )
     last = history[-1]
-    dimension = last["dimension"]
     at = _fmt(_now_dt(now))
-    restored = {**current_values, dimension: last["from"]}
-    entry = {
-        "proposal_id": last["proposal_id"],
-        "dimension": dimension,
-        "from": current_values[dimension],
-        "to": last["from"],
-        "actor": actor,
-        "at": at,
-        "revert": True,
-    }
+    if last.get("changes"):
+        # A multi-dimension entry (a point-in-history restore, or
+        # a revert of one): undo every dimension it moved, as one
+        # revert entry carrying the same changes shape.
+        restored = dict(current_values)
+        changes = []
+        for change in last["changes"]:
+            dimension = change["dimension"]
+            restored[dimension] = change["from"]
+            changes.append(
+                {
+                    "dimension": dimension,
+                    "from": current_values[dimension],
+                    "to": change["from"],
+                }
+            )
+        entry = {
+            "proposal_id": last.get("proposal_id"),
+            "changes": changes,
+            "actor": actor,
+            "at": at,
+            "revert": True,
+        }
+        if last.get("restore"):
+            entry["reverts_restore"] = True
+            entry["restores_index"] = last.get("restores_index")
+    else:
+        dimension = last["dimension"]
+        restored = {**current_values, dimension: last["from"]}
+        entry = {
+            "proposal_id": last["proposal_id"],
+            "dimension": dimension,
+            "from": current_values[dimension],
+            "to": last["from"],
+            "actor": actor,
+            "at": at,
+            "revert": True,
+        }
     updated = {
         label: restored,
         "updated_by": actor,
@@ -370,6 +397,139 @@ def revert_sla_budget_settings(
         current_values=effective_sla_budgets(store),
         actor=actor,
         now=now,
+    )
+
+
+def _values_as_of(base: dict, history: list[dict], index: int, cast) -> dict:
+    """The values in force immediately after history entry
+    ``index`` was applied: the environment base replayed through
+    every entry up to and including it. Entries are either flat
+    (one dimension: an accept or a revert) or carry a ``changes``
+    list (a restore, or a revert of one) — the replay reads both.
+    """
+    values = dict(base)
+    for entry in history[: index + 1]:
+        if entry.get("changes"):
+            for change in entry["changes"]:
+                if change["dimension"] in values:
+                    values[change["dimension"]] = cast(change["to"])
+        elif entry.get("dimension") in values:
+            values[entry["dimension"]] = cast(entry["to"])
+    return values
+
+
+def _restore_settings_to_entry(
+    store: Store,
+    *,
+    key: str,
+    label: str,
+    base_values: dict,
+    current_values: dict,
+    history_index: int,
+    actor: str,
+    now: datetime | None,
+    cast,
+) -> dict:
+    """Restore a settings record to a chosen history entry's state.
+
+    Revert walks one step back; a bad *sequence* of accepts needs
+    the whole record returned to an earlier state. The values as
+    of the chosen entry are replayed from the environment base
+    through the history (see :func:`_values_as_of`), and the
+    restore is appended as **one** new history entry naming the
+    entry it restores to — its index, and the proposal that entry
+    carried — with every dimension it moves listed in ``changes``
+    (from the value in force to the restored value). History is
+    never rewritten: the mis-tuned afternoon stays on the record,
+    and the restore itself can be reverted like any other entry.
+    Returns the updated document.
+    """
+    document = store.get_document(key)
+    history = list((document or {}).get("history") or [])
+    if not document or not history:
+        raise ValueError(
+            f"Nothing to restore — the {label} settings record has no "
+            "accepted change in its history"
+        )
+    if not 0 <= history_index < len(history):
+        raise ValueError(
+            f"History index {history_index} is out of range — the "
+            f"{label} settings record has {len(history)} history "
+            f"entries (0 to {len(history) - 1})"
+        )
+    target = _values_as_of(base_values, history, history_index, cast)
+    changes = [
+        {"dimension": dimension, "from": current_values[dimension], "to": target[dimension]}
+        for dimension in target
+        if current_values.get(dimension) != target[dimension]
+    ]
+    if not changes:
+        raise ValueError(
+            f"The {label} settings already match history entry "
+            f"{history_index} — restoring it would change nothing"
+        )
+    restored_entry = history[history_index]
+    at = _fmt(_now_dt(now))
+    entry = {
+        "proposal_id": restored_entry.get("proposal_id"),
+        "restore": True,
+        "restores_index": history_index,
+        "restores_proposal_id": restored_entry.get("proposal_id"),
+        "changes": changes,
+        "actor": actor,
+        "at": at,
+    }
+    updated = {
+        label: target,
+        "updated_by": actor,
+        "updated_at": at,
+        "proposal_id": restored_entry.get("proposal_id"),
+        "history": [*history, entry],
+    }
+    store.save_document(key, updated)
+    return updated
+
+
+def restore_threshold_settings(
+    store: Store,
+    history_index: int,
+    actor: str,
+    now: datetime | None = None,
+) -> dict:
+    """Restore the threshold settings record to the state in force
+    after its history entry ``history_index`` — one audited change
+    naming the entry restored to, however many dimensions move."""
+    return _restore_settings_to_entry(
+        store,
+        key=SETTINGS_KEY,
+        label="thresholds",
+        base_values=current_thresholds(),
+        current_values=effective_thresholds(store),
+        history_index=history_index,
+        actor=actor,
+        now=now,
+        cast=float,
+    )
+
+
+def restore_sla_budget_settings(
+    store: Store,
+    history_index: int,
+    actor: str,
+    now: datetime | None = None,
+) -> dict:
+    """Restore the SLA-budget settings record to a chosen history
+    entry's state, the same append-only way."""
+    return _restore_settings_to_entry(
+        store,
+        key=SLA_SETTINGS_KEY,
+        label="budgets",
+        base_values=sla_budgets(),
+        current_values=effective_sla_budgets(store),
+        history_index=history_index,
+        actor=actor,
+        now=now,
+        cast=lambda v: max(0, int(v)),
     )
 
 

@@ -561,6 +561,20 @@ class DecisionRequest(BaseModel):
         return self.actor or self.approver or self.reviewer
 
 
+class SettingsRestoreRequest(BaseModel):
+    """A human's point-in-history restore of a settings record
+    (see ``proposals.py``): who is restoring, and the index of
+    the history entry whose state the record returns to."""
+
+    actor: Optional[str] = None
+    approver: Optional[str] = None
+    reviewer: Optional[str] = None
+    history_index: int
+
+    def actor_name(self) -> Optional[str]:
+        return self.actor or self.approver or self.reviewer
+
+
 class ProposalDecisionRequest(BaseModel):
     """A human's decision on a calibration proposal (see
     ``proposals.py``): who decided, whether they accepted, and an

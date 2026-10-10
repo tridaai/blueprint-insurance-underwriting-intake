@@ -1578,6 +1578,30 @@ class SubmissionService:
         revert_sla_budget_settings(self._get_store(), actor)
         return self.sla_budget_settings()
 
+    def restore_diff_threshold_settings(
+        self, actor: str, history_index: int
+    ) -> dict:
+        """Restore the threshold settings record to the state in
+        force after its history entry ``history_index``
+        (``proposals.restore_threshold_settings``): one new audited
+        history entry naming the entry restored to, however many
+        dimensions move. The way back from a bad sequence of
+        accepts is one decision, not one revert per change."""
+        from .proposals import restore_threshold_settings
+
+        restore_threshold_settings(self._get_store(), history_index, actor)
+        return self.diff_threshold_settings()
+
+    def restore_sla_budget_settings(
+        self, actor: str, history_index: int
+    ) -> dict:
+        """Restore the SLA-budget settings record to a chosen
+        history entry's state, the same append-only way."""
+        from .proposals import restore_sla_budget_settings
+
+        restore_sla_budget_settings(self._get_store(), history_index, actor)
+        return self.sla_budget_settings()
+
     def decide_calibration_proposal(
         self,
         proposal_id: str,
