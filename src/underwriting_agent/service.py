@@ -65,6 +65,7 @@ from .insights import (
     follow_through_digest,
     follow_through_escalation_days,
     inbox_groups,
+    latest_status_note_refusal,
     insured_loss_timeline,
     next_snapshot_id,
     ops_digest,
@@ -2407,6 +2408,33 @@ class SubmissionService:
         note has been drafted (or the submission is unknown)."""
         record = self._get_store().get(submission_id)
         return record.status_note if record else None
+
+    def status_note_refusal(self, submission_id: str) -> dict | None:
+        """The refused status-note drafts for one submission, read
+        on the case itself.
+
+        Returns None when the submission is unknown (the same
+        contract as the breach read). Otherwise the case's
+        refusal view: the latest refusal in full (when, which
+        checks, steered or outright, the wording families — see
+        ``insights.latest_status_note_refusal``), the refusal
+        count, and the full refusal history behind it. Until
+        this read existed, a refused draft was visible only as
+        an aggregate in ``/metrics`` and a raised error at draft
+        time: the underwriter who opened the case saw that no
+        note existed, not that one was attempted and refused —
+        and the refusal is usually about prose on this very
+        record, which is what they can fix.
+        """
+        record = self._get_store().get(submission_id)
+        if record is None:
+            return None
+        return {
+            "submission_id": submission_id,
+            "refusal_count": len(record.status_note_refusals or []),
+            "latest_refusal": latest_status_note_refusal(record),
+            "refusals": list(record.status_note_refusals or []),
+        }
 
     def effective_diff_thresholds(self) -> dict:
         """The diff-trigger thresholds in force: the environment

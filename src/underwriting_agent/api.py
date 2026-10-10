@@ -1038,6 +1038,27 @@ def get_status_note(submission_id: str) -> dict:
     return note
 
 
+@app.get(
+    "/submissions/{submission_id}/status-note/refusal",
+    dependencies=_AUTH,
+)
+def get_status_note_refusal(submission_id: str) -> dict:
+    """The refused status-note drafts for one submission, read on
+    the case itself: the latest refusal (when, which checks it
+    failed, whether a steered candidate was produced and still
+    failed or the draft was refused outright on substance, the
+    wording families), the refusal count, and the history
+    behind it. ``latest_refusal`` is null when no draft was ever
+    refused for the case — an attempted-and-refused draft reads
+    differently from silence, and the refusal is usually about
+    prose on this record, which the reader can fix. 404 only
+    when the submission itself is unknown."""
+    view = service.status_note_refusal(submission_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="Submission not analyzed yet.")
+    return view
+
+
 @app.get("/submissions/{submission_id}/sla-breach", dependencies=_AUTH)
 def sla_breach(submission_id: str) -> dict:
     """The SLA-breach notice for one submission and its own delivery

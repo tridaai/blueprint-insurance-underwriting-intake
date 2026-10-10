@@ -681,6 +681,36 @@ def _sla_for(item: dict, budgets: dict[str, int]) -> dict:
     }
 
 
+def latest_status_note_refusal(record: ApprovalRecord) -> dict | None:
+    """The latest refused status-note draft on a record, or None.
+
+    A refused draft is recorded on the record before the refusal
+    raises (see ``service.draft_status_note``) so the drafting
+    quality can be trended in ``/metrics`` — but the aggregate
+    is not where the work is. The underwriter who opens the
+    case itself — the queue row, the case read — meets the
+    refusal here: when the last draft was refused, which checks
+    it failed, whether a steered candidate was produced and
+    still failed (``steered``) or the draft was refused outright
+    on substance, the wording families involved, and how many
+    refusals the record carries in all. Silence where a note
+    should be reads as "nobody tried"; this says somebody did,
+    and what the record's own prose did to the draft — which is
+    what the person reading it can actually fix.
+    """
+    refusals = record.status_note_refusals or []
+    if not refusals:
+        return None
+    latest = refusals[-1]
+    return {
+        "refused_at": latest.get("refused_at", ""),
+        "failed_checks": list(latest.get("failed_checks") or []),
+        "steered": bool(latest.get("steered")),
+        "repair_families": list(latest.get("repair_families") or []),
+        "refusal_count": len(refusals),
+    }
+
+
 def queue_item_for(
     record: ApprovalRecord,
     now: datetime | None = None,
@@ -716,6 +746,11 @@ def queue_item_for(
     # (service.notify_sla_breaches) — the queue shows whether a
     # breached case has been announced, not just that it breached.
     item["sla_breach_notice"] = record.sla_breach_notice
+    # The latest refused status-note draft, when one was refused
+    # for this record (see :func:`latest_status_note_refusal`) —
+    # the queue row is where the underwriter who can fix the
+    # record's prose meets the refusal, not only /metrics.
+    item["status_note_refusal"] = latest_status_note_refusal(record)
     # The escalated follow-through flag is attached by
     # :func:`queue_aging`, which can see every record: the note
     # rotting on this insured may live on an older, decided record.
