@@ -1030,6 +1030,42 @@ def _blocking_line_entries(result, age_days: int | None) -> list[dict]:
     return entries
 
 
+#: The telling bands of the queue's escalated list, in the
+#: order the work is owed: a telling that never left the
+#: building first (a sweep owes those cases a voice), then the
+#: telling that spent its attempts undelivered, then the one
+#: still failing with retries left, and last the one that
+#: landed — its case waits on a decision, not on a telling.
+_TELLING_BANDS = {
+    "unannounced": 0,
+    "exhausted": 1,
+    "announced": 2,
+    "delivered": 3,
+}
+
+
+def _escalated_telling_order(entry: dict) -> tuple:
+    """Sort key for the queue's escalated acknowledgements:
+    telling-aware (see :func:`queue_aging`).
+
+    The band is the primary key — an unannounced case leads an
+    exhausted one however fresh its acknowledgement, because
+    the order answers *what is owed first*: a telling, a
+    re-telling by hand, patience with a retry, a decision.
+    Inside the unannounced band the stalest silence leads
+    (``unannounced_days`` descending — the rung-relative age
+    the digest computes); inside every other band the oldest
+    acknowledgement leads, the order the list has always read.
+    The submission id breaks ties, deterministically."""
+    state = (entry.get("escalation_notice_state") or {}).get("state", "")
+    return (
+        _TELLING_BANDS.get(state, len(_TELLING_BANDS)),
+        -entry.get("unannounced_days", 0),
+        -entry.get("acknowledged_age_days", 0),
+        entry.get("submission_id", ""),
+    )
+
+
 def queue_aging(
     records: list[ApprovalRecord],
     now: datetime | None = None,
@@ -1107,7 +1143,13 @@ def queue_aging(
     days since the case crossed the second rung with no
     telling) — a sweep that has not run yet today and one that
     stopped a month ago are different facts on the worklist
-    as well.
+    as well. The list itself is **ordered by that telling**
+    (see :func:`_escalated_telling_order`): the unannounced
+    lead, stalest silence first — those are the cases a sweep
+    owes a voice — then the exhausted, then the announced,
+    then the delivered, whose cases wait on a decision rather
+    than a telling; inside a band the oldest acknowledgement
+    still leads, as it always has.
     """
     now = now or datetime.now(timezone.utc)
     budgets = sla_budgets_map if sla_budgets_map is not None else sla_budgets()
@@ -1312,7 +1354,7 @@ def queue_aging(
         ack_flagged += 1
     escalated_acknowledgements = sorted(
         escalated_ack_by_id.values(),
-        key=lambda e: (-e["acknowledged_age_days"], e["submission_id"]),
+        key=_escalated_telling_order,
     )
     return {
         "generated_at": now.isoformat(timespec="seconds"),
