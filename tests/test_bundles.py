@@ -143,11 +143,15 @@ def test_bundle_via_api_and_approve(client):
     assert decided.json()["status"] == "approved"
 
 
-def test_change_impact_report_skips_bundles_instead_of_misreading_them():
+def test_change_impact_report_retriages_bundles_per_line():
+    # Round 5 counted bundles as skipped; round 6 re-triages them
+    # per line instead — still never a flattened pass over the
+    # bundle payload, and still nothing stored is rewritten.
     service = make_service()
     service.analyze(SAMPLES["SUB-1014"])
     report = service.guideline_change_impact()
-    assert report["checked"] == 0 and report["skipped"] == 1
+    assert report["checked"] == 1 and report["skipped"] == 0
+    assert report["lines_checked"] == 2
     assert report["moved"] == []
 
 
