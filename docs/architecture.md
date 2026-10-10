@@ -501,6 +501,35 @@ numbers on the submission and its loss records. Line aliases fold too
   (`insights.loss_timeline_packet_lines`): the stored timeline
   with the current diff replayed over its claim states, so the
   cumulative the packet quotes includes this submission.
+- **Round 9 extends the proposal machinery to the queue, and
+  makes it two-way and time-aware.** (1) SLA budgets calibrate
+  like thresholds: `proposals.decided_wait_cases` replays the
+  decided records' waits per risk tier, and the one-sided bar is
+  the wait's version of the referral bar — a tighter budget
+  drafts only when its newly flagged cases were all rejected, a
+  looser one only when its un-flagged cases were all approved
+  anyway; awaiting cases are excluded by construction (they
+  have no wait outcome). A second settings document
+  (`queue_sla_budgets`) carries the accepted budgets, and
+  `effective_sla_budgets` is the single resolution the queue,
+  the breach check, and note drafting read — so the budget a
+  case breached under is the budget proposals tune. (2) Drafts
+  expire: a proposal's evidence is a store snapshot, and after
+  `PROPOSAL_EXPIRY_DAYS` deciding it is refused. Refresh re-runs
+  the drafting scan for that one setting, re-based on the values
+  in force — renewed in place when the evidence still carries a
+  move, withdrawn (with reason) when it does not. The refresh
+  audit entry keeps the stale snapshot, so evidence is never
+  silently replaced. (3) The follow-through markings leave the
+  record: `insights.follow_through_digest` projects every note
+  into the inbox, unresolved-and-oldest first; notes no
+  resubmission has reached report `awaiting_resubmission` with
+  their snapshot still outstanding rather than a blank. (4)
+  Settings revert: `_revert_settings_change` restores the latest
+  change's prior value as a new history entry naming the undone
+  proposal — revert is itself a change, so the audit trail is
+  append-only end to end, and reverting a revert is just the
+  same rule one level down.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 

@@ -236,6 +236,12 @@ is still missing — and the note's own record is marked answered /
 partially answered / still outstanding, with the answering
 submission's id. The note's text is never rewritten, so a stale
 note can never quietly read as the current state of the case.
+The markings are also **digested into the inbox**
+(`GET /inbox` → `follow_through`): every drafted note across
+insureds — answered, partially answered, still outstanding, and
+the notes no resubmission has reached yet — oldest outstanding
+first, so the loop that has been open longest is the one the
+underwriter sees first.
 
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:
@@ -304,6 +310,35 @@ calibration replay centres on the thresholds actually in force
 and names their source. Nothing auto-applies: appetite stays a
 human decision — the code just stops making the human do the
 arithmetic.
+
+The same machinery now tunes the **queue's SLA budgets**.
+`POST /queue/sla-proposals/draft` replays every *decided* case's
+wait (submitted → decided, in days) against its tier's budget: a
+tighter budget drafts only when the cases it would newly flag as
+breached were **all rejected** — they sat past the tighter line
+and were declined — and a looser one only when the cases it would
+un-flag were **all approved anyway**. Cases still awaiting a
+decision are not evidence. The drafted proposals join the same
+list and decision endpoint; accepting one writes the budget into
+a second settings record (`GET /queue/sla/settings`), and the
+queue, the breach check, and status-note drafting all measure
+cases against the budgets that record resolves.
+
+Two disciplines keep the proposals honest over time. A draft's
+evidence is a snapshot, so drafts **expire** (`PROPOSAL_EXPIRY_DAYS`,
+default 14): an expired draft cannot be decided. Refreshing one
+(`POST /calibration/proposals/{id}/refresh`) re-runs its evidence
+scan against the store as it stands — renewed in place with a
+fresh snapshot when the evidence still carries a one-sided move,
+**withdrawn** with the reason recorded when it no longer does —
+and every refresh lands on the proposal's audit list with the
+stale snapshot it replaced. And acceptance is no longer one-way:
+either settings record can be **reverted**
+(`POST /calibration/settings/revert`,
+`POST /queue/sla/settings/revert`), restoring its latest change's
+prior value as a *new* history entry naming the proposal it
+undoes — the record is append-only, so the way back is itself
+auditable.
 
 **Multi-line submissions** — a broker often submits the whole
 account at once, so intake accepts a bundle (`lines` on the
@@ -463,7 +498,8 @@ load-bearing ones:
 | `ACTION_WEBHOOK_URL` | output-routing endpoint: approval packets + `sla_breach` events | off |
 | `ACTION_WEBHOOK_SECRET` | HMAC key signing dispatches (`X-Trida-Signature`) | off (unsigned) |
 | `API_KEY` | optional `X-API-Key` gate for the API | off |
-| `QUEUE_SLA_DAYS_ELEVATED` / `_HIGH` / `_MODERATE` / `_LOW` | queue SLA budget in days by risk tier | 2 / 3 / 5 / 7 |
+| `QUEUE_SLA_DAYS_ELEVATED` / `_HIGH` / `_MODERATE` / `_LOW` | queue SLA budget in days by risk tier (base values — an accepted SLA proposal's settings record overrides per tier) | 2 / 3 / 5 / 7 |
+| `PROPOSAL_EXPIRY_DAYS` | days a drafted calibration proposal (threshold or SLA budget) stays decidable before its evidence is stale and it must be refreshed | `14` |
 | `DATABASE_URL` | PostgreSQL DSN — store, checkpoints, pgvector | unset → in-memory test doubles |
 | `S3_BUCKET` / `S3_ENDPOINT_URL` / `S3_REGION` | document object storage (S3-compatible) | unset → documents inline only |
 | `CHECKPOINTS` | gate checkpointing `on`/`off` | `on` |
@@ -579,8 +615,9 @@ src/underwriting_agent/
   object_store.py   submission documents: S3-compatible / in-memory
   observability.py  JSON logs + request IDs
   service.py        run + decision bookkeeping, batch, webhook
-  proposals.py      calibration proposals + the threshold settings
-                    record the classifier reads
+  proposals.py      calibration proposals (thresholds + SLA
+                    budgets), expiry/refresh, and the settings
+                    records the pipeline reads
   wiring.py         composition root
   ports.py          the seams, as protocols
   api.py / cli.py / demo.py / static/   surfaces
