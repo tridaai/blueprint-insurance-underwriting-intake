@@ -196,6 +196,28 @@ def _save_proposals(store: Store, proposals: list[dict]) -> None:
     store.save_document(PROPOSALS_KEY, document)
 
 
+def _next_proposal_id(existing: list[dict], offset: int = 0) -> str:
+    """The next proposal id: one past the highest number still
+    in the document (plus ``offset`` for the drafts already made
+    in the same scan), not one past its length. The kept
+    snapshots learned this when their retention landed (see
+    ``insights.next_snapshot_id``); the proposals document has
+    prunes of its own now, and a length-based id would reissue
+    a pruned proposal's number — or collide with a survivor's —
+    exactly when a pruned direction is re-asked. A proposal id
+    names one question forever: decisions, prune records, and
+    re-ask markers all cite it."""
+    highest = 0
+    for proposal in existing:
+        pid = str(proposal.get("proposal_id") or "")
+        if pid.startswith("PROP-"):
+            try:
+                highest = max(highest, int(pid[len("PROP-"):]))
+            except ValueError:
+                continue
+    return f"PROP-{highest + 1 + offset:04d}"
+
+
 # ---------------------------------------------------------------------------
 # Proposals retention — the decided history, governed like the rest
 # ---------------------------------------------------------------------------
@@ -300,7 +322,19 @@ def proposal_prune_entry(
     they closed with), and the decided range that survived —
     so a direction the scans stop remembering is explained by
     the document itself: its memory was pruned, on a date,
-    under a name."""
+    under a name.
+
+    The record also carries the pruned **rejections** in full
+    (``pruned_rejections``: each rejected proposal's kind,
+    dimension, direction, and the decision itself — who
+    rejected it, when). A rejection is the one piece of decided
+    history the scans *act* on — a rejected direction is never
+    re-asked while it is remembered — so when retention removes
+    one, the record keeps enough of the decision for the
+    re-ask it enables to name what it is re-asking (see
+    :func:`pruned_rejection_for`). Accepted and withdrawn
+    history needs no such afterlife: nothing downstream reads
+    it to decide what may be asked."""
     by_status: dict[str, int] = {}
     for proposal in pruned:
         status = proposal.get("status", "")
@@ -313,6 +347,18 @@ def proposal_prune_entry(
         "pruned_count": len(pruned),
         "pruned_ids": [p.get("proposal_id", "") for p in pruned],
         "pruned_by_status": dict(sorted(by_status.items())),
+        "pruned_rejections": [
+            {
+                "proposal_id": p.get("proposal_id", ""),
+                "kind": _proposal_kind(p),
+                "dimension": p.get("dimension", ""),
+                "direction": p.get("direction", ""),
+                "decided_at": p.get("decided_at") or "",
+                "decided_by": p.get("decided_by") or "",
+            }
+            for p in pruned
+            if p.get("status") == "rejected"
+        ],
         "surviving_first": (
             kept_history[0].get("proposal_id", "") if kept_history else ""
         ),
@@ -320,6 +366,110 @@ def proposal_prune_entry(
             kept_history[-1].get("proposal_id", "") if kept_history else ""
         ),
     }
+
+
+def load_proposal_prunes(store: Store) -> list[dict]:
+    """Every prune recorded on the proposals document, in the
+    order they happened."""
+    document = store.get_document(PROPOSALS_KEY) or {}
+    return list(document.get("prunes") or [])
+
+
+def pruned_rejection_for(
+    prunes: list[dict], kind: str, dimension: str, direction: str
+) -> dict | None:
+    """The pruned rejection of one direction, if retention has
+    removed it: the latest prune record that carried a rejected
+    proposal of this kind, dimension, and direction, answered
+    as the decision it was — the proposal's id, who rejected
+    it and when, and the prune that removed the record (who,
+    when). None when no prune ever removed such a rejection:
+    the direction was either never rejected or is still
+    remembered (and therefore still binding on the scans, which
+    check the live history first)."""
+    found: dict | None = None
+    for entry in prunes:
+        for rejection in entry.get("pruned_rejections") or []:
+            if (
+                rejection.get("kind") == kind
+                and rejection.get("dimension") == dimension
+                and rejection.get("direction") == direction
+            ):
+                found = {
+                    **rejection,
+                    "pruned_at": entry.get("pruned_at", ""),
+                    "pruned_by": entry.get("pruned_by", ""),
+                }
+    return found
+
+
+def _previously_decided_marker(
+    store: Store, proposal: dict
+) -> dict | None:
+    """The pruned-decision marker for a proposal being drafted,
+    or None: when the direction this proposal asks was rejected
+    before and retention has since pruned that rejection, the
+    draft is a **re-ask**, and it carries the decision it
+    re-asks — named, dated, and attributed — instead of reading
+    as a first ask. A direction still remembered as rejected
+    never reaches drafting at all (the scans skip it), so a
+    marker here always means the forgetting was governed: it
+    happened in a recorded prune, and the record is what the
+    marker cites."""
+    rejection = pruned_rejection_for(
+        load_proposal_prunes(store),
+        _proposal_kind(proposal),
+        proposal.get("dimension", ""),
+        proposal.get("direction", ""),
+    )
+    if rejection is None:
+        return None
+    return {
+        "status": "rejected",
+        "proposal_id": rejection.get("proposal_id", ""),
+        "decided_at": rejection.get("decided_at", ""),
+        "decided_by": rejection.get("decided_by", ""),
+        "pruned_at": rejection.get("pruned_at", ""),
+        "pruned_by": rejection.get("pruned_by", ""),
+    }
+
+
+def _reask_sentence(marker: dict, dimension_label: str) -> str:
+    """The rationale sentence that names a re-ask: this
+    direction was decided before, by whom and when, and the
+    record of that decision left in a named prune — so the
+    human deciding this draft sees the history the scan can no
+    longer read from the proposals list itself."""
+    decided = (
+        f"by {marker['decided_by']}" if marker.get("decided_by") else ""
+    )
+    decided_at = (marker.get("decided_at") or "")[:10]
+    pruned_at = (marker.get("pruned_at") or "")[:10]
+    return (
+        f" This direction was asked before: {marker['proposal_id']} "
+        f"proposed the same move on {dimension_label} and was "
+        f"rejected {decided} on {decided_at}; that decision's "
+        f"record was pruned from the decided history on "
+        f"{pruned_at} by {marker['pruned_by']}, so the scan asks "
+        "again — with the earlier refusal named, not forgotten."
+    )
+
+
+def _mark_reask(store: Store, proposal: dict, dimension_label: str) -> None:
+    """Attach the pruned-decision marker to a freshly drafted
+    proposal, in place, when its direction is a re-ask (see
+    :func:`_previously_decided_marker`): the marker rides the
+    proposal as ``previously_decided`` and the rationale gains
+    the sentence that names the earlier refusal, so every
+    surface that shows the draft — the list, the console, the
+    decider's read — shows the history with it."""
+    marker = _previously_decided_marker(store, proposal)
+    if marker is None:
+        return
+    proposal["previously_decided"] = marker
+    proposal["rationale"] = (proposal.get("rationale") or "") + (
+        _reask_sentence(marker, dimension_label)
+    )
 
 
 def load_settings(store: Store) -> dict | None:
@@ -987,7 +1137,15 @@ def draft_proposals(
     re-proposed in another size (the human said no to that
     direction of travel; new evidence is weighed by a human
     re-opening the question, not by the scanner re-asking it).
-    Returns the newly drafted proposals plus the full stored list.
+    The one way a refused direction can be asked again is
+    governed forgetting: when the proposals retention prunes the
+    rejection from the decided history, the refusal leaves the
+    scan's memory — and the draft that re-asks it carries the
+    pruned decision on its face (``previously_decided``, and a
+    rationale sentence naming who refused it, when, and the
+    prune that removed the record), so the re-ask is visibly a
+    re-ask. Returns the newly drafted proposals plus the full
+    stored list.
     """
     pairs = renewal_pairs(records)
     current = effective_thresholds(store)
@@ -1015,7 +1173,7 @@ def draft_proposals(
             continue
         drafted_dt = _now_dt(now)
         proposal = {
-            "proposal_id": f"PROP-{len(existing) + len(drafted) + 1:04d}",
+            "proposal_id": _next_proposal_id(existing, len(drafted)),
             **_threshold_fields(dimension, current, best, pairs, decided_pairs),
             "status": "draft",
             "drafted_from": "scan",
@@ -1027,6 +1185,9 @@ def draft_proposals(
             "decided_at": None,
             "decision_note": "",
         }
+        _mark_reask(
+            store, proposal, f"the {_DIMENSION_LABELS[dimension]}"
+        )
         drafted.append(proposal)
     if drafted:
         _save_proposals(store, existing + drafted)
@@ -1178,8 +1339,12 @@ def draft_sla_proposals(
     question per knob (a tier with a live draft SLA proposal is
     left alone), a rejected direction is never re-proposed in
     another size, and only one-sided decided evidence drafts
-    anything. SLA proposals share the proposals document with the
-    threshold proposals — one list, one decision path, one audit.
+    anything. The governed-forgetting exception is the same too:
+    a direction whose rejection the proposals retention has
+    pruned may be asked again, and the draft names the pruned
+    decision (``previously_decided``). SLA proposals share the
+    proposals document with the threshold proposals — one list,
+    one decision path, one audit.
     Returns the newly drafted proposals plus the full stored list.
     """
     cases = decided_wait_cases(records)
@@ -1205,7 +1370,7 @@ def draft_sla_proposals(
             continue
         drafted_dt = _now_dt(now)
         proposal = {
-            "proposal_id": f"PROP-{len(existing) + len(drafted) + 1:04d}",
+            "proposal_id": _next_proposal_id(existing, len(drafted)),
             **_sla_fields(tier, budgets[tier], best, tier_cases),
             "status": "draft",
             "drafted_from": "scan",
@@ -1217,6 +1382,7 @@ def draft_sla_proposals(
             "decided_at": None,
             "decision_note": "",
         }
+        _mark_reask(store, proposal, f"the {tier} SLA budget")
         drafted.append(proposal)
     if drafted:
         _save_proposals(store, existing + drafted)
@@ -1354,7 +1520,7 @@ def draft_sla_proposal_from_row(
     )
     drafted_dt = _now_dt(now)
     proposal = {
-        "proposal_id": f"PROP-{len(existing) + 1:04d}",
+        "proposal_id": _next_proposal_id(existing),
         **fields,
         "status": "draft",
         "drafted_from": "calibration_row",
@@ -1367,6 +1533,7 @@ def draft_sla_proposal_from_row(
         "decided_at": None,
         "decision_note": "",
     }
+    _mark_reask(store, proposal, f"the {tier} SLA budget")
     _save_proposals(store, existing + [proposal])
     return proposal
 
@@ -2104,6 +2271,21 @@ def refresh_proposal(
         proposal["expires_at"] = _fmt(
             now_dt + timedelta(days=proposal_expiry_days())
         )
+        # The renewed move may differ from the stale one, so a
+        # re-ask marker from the old draft would name the wrong
+        # history: it is recomputed against the fresh direction
+        # (and dropped when the new direction was never refused).
+        proposal.pop("previously_decided", None)
+        if _proposal_kind(proposal) == _SLA_KIND:
+            _mark_reask(
+                store, proposal, f"the {proposal['dimension']} SLA budget"
+            )
+        else:
+            _mark_reask(
+                store,
+                proposal,
+                f"the {_DIMENSION_LABELS[proposal['dimension']]}",
+            )
         entry["outcome"] = "renewed"
     proposal.setdefault("refreshes", []).append(entry)
     _save_proposals(store, proposals)
