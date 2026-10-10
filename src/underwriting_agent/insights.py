@@ -2265,6 +2265,26 @@ def ops_proposal_expiry_warning_days() -> int:
     )
 
 
+def ops_unannounced_gap_days() -> int:
+    """Days past the second rung an escalated case may sit
+    unannounced before the digest counts the gap itself as
+    stale (``OPS_DIGEST_UNANNOUNCED_GAP_DAYS`` overrides).
+
+    The default is one further follow-through window: an
+    escalation check that has not run since this morning is a
+    late sweep; one that has missed a whole window since the
+    case crossed the rung is a sweep that has stopped, and the
+    digest says so in those terms.
+    """
+    return max(
+        0,
+        env_int(
+            "OPS_DIGEST_UNANNOUNCED_GAP_DAYS",
+            follow_through_escalation_days(),
+        ),
+    )
+
+
 def _acknowledged_still_waiting(
     acknowledged_entries: list[dict], now: datetime, wait_days: int
 ) -> list[dict]:
@@ -2364,6 +2384,7 @@ def ops_digest(
     follow_escalation_days: int | None = None,
     proposal_warning_days: int | None = None,
     acknowledged_wait_days: int | None = None,
+    unannounced_gap_days: int | None = None,
     latest_snapshot: dict | None = None,
 ) -> dict:
     """One operator digest over the surfaces that rot quietly.
@@ -2401,10 +2422,20 @@ def ops_digest(
     what never landed) and ``unannounced_escalations``
     (escalated cases with no notice on the record: the
     escalation check has not run, and this digest is the
-    surface that notices a sweep nobody ran). Both are subsets
-    of cases already counted in ``acknowledged_still_waiting``,
-    so neither enters ``total_attention`` — the same cases,
-    read for the state of their telling, not counted twice),
+    surface that notices a sweep nobody ran). The unannounced
+    are also **aged**: each carries ``unannounced_days`` — the
+    days since the case crossed the second rung (its
+    acknowledgement reaching twice the window) with no telling
+    — the headline names the oldest, and the cases unannounced
+    past the gap threshold (``unannounced_gap_days``: one
+    further window by default) are counted on their own as
+    ``stale_unannounced_escalations``, because a sweep that has
+    not run yet today and a sweep that stopped a month ago are
+    the same count and different facts. Every telling count is
+    a subset of cases already counted in
+    ``acknowledged_still_waiting``, so none enters
+    ``total_attention`` — the same cases, read for the state
+    of their telling, not counted twice),
     **breached queue cases** (awaiting
     submissions past their tier's SLA budget — :func:`queue_aging`,
     measured against the budgets in force), **outstanding
@@ -2463,6 +2494,8 @@ def ops_digest(
             if follow_escalation_days is not None
             else follow_through_escalation_days()
         )
+    if unannounced_gap_days is None:
+        unannounced_gap_days = ops_unannounced_gap_days()
 
     dispatch = dispatch_overview(records, now)
     still_waiting = _acknowledged_still_waiting(
@@ -2479,6 +2512,8 @@ def ops_digest(
         for entry in dispatch["exhausted_escalation_notices"]
     }
     unannounced_escalations = 0
+    stale_unannounced_escalations = 0
+    oldest_unannounced_days = 0
     for entry in still_waiting:
         record = record_by_id.get(entry["submission_id"])
         if not entry["escalated"] or record is None:
@@ -2488,6 +2523,20 @@ def ops_digest(
         entry["escalation_notice_state"] = state
         if state["state"] == "unannounced":
             unannounced_escalations += 1
+            # The gap, aged: the case crossed the second rung
+            # when its acknowledgement reached twice the window,
+            # so the unannounced age is what has accumulated
+            # since — the entry knows both numbers, and a count
+            # without the age cannot tell a sweep that has not
+            # run yet today from one that stopped a month ago.
+            entry["unannounced_days"] = max(
+                0, entry["acknowledged_age_days"] - 2 * acknowledged_wait_days
+            )
+            oldest_unannounced_days = max(
+                oldest_unannounced_days, entry["unannounced_days"]
+            )
+            if entry["unannounced_days"] >= unannounced_gap_days:
+                stale_unannounced_escalations += 1
     queue = queue_aging(records, now, sla_budgets_map=sla_budgets_map)
     follow = follow_through_digest(
         records, now, escalation_days=follow_escalation_days
@@ -2553,6 +2602,11 @@ def ops_digest(
             "exhausted_escalation_count"
         ],
         "unannounced_escalations": unannounced_escalations,
+        # The stale subset of the unannounced: cases unannounced
+        # for at least the gap threshold past the rung — the
+        # gap itself, counted. A subset of a subset of
+        # still-waiting, so it never enters total_attention.
+        "stale_unannounced_escalations": stale_unannounced_escalations,
         "breached_queue": queue["breach_count"],
         "follow_through_outstanding": len(outstanding),
         "follow_through_escalated": follow["escalated_count"],
@@ -2633,10 +2687,22 @@ def ops_digest(
             "called on; the escalation saying so never landed"
         )
     if counts["unannounced_escalations"]:
-        parts.append(
+        part = (
             f"{counts['unannounced_escalations']} escalated "
             "case(s) never announced — the escalation check "
             "has not run"
+        )
+        if oldest_unannounced_days:
+            part += (
+                f"; the oldest has sat unannounced "
+                f"{oldest_unannounced_days} day(s)"
+            )
+        parts.append(part)
+    if counts["stale_unannounced_escalations"]:
+        parts.append(
+            f"{counts['stale_unannounced_escalations']} of them "
+            f"unannounced past the {unannounced_gap_days}-day "
+            "gap threshold — the sweep gap itself needs attention"
         )
     if counts["breached_queue"]:
         parts.append(f"{counts['breached_queue']} breached queue case(s)")
@@ -2705,6 +2771,7 @@ def ops_digest(
         "status_note_repairs": note_repairs,
         "follow_through_response_latency": follow["response_latency"],
         "acknowledged_wait_days": acknowledged_wait_days,
+        "unannounced_gap_days": unannounced_gap_days,
         "proposal_warning_days": proposal_warning_days,
         "movement": movement,
     }
@@ -2728,6 +2795,7 @@ DIGEST_COUNT_KEYS = (
     "acknowledged_escalated",
     "exhausted_escalation_notices",
     "unannounced_escalations",
+    "stale_unannounced_escalations",
     "breached_queue",
     "follow_through_outstanding",
     "follow_through_escalated",
@@ -2769,6 +2837,7 @@ _COUNT_LABELS = {
     "acknowledged_escalated": "acknowledged notices escalated",
     "exhausted_escalation_notices": "exhausted escalation notices",
     "unannounced_escalations": "unannounced escalations",
+    "stale_unannounced_escalations": "stale unannounced escalations",
     "breached_queue": "breached queue cases",
     "follow_through_outstanding": "outstanding follow-through notes",
     "follow_through_escalated": "escalated follow-through notes",
