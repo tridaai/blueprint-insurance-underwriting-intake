@@ -2864,6 +2864,94 @@ class SubmissionService:
             self._get_store(), proposal_id, actor, accept=accept, note=note
         )
 
+    def calibration_proposal_prunes(self) -> list[dict]:
+        """Every prune recorded on the proposals document, in the
+        order they happened."""
+        from .proposals import PROPOSALS_KEY
+
+        document = self._get_store().get_document(PROPOSALS_KEY) or {}
+        return list(document.get("prunes") or [])
+
+    def prune_calibration_proposals(self, actor: str, keep: int) -> dict:
+        """Prune the proposals document's decided history to the
+        newest ``keep`` — the retention discipline the snapshot
+        documents and the drafting events already carry, on the
+        document that grows with every drafted question. Drafts
+        are never pruned (an open question is not history); the
+        prune is recorded on the document itself before the
+        survivors are written back, beside the proposals list —
+        which is why :func:`proposals._save_proposals` preserves
+        the document's other keys. The record matters beyond
+        tidiness: the drafting scans read the decided history (a
+        rejected direction is never re-asked), so a prune thins
+        what the scans remember, and the document says when,
+        under whom, and what left. A prune that would remove
+        nothing writes nothing and records nothing. ``keep``
+        below 1 is refused by the shared computation
+        (``proposals.prune_proposal_history``)."""
+        from .proposals import (
+            PROPOSALS_KEY,
+            PROPOSAL_HISTORY_STATUSES,
+            load_proposals,
+            proposal_prune_entry,
+            prune_proposal_history,
+        )
+
+        store = self._get_store()
+        proposals = load_proposals(store)
+        kept, pruned = prune_proposal_history(proposals, keep)
+        entry = None
+        if pruned:
+            entry = proposal_prune_entry(
+                actor=actor,
+                keep=keep,
+                pruned=pruned,
+                kept=kept,
+                pruned_at=datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                ),
+            )
+            document = store.get_document(PROPOSALS_KEY) or {}
+            document["proposals"] = kept
+            document["prunes"] = list(document.get("prunes") or []) + [
+                entry
+            ]
+            store.save_document(PROPOSALS_KEY, document)
+        kept_history = [
+            p for p in kept if p.get("status") in PROPOSAL_HISTORY_STATUSES
+        ]
+        return {
+            "kept": len(kept),
+            "kept_history": len(kept_history),
+            "kept_drafts": len(kept) - len(kept_history),
+            "pruned_count": len(pruned),
+            "pruned_ids": [p.get("proposal_id", "") for p in pruned],
+            "surviving_first": (
+                kept_history[0].get("proposal_id", "")
+                if kept_history
+                else ""
+            ),
+            "surviving_last": (
+                kept_history[-1].get("proposal_id", "")
+                if kept_history
+                else ""
+            ),
+            "prune": entry,
+        }
+
+    def preview_prune_calibration_proposals(self, keep: int) -> dict:
+        """Preview a proposals prune (see
+        :meth:`prune_calibration_proposals`): which decided
+        proposals a keep-last-N over the decided history would
+        remove and what decided range would survive, before
+        anything is written — the scans' memory is pruned
+        against evidence, not memory."""
+        from .proposals import load_proposals, proposal_prune_preview
+
+        return proposal_prune_preview(
+            load_proposals(self._get_store()), keep
+        )
+
     def guideline_change_impact(self, classifier=None) -> dict:
         """Which awaiting submissions would re-triage differently
         under the current guidelines/rules (``retriage.py``).

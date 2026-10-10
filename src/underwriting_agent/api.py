@@ -371,7 +371,41 @@ def calibration_proposals() -> dict:
         "proposals": service.calibration_proposals(),
         "settings": service.diff_threshold_settings(),
         "sla_settings": service.sla_budget_settings(),
+        "prunes": service.calibration_proposal_prunes(),
     }
+
+
+@app.post("/calibration/proposals/prune", dependencies=_AUTH)
+def prune_calibration_proposals(request: SnapshotPruneRequest) -> dict:
+    """Prune the proposals document's decided history to the
+    newest ``keep``: the retention discipline of the snapshot
+    documents and the drafting events, on the document that
+    grows with every drafted question. Drafts are never pruned
+    — an open question is not history — and the prune is
+    recorded on the document itself, because the drafting scans
+    read the decided history: what they stop remembering is
+    named. ``keep`` below 1 is refused."""
+    try:
+        return service.prune_calibration_proposals(
+            _decision_actor(request), request.keep
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/calibration/proposals/prune/preview", dependencies=_AUTH)
+def preview_prune_calibration_proposals(
+    request: SnapshotPruneRequest,
+) -> dict:
+    """Preview the proposals prune: which decided proposals a
+    keep-last-``keep`` over the decided history would remove
+    and what decided range would survive — a dry run that
+    writes nothing and records nothing. ``keep`` below 1 is
+    refused, exactly as the prune refuses it."""
+    try:
+        return service.preview_prune_calibration_proposals(request.keep)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/calibration/proposals/draft", dependencies=_AUTH)

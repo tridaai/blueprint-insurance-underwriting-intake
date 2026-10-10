@@ -187,7 +187,139 @@ def load_proposals(store: Store) -> list[dict]:
 
 
 def _save_proposals(store: Store, proposals: list[dict]) -> None:
-    store.save_document(PROPOSALS_KEY, {"proposals": proposals})
+    """Write the proposals list back, preserving the document's
+    other keys — the document also carries its retention record
+    (``prunes``, see :func:`prune_proposal_history`), and a save
+    that owns only the list must not erase what it does not own."""
+    document = store.get_document(PROPOSALS_KEY) or {}
+    document["proposals"] = proposals
+    store.save_document(PROPOSALS_KEY, document)
+
+
+# ---------------------------------------------------------------------------
+# Proposals retention — the decided history, governed like the rest
+# ---------------------------------------------------------------------------
+
+#: Proposal statuses that are history: decided one way or the
+#: other, or withdrawn when their evidence died (a withdrawn
+#: proposal can no longer be decided — it is history the same
+#: way). A live draft is none of these: retention never touches
+#: a draft, because a draft is an open question, not history.
+PROPOSAL_HISTORY_STATUSES = ("accepted", "rejected", "withdrawn")
+
+
+def _is_proposal_history(proposal: dict) -> bool:
+    return proposal.get("status") in PROPOSAL_HISTORY_STATUSES
+
+
+def prune_proposal_history(
+    proposals: list[dict], keep: int
+) -> tuple[list[dict], list[dict]]:
+    """Split the proposals document for a keep-last-N prune over
+    its decided history: (survivors, pruned), document order
+    preserved in both, drafts always among the survivors.
+
+    The two snapshot documents and the drafting events got the
+    retention discipline first; the proposals document — every
+    drafted threshold and SLA proposal with its decision —
+    grew unbounded beside them. The prune's unit is the
+    *decided history*, not the document: a live draft is an
+    open question an underwriter may still answer, and it never
+    leaves by retention, whatever ``keep`` says. ``keep`` below
+    1 is refused, for a reason the snapshots do not have: the
+    drafting scans read the decided history — a direction once
+    rejected is never re-asked — so a prune thins the scans'
+    memory but may not erase it whole; what memory leaves is
+    named in the prune's own record (see
+    :func:`proposal_prune_entry`), so the forgetting is itself
+    on the record."""
+    if keep < 1:
+        raise ValueError(
+            "keep must be at least 1 — a prune keeps the newest "
+            "decided proposals; emptying the decided history "
+            "would erase the record the drafting scans read (a "
+            "rejected direction is never re-asked), silently"
+        )
+    history_at = [
+        i for i, p in enumerate(proposals) if _is_proposal_history(p)
+    ]
+    if len(history_at) <= keep:
+        return list(proposals), []
+    pruned_at = set(history_at[:-keep])
+    kept = [p for i, p in enumerate(proposals) if i not in pruned_at]
+    pruned = [p for i, p in enumerate(proposals) if i in pruned_at]
+    return kept, pruned
+
+
+def proposal_prune_preview(proposals: list[dict], keep: int) -> dict:
+    """A proposals prune, dry-run: what a keep-last-N over the
+    decided history *would* do.
+
+    The retention family's shared idiom: the same split the
+    prune runs (:func:`prune_proposal_history` — ``keep`` below
+    1 refused here too), reported as the decided ids that would
+    leave and the decided range that would survive, with the
+    document's drafts counted apart so the operator sees they
+    are not in the prune's reach. Writes nothing, records
+    nothing: the preview and the prune cannot disagree."""
+    kept, pruned = prune_proposal_history(proposals, keep)
+    kept_history = [p for p in kept if _is_proposal_history(p)]
+    return {
+        "proposal_count": len(proposals),
+        "history_count": sum(
+            1 for p in proposals if _is_proposal_history(p)
+        ),
+        "draft_count": len(proposals)
+        - sum(1 for p in proposals if _is_proposal_history(p)),
+        "keep": keep,
+        "would_change": bool(pruned),
+        "would_prune_count": len(pruned),
+        "would_prune_ids": [p.get("proposal_id", "") for p in pruned],
+        "surviving_count": len(kept),
+        "surviving_history_count": len(kept_history),
+        "surviving_first": (
+            kept_history[0].get("proposal_id", "") if kept_history else ""
+        ),
+        "surviving_last": (
+            kept_history[-1].get("proposal_id", "") if kept_history else ""
+        ),
+    }
+
+
+def proposal_prune_entry(
+    *,
+    actor: str,
+    keep: int,
+    pruned: list[dict],
+    kept: list[dict],
+    pruned_at: str,
+) -> dict:
+    """The proposals prune's own record, kept on the document it
+    pruned: who pruned, when, what they asked to keep, which
+    decided proposals left (by id, and counted by the status
+    they closed with), and the decided range that survived —
+    so a direction the scans stop remembering is explained by
+    the document itself: its memory was pruned, on a date,
+    under a name."""
+    by_status: dict[str, int] = {}
+    for proposal in pruned:
+        status = proposal.get("status", "")
+        by_status[status] = by_status.get(status, 0) + 1
+    kept_history = [p for p in kept if _is_proposal_history(p)]
+    return {
+        "pruned_at": pruned_at,
+        "pruned_by": actor,
+        "requested_keep": keep,
+        "pruned_count": len(pruned),
+        "pruned_ids": [p.get("proposal_id", "") for p in pruned],
+        "pruned_by_status": dict(sorted(by_status.items())),
+        "surviving_first": (
+            kept_history[0].get("proposal_id", "") if kept_history else ""
+        ),
+        "surviving_last": (
+            kept_history[-1].get("proposal_id", "") if kept_history else ""
+        ),
+    }
 
 
 def load_settings(store: Store) -> dict | None:
