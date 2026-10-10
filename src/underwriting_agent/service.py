@@ -1451,6 +1451,26 @@ class SubmissionService:
         store = self._get_store()
         return draft_sla_proposals(store, store.all_records())
 
+    def draft_sla_proposal_from_row(
+        self, tier: str, value: int, actor: str
+    ) -> dict:
+        """Draft one SLA-budget proposal from a chosen calibration
+        row (``proposals.draft_sla_proposal_from_row``): the row
+        is recomputed against the store as it stands and, when it
+        is proposal-ready, stored as a draft carrying the row's
+        evidence verbatim, stamped with its origin and its
+        drafter. The scan's discipline binds it — one open
+        question per tier, a rejected direction never re-asked,
+        swept candidates only — and drafting changes no budget:
+        a human still decides the proposal it produces."""
+        from .proposals import annotate_proposal, draft_sla_proposal_from_row
+
+        store = self._get_store()
+        proposal = draft_sla_proposal_from_row(
+            store, store.all_records(), tier, value, actor
+        )
+        return annotate_proposal(proposal)
+
     def draft_status_note(self, submission_id: str) -> dict:
         """Draft the underwriter status note for an SLA-breached case.
 

@@ -56,6 +56,14 @@ refresh is appended to the proposal's ``refreshes`` audit list —
 who refreshed it, when, what the stale snapshot said, and how
 the re-scan came out — so a proposal's evidence is never
 silently stale, and never silently replaced either.
+
+Round 13 closes the calibration loop's remaining gap on the
+report side: the SLA calibration report flags ``proposal_ready``
+rows, but drafting used to mean running the whole scan and
+accepting its best row per tier.
+:func:`draft_sla_proposal_from_row` drafts a proposal for one
+operator-chosen (tier, value) row instead, carrying the row's
+evidence verbatim — the report is no longer read-only.
 """
 
 from __future__ import annotations
@@ -872,6 +880,7 @@ def draft_proposals(
             "proposal_id": f"PROP-{len(existing) + len(drafted) + 1:04d}",
             **_threshold_fields(dimension, current, best, pairs, decided_pairs),
             "status": "draft",
+            "drafted_from": "scan",
             "drafted_at": _fmt(drafted_dt),
             "expires_at": _fmt(
                 drafted_dt + timedelta(days=proposal_expiry_days())
@@ -1061,6 +1070,7 @@ def draft_sla_proposals(
             "proposal_id": f"PROP-{len(existing) + len(drafted) + 1:04d}",
             **_sla_fields(tier, budgets[tier], best, tier_cases),
             "status": "draft",
+            "drafted_from": "scan",
             "drafted_at": _fmt(drafted_dt),
             "expires_at": _fmt(
                 drafted_dt + timedelta(days=proposal_expiry_days())
@@ -1073,6 +1083,154 @@ def draft_sla_proposals(
     if drafted:
         _save_proposals(store, existing + drafted)
     return {"drafted": drafted, "proposals": existing + drafted}
+
+
+def draft_sla_proposal_from_row(
+    store: Store,
+    records: list[ApprovalRecord],
+    tier: str,
+    value: int,
+    actor: str,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """Draft one SLA-budget proposal for a chosen calibration row.
+
+    The calibration report (:func:`sla_budget_calibration`) flags
+    the rows whose moved set is one-sided ``proposal_ready``
+    evidence — but until now the only way to act on one was the
+    scan (:func:`draft_sla_proposals`), which drafts its own best
+    row per tier and nothing else. An underwriter reading the
+    report who wants a *different* ready row on the table — the
+    smaller move, the one whose cases they remember — had no way
+    to ask for it. This is the report's counterpart write: the
+    chosen (tier, value) row is recomputed against the store as
+    it stands and, when it is proposal-ready, drafted as a
+    proposal whose rationale and evidence are the row's — the same
+    moved set, the same decision splits, the same breach counts
+    the report showed, kept on the proposal under
+    ``evidence.calibration_row`` so the report's numbers and the
+    proposal's numbers can never drift apart. The proposal is
+    stamped ``drafted_from: "calibration_row"`` and
+    ``drafted_by`` the operator, so a row-drafted proposal is
+    distinguishable from a scan-drafted one on the record.
+
+    The drafting discipline is the scan's, unchanged: the row
+    must be proposal-ready (a moved set, one-sided — otherwise
+    ValueError naming why not, and nothing is drafted); the value
+    must be one of the report's swept candidates (``SLA_CANDIDATES``
+    or the budget in force) — the row an operator drafts from is
+    a row the report actually shows; a tier with a live draft SLA
+    proposal is one open question, so a second row for that tier
+    waits for the first to be decided; and a direction a human
+    has already rejected on that tier is never re-asked in
+    another size. Drafting writes only the proposal document — a
+    human still decides, and accepting writes the budget exactly
+    the way a scan-drafted proposal's acceptance does.
+    """
+    if tier not in QUEUE_SLA_DEFAULTS:
+        raise ValueError(
+            f"Unknown risk tier: {tier!r} — the SLA budgets know "
+            f"{', '.join(QUEUE_SLA_DEFAULTS)}"
+        )
+    budgets = effective_sla_budgets(store)
+    current_budget = budgets[tier]
+    value = int(value)
+    if value == current_budget:
+        raise ValueError(
+            f"{value} day(s) is already the {tier} SLA budget in "
+            "force — the calibration row for the current budget "
+            "moves nothing by definition"
+        )
+    if value not in set(SLA_CANDIDATES):
+        raise ValueError(
+            f"{value} day(s) is not one of the calibration report's "
+            f"swept candidates for the {tier} tier "
+            f"({', '.join(str(v) for v in SLA_CANDIDATES)}) — a "
+            "proposal is drafted from a row the report shows"
+        )
+    existing = load_proposals(store)
+    open_proposal = next(
+        (
+            p
+            for p in existing
+            if p["status"] == "draft"
+            and _proposal_kind(p) == _SLA_KIND
+            and p["dimension"] == tier
+        ),
+        None,
+    )
+    if open_proposal is not None:
+        raise ValueError(
+            f"Proposal {open_proposal['proposal_id']} already asks "
+            f"the {tier} SLA question (a move to "
+            f"{open_proposal['proposed_value']} day(s)) — one open "
+            "question per tier; decide it before drafting another row"
+        )
+    direction = "lower" if value < current_budget else "raise"
+    if (tier, direction) in _rejected_directions(existing, _SLA_KIND):
+        raise ValueError(
+            f"A {direction} move on the {tier} SLA budget was "
+            "already rejected by a human — the scanner does not "
+            "re-ask a rejected direction in another size, and "
+            "neither does a row draft"
+        )
+    cases = decided_wait_cases(records)
+    tier_cases = [c for c in cases if c["risk_tier"] == tier]
+    row = _sla_sweep_row(tier_cases, value, current_budget)
+    if not row["proposal_ready"]:
+        if not row["moved_vs_current"]:
+            raise ValueError(
+                f"The {tier} row at {value} day(s) moves no decided "
+                "case against the budget in force — there is no "
+                "evidence to draft a proposal from"
+            )
+        raise ValueError(
+            f"The {tier} row at {value} day(s) is not "
+            "proposal-ready: its moved set is not one-sided "
+            f"decided evidence ({row['moved_decisions']['approved']} "
+            f"approved, {row['moved_decisions']['rejected']} "
+            "rejected) — a proposal is drafted only from a move "
+            "whose moved cases all point the same way"
+        )
+    by_id = {c["submission_id"]: c for c in tier_cases}
+    best = {
+        "value": value,
+        "direction": direction,
+        "moved": [by_id[e["submission_id"]] for e in row["moved_vs_current"]],
+        "split": _decision_split(
+            [by_id[e["submission_id"]] for e in row["moved_vs_current"]]
+        ),
+    }
+    fields = _sla_fields(tier, current_budget, best, tier_cases)
+    fields["evidence"]["calibration_row"] = {
+        "budget_in_force": current_budget,
+        "breached": row["breached"],
+        "breached_decisions": row["breached_decisions"],
+        "within_decisions": row["within_decisions"],
+    }
+    fields["rationale"] += (
+        f" Drafted from the calibration report's {tier} row at "
+        f"{value} day(s) by {actor} — the proposal carries that "
+        "row's evidence."
+    )
+    drafted_dt = _now_dt(now)
+    proposal = {
+        "proposal_id": f"PROP-{len(existing) + 1:04d}",
+        **fields,
+        "status": "draft",
+        "drafted_from": "calibration_row",
+        "drafted_by": actor,
+        "drafted_at": _fmt(drafted_dt),
+        "expires_at": _fmt(
+            drafted_dt + timedelta(days=proposal_expiry_days())
+        ),
+        "decided_by": None,
+        "decided_at": None,
+        "decision_note": "",
+    }
+    _save_proposals(store, existing + [proposal])
+    return proposal
 
 
 # ---------------------------------------------------------------------------

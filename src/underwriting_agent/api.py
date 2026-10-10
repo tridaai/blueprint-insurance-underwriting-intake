@@ -42,6 +42,7 @@ from .schemas import (
     DecisionRequest,
     ProposalDecisionRequest,
     SettingsRestoreRequest,
+    SlaCalibrationDraftRequest,
     SubmissionInput,
 )
 from .wiring import build_service_from_env
@@ -522,6 +523,26 @@ def sla_budget_calibration() -> dict:
     one-sided kind an SLA proposal is drafted from. Read-only;
     nothing stored is changed by reading it."""
     return service.sla_budget_calibration()
+
+
+@app.post("/queue/sla/calibration/draft", dependencies=_AUTH)
+def draft_sla_proposal_from_row(request: SlaCalibrationDraftRequest) -> dict:
+    """Draft an SLA-budget proposal from one chosen calibration
+    row: the (tier, value) row is recomputed against the store as
+    it stands and — when it is proposal-ready — stored as a draft
+    carrying the row's evidence verbatim, stamped with the row
+    origin and the drafter's name. The drafting discipline is
+    the proposal scan's (one open question per tier, rejected
+    directions never re-asked, swept candidates only); a row
+    that is not proposal-ready is refused with the reason, and
+    drafting moves no budget — the proposal still waits for its
+    human decision."""
+    try:
+        return service.draft_sla_proposal_from_row(
+            request.tier, request.value, _decision_actor(request)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/queue/sla-proposals/draft", dependencies=_AUTH)

@@ -579,6 +579,24 @@ class SettingsRestoreRequest(BaseModel):
         return self.actor or self.approver or self.reviewer
 
 
+class SlaCalibrationDraftRequest(BaseModel):
+    """An operator's draft-from-a-calibration-row request (see
+    ``proposals.draft_sla_proposal_from_row``): who is drafting,
+    the risk tier, and the candidate budget value of the report
+    row to draft from. The row must be proposal-ready and the
+    drafting discipline is the proposal scan's — the request
+    names a row, it does not lower the evidence bar."""
+
+    actor: Optional[str] = None
+    approver: Optional[str] = None
+    reviewer: Optional[str] = None
+    tier: str
+    value: int
+
+    def actor_name(self) -> Optional[str]:
+        return self.actor or self.approver or self.reviewer
+
+
 class ProposalDecisionRequest(BaseModel):
     """A human's decision on a calibration proposal (see
     ``proposals.py``): who decided, whether they accepted, and an
