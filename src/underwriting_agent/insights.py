@@ -728,6 +728,21 @@ def queue_aging(
     moment, the same caveat the digest's movement block carries.
     Without snapshots the block is None and the flags stay None —
     direction is absent, never invented.
+
+    And an item whose own breach notice was **acknowledged** —
+    the operator called the broker, closing the "nobody was
+    told" gap — carries that acknowledgement once the case has
+    still not been decided at **twice** the follow-through
+    escalation window (``acknowledged_escalation``: who called,
+    when, their note, the acknowledgement's age), and the cases
+    are listed again in ``escalated_acknowledgements``. The
+    first window resurfaces the case in the ops digest's
+    still-waiting section, where operators read; the second
+    rung puts it here, where the underwriter who finally picks
+    it up works — with the first touch on the record, so the
+    second touch never pretends to be the first. A decided case
+    drops off by the acknowledged read's own construction (the
+    exhaustion worklist only ever holds undecided cases).
     """
     now = now or datetime.now(timezone.utc)
     budgets = sla_budgets_map if sla_budgets_map is not None else sla_budgets()
@@ -838,6 +853,54 @@ def queue_aging(
         }
         for entry in follow["escalated"]
     ]
+    # Acknowledged breach notices on their second rung: the
+    # acknowledgement closed the telling gap, and two
+    # follow-through windows later the case is still undecided.
+    # The flag rides the item itself (the notice lives on this
+    # record, unlike the follow-through notes above, which match
+    # by insured across records), with the acknowledgement
+    # attached — who called the broker, when, and what they
+    # recorded — and the cases are listed again below.
+    ack_window = (
+        follow_escalation_days
+        if follow_escalation_days is not None
+        else follow_through_escalation_days()
+    )
+    escalated_ack_by_id: dict[str, dict] = {}
+    for entry in _exhausted_breach_notices(
+        records,
+        now,
+        env_int("DISPATCH_ATTEMPT_BUDGET", 8),
+        acknowledged=True,
+    ):
+        ack = entry.get("acknowledgement") or {}
+        acked_at = _parse_timestamp(ack.get("acknowledged_at") or "")
+        if acked_at is None:
+            continue
+        ack_age = max(0, (now.date() - acked_at.date()).days)
+        if ack_age >= 2 * ack_window:
+            escalated_ack_by_id[entry["submission_id"]] = {
+                **entry,
+                "acknowledged_age_days": ack_age,
+                "escalation_days": 2 * ack_window,
+            }
+    ack_flagged = 0
+    for item in all_items:
+        escalated = escalated_ack_by_id.get(item["submission_id"])
+        if escalated is None:
+            continue
+        ack = escalated.get("acknowledgement") or {}
+        item["acknowledged_escalation"] = {
+            "acknowledged_by": ack.get("acknowledged_by", ""),
+            "acknowledged_at": ack.get("acknowledged_at", ""),
+            "note": ack.get("note", ""),
+            "acknowledged_age_days": escalated["acknowledged_age_days"],
+        }
+        ack_flagged += 1
+    escalated_acknowledgements = sorted(
+        escalated_ack_by_id.values(),
+        key=lambda e: (-e["acknowledged_age_days"], e["submission_id"]),
+    )
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "total_awaiting": total,
@@ -855,6 +918,8 @@ def queue_aging(
         "blocked_bundles": blocked_bundles,
         "escalated_notes": escalated_notes,
         "items_with_escalated_notes": flagged,
+        "escalated_acknowledgements": escalated_acknowledgements,
+        "items_with_escalated_acknowledgements": ack_flagged,
     }
 
 
@@ -1892,6 +1957,15 @@ def _acknowledged_still_waiting(
     a new family: a fortnight of silence after the call is the
     same operational fact as a fortnight of silence after a note.
     Oldest acknowledgement first.
+
+    A still-waiting entry also carries its **second rung**:
+    ``escalated`` once the acknowledgement is at least
+    ``2 * wait_days`` old. The first window resurfaces the case
+    here, where operators read; the second puts it on the
+    queue's escalated surfaces (see :func:`queue_aging`), where
+    the underwriter who finally picks it up works — with the
+    acknowledgement attached, so the second touch never pretends
+    to be the first.
     """
     waiting: list[dict] = []
     for entry in acknowledged_entries:
@@ -1902,7 +1976,13 @@ def _acknowledged_still_waiting(
         ack_age = max(0, (now.date() - acked_at.date()).days)
         if ack_age < wait_days:
             continue
-        waiting.append({**entry, "acknowledged_age_days": ack_age})
+        waiting.append(
+            {
+                **entry,
+                "acknowledged_age_days": ack_age,
+                "escalated": ack_age >= 2 * wait_days,
+            }
+        )
     waiting.sort(
         key=lambda e: (-e["acknowledged_age_days"], e["submission_id"])
     )
@@ -1938,7 +2018,12 @@ def ops_digest(
     window later — the call happened; the file still has not
     moved — counted in ``total_attention`` on purpose: the
     breached-queue count asks who picks the case up, this one
-    asks why the decision still has not landed),
+    asks why the decision still has not landed; entries still
+    waiting at twice the window are flagged ``escalated`` and
+    counted in ``acknowledged_escalated`` — a subset, never
+    counted into ``total_attention`` a second time: the same
+    cases, louder, and by then also on the queue's escalated
+    surfaces with the acknowledgement attached),
     **breached queue cases** (awaiting
     submissions past their tier's SLA budget — :func:`queue_aging`,
     measured against the budgets in force), **outstanding
@@ -2024,6 +2109,9 @@ def ops_digest(
         "stuck_dispatches": dispatch["stuck_count"],
         "exhausted_breach_notices": dispatch["exhausted_breach_count"],
         "acknowledged_still_waiting": len(still_waiting),
+        "acknowledged_escalated": sum(
+            1 for entry in still_waiting if entry["escalated"]
+        ),
         "breached_queue": queue["breach_count"],
         "follow_through_outstanding": len(outstanding),
         "follow_through_escalated": follow["escalated_count"],
@@ -2049,11 +2137,17 @@ def ops_digest(
             "notice(s) — a case nobody was told about"
         )
     if counts["acknowledged_still_waiting"]:
-        parts.append(
+        part = (
             f"{counts['acknowledged_still_waiting']} acknowledged "
             "breach notice(s) still waiting on a decision — the "
             "call happened; the file has not moved"
         )
+        if counts["acknowledged_escalated"]:
+            part += (
+                f"; {counts['acknowledged_escalated']} of them past "
+                "the second window, escalated to the queue"
+            )
+        parts.append(part)
     if counts["breached_queue"]:
         parts.append(f"{counts['breached_queue']} breached queue case(s)")
     if counts["follow_through_escalated"]:
@@ -2133,6 +2227,7 @@ DIGEST_COUNT_KEYS = (
     "stuck_dispatches",
     "exhausted_breach_notices",
     "acknowledged_still_waiting",
+    "acknowledged_escalated",
     "breached_queue",
     "follow_through_outstanding",
     "follow_through_escalated",
@@ -2163,6 +2258,7 @@ _COUNT_LABELS = {
     "stuck_dispatches": "stuck dispatches",
     "exhausted_breach_notices": "exhausted breach notices",
     "acknowledged_still_waiting": "acknowledged notices still waiting",
+    "acknowledged_escalated": "acknowledged notices escalated",
     "breached_queue": "breached queue cases",
     "follow_through_outstanding": "outstanding follow-through notes",
     "follow_through_escalated": "escalated follow-through notes",
