@@ -100,6 +100,9 @@
       <div class="row" style="margin-top:10px"><button id="refresh-digest">Refresh digest</button>
       <button id="snapshot-digest">Snapshot this digest</button>
       <span class="note" id="digest-snapshot-status">One composed read over the surfaces that rot quietly — computed, never sent. A snapshot keeps it, dated and under your name, so the next one reports movement.</span></div>
+      <div class="row" style="margin-top:6px"><label class="note">Keep newest <input id="digest-keep" type="number" min="1" value="12" style="width:56px"> snapshots</label>
+      <button id="prune-digest">Prune snapshots</button>
+      <span class="note" id="digest-prune-status">A prune is the only way a kept snapshot leaves, and it is recorded on the document — who, when, what left, what survived.</span></div>
     </section>
     <section>
       <h2>Calibration &amp; proposals</h2>
@@ -388,7 +391,9 @@ async function loadSlaCalibration() {
     ]);
     if (!calRes.ok) throw new Error('none');
     const cal = await calRes.json();
-    const snaps = snapRes.ok ? ((await snapRes.json()).snapshots || []) : [];
+    const snapBody = snapRes.ok ? await snapRes.json() : {};
+    const snaps = snapBody.snapshots || [];
+    const calPrunes = snapBody.prunes || [];
     const diffBody = diffRes.ok ? await diffRes.json() : {};
     const readyRows = [];
     (cal.tiers || []).forEach(t => (t.sweeps || []).forEach(r => {
@@ -399,8 +404,13 @@ async function loadSlaCalibration() {
       ? `<p class="note">Proposal-ready rows — candidate budgets whose moved cases are one-sided decided evidence. Drafting from a row stores a proposal carrying that row's evidence; the scan's best row is no longer the only door:</p><table><thead><tr><th>Tier</th><th>Row</th><th>Evidence</th><th></th></tr></thead><tbody>${readyRows.map(r => `<tr><td>${esc(r.tier)}</td><td>${esc(r.value)}d</td><td>${esc(r.moved)} decided case(s) would move (${esc(r.direction)} the budget)</td><td><button data-row-draft="${esc(r.tier)}:${esc(r.value)}">Draft proposal from this row</button></td></tr>`).join('')}</tbody></table>`
       : '<p class="note">No proposal-ready rows right now — no candidate budget carries a one-sided decided moved set.</p>';
     html += `<div class="row" style="margin-top:8px"><button id="snapshot-calibration">Snapshot this calibration report</button><span class="note" id="calibration-snapshot-status">A kept report is dated and under your name, so a budget debate can cite the evidence as of a date.</span></div>`;
+    html += `<div class="row" style="margin-top:6px"><label class="note">Keep newest <input id="calibration-keep" type="number" min="1" value="12" style="width:56px"> reports</label><button id="prune-calibration">Prune kept reports</button><span class="note" id="calibration-prune-status">Same discipline as the digest snapshots: a prune is recorded on the document — who, when, what left, what survived.</span></div>`;
     if (snaps.length) {
       html += `<p class="note">Kept reports:<br>${snaps.map(s => `${esc(s.snapshot_id)} by ${esc(s.taken_by)} at ${esc(String(s.taken_at).slice(0, 10))} — proposal-ready rows: ${(s.tiers || []).map(t => `${esc(t.tier)} [${(t.proposal_ready_rows || []).join(', ') || '—'}]`).join(' · ')}`).join('<br>')}</p>`;
+    }
+    if (calPrunes.length) {
+      const p = calPrunes[calPrunes.length - 1];
+      html += `<p class="note">Pruned ${esc(p.pruned_count)} report(s) on ${esc(String(p.pruned_at).slice(0, 10))} by ${esc(p.pruned_by)} (${esc(p.pruned_ids.join(', '))}) — surviving range ${esc(p.surviving_first)} → ${esc(p.surviving_last)}.</p>`;
     }
     if (diffBody.diff) {
       const d = diffBody.diff;
@@ -418,9 +428,27 @@ async function loadSlaCalibration() {
       btn.addEventListener('click', () => draftFromRow(btn.getAttribute('data-row-draft'))));
     const sb = $('snapshot-calibration');
     if (sb) sb.addEventListener('click', snapshotCalibration);
+    const pb = $('prune-calibration');
+    if (pb) pb.addEventListener('click', pruneCalibrationSnapshots);
   } catch (e) {
     box.innerHTML = '<span class="empty">SLA calibration unavailable.</span>';
   }
+}
+
+async function pruneCalibrationSnapshots() {
+  const actor = $('actor').value.trim();
+  if (!actor) { $('calibration-prune-status').textContent = 'Enter the underwriter name in the gate panel first — a prune is recorded under its pruner.'; return; }
+  const keep = Number($('calibration-keep').value);
+  const res = await fetch('/queue/sla/calibration/snapshots/prune', {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({actor, keep})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('calibration-prune-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('calibration-prune-status').textContent = body.pruned_count
+    ? `Pruned ${body.pruned_count} report(s) (${body.pruned_ids.join(', ')}) — surviving ${body.surviving_first} → ${body.surviving_last}, recorded on the document.`
+    : `Nothing to prune — ${body.kept} report(s) kept, at or under the keep count.`;
+  loadSlaCalibration();
 }
 
 async function draftFromRow(spec) {
@@ -690,6 +718,7 @@ async function loadOpsDigest() {
        <table><thead><tr><th>Surface</th><th>Needs attention</th><th>Detail</th></tr></thead><tbody>
        <tr><td>Stuck dispatches</td><td>${c.stuck_dispatches ? `<span class="flag">${esc(c.stuck_dispatches)}</span>` : '0'}</td><td><span class="note">${names(d.stuck_dispatches, 'submission_id') || '—'}</span></td></tr>
        <tr><td>Exhausted breach notices</td><td>${c.exhausted_breach_notices ? `<span class="flag">${esc(c.exhausted_breach_notices)}</span>` : '0'}</td><td><span class="note">${(d.exhausted_breach_notices || []).map(i => `${esc(i.submission_id)} (breach ${esc(i.notice_age_days)}d ago, ${esc(i.attempts)} attempt(s))`).join(', ') || '—'}${(d.acknowledged_breach_notices && d.acknowledged_breach_notices.length) ? `<br>acknowledged — a human called: ${d.acknowledged_breach_notices.map(i => esc(i.submission_id)).join(', ')}` : ''}</span></td></tr>
+       <tr><td>Acknowledged, still waiting</td><td>${c.acknowledged_still_waiting ? `<span class="flag">${esc(c.acknowledged_still_waiting)}</span>` : '0'}</td><td><span class="note">${(d.acknowledged_still_waiting || []).map(i => `${esc(i.submission_id)} (acknowledged ${esc(i.acknowledged_age_days)}d ago by ${esc((i.acknowledgement || {}).acknowledged_by || '—')} — the call happened; the file has not moved)`).join(', ') || '—'}</span></td></tr>
        <tr><td>Breached queue cases</td><td>${c.breached_queue ? `<span class="flag">${esc(c.breached_queue)}</span>` : '0'}</td><td><span class="note">${(d.breached_queue || []).map(i => `${esc(i.submission_id)} (${esc(i.sla_days_over)}d over)`).join(', ') || '—'}</span></td></tr>
        <tr><td>Follow-through outstanding</td><td>${esc(c.follow_through_outstanding || 0)}${c.follow_through_escalated ? ` · <span class="flag">${esc(c.follow_through_escalated)} escalated</span>` : ''}</td><td><span class="note">${names(d.follow_through_escalated, 'submission_id') ? 'escalated: ' + names(d.follow_through_escalated, 'submission_id') : '—'}</span></td></tr>
        <tr><td>Proposals</td><td>${esc(c.proposals_expired || 0)} expired${c.proposals_expiring_soon ? ` · ${esc(c.proposals_expiring_soon)} nearing expiry` : ''}</td><td><span class="note">${(d.proposals_expired || []).map(p => esc(p.proposal_id)).join(', ') || '—'}</span></td></tr>
@@ -727,6 +756,14 @@ async function loadDigestTrend() {
       });
       text += moves.length ? ` Since ${esc(t.movement.from_snapshot)}: ${moves.join(' · ')}.` : ` Nothing entered or cleared since ${esc(t.movement.from_snapshot)}.`;
     }
+    const snapRes = await fetch('/ops/digest/snapshots', {headers: headers()});
+    if (snapRes.ok) {
+      const prunes = ((await snapRes.json()).prunes || []);
+      if (prunes.length) {
+        const p = prunes[prunes.length - 1];
+        text += ` Pruned ${esc(p.pruned_count)} snapshot(s) on ${esc(String(p.pruned_at).slice(0, 10))} by ${esc(p.pruned_by)} — surviving range ${esc(p.surviving_first)} → ${esc(p.surviving_last)}.`;
+      }
+    }
     box.innerHTML = text;
   } catch (e) {
     box.textContent = '';
@@ -743,6 +780,22 @@ async function snapshotDigest() {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) { $('digest-snapshot-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
   $('digest-snapshot-status').textContent = `Kept ${body.snapshot_id} — the trend now reads against it.`;
+  loadOpsDigest();
+}
+
+async function pruneDigestSnapshots() {
+  const actor = $('actor').value.trim();
+  if (!actor) { $('digest-prune-status').textContent = 'Enter the underwriter name in the gate panel first — a prune is recorded under its pruner.'; return; }
+  const keep = Number($('digest-keep').value);
+  const res = await fetch('/ops/digest/snapshots/prune', {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({actor, keep})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('digest-prune-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('digest-prune-status').textContent = body.pruned_count
+    ? `Pruned ${body.pruned_count} snapshot(s) (${body.pruned_ids.join(', ')}) — surviving ${body.surviving_first} → ${body.surviving_last}, recorded on the document.`
+    : `Nothing to prune — ${body.kept} snapshot(s) kept, at or under the keep count.`;
   loadOpsDigest();
 }
 
@@ -948,6 +1001,7 @@ $('reject').addEventListener('click', () => decide('reject'));
 $('refresh-inbox').addEventListener('click', () => { loadInbox(); loadQueue(); loadDispatch(); loadOpsDigest(); loadCalibration(); });
 $('refresh-digest').addEventListener('click', loadOpsDigest);
 $('snapshot-digest').addEventListener('click', snapshotDigest);
+$('prune-digest').addEventListener('click', pruneDigestSnapshots);
 $('retry-due').addEventListener('click', retryDue);
 $('notify-breaches').addEventListener('click', notifyBreaches);
 loadSamples();
