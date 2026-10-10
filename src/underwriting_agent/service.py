@@ -24,6 +24,8 @@ thread never blocks a decision.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import threading
 import urllib.request
@@ -33,7 +35,14 @@ from dataclasses import dataclass, field
 from .checkpoints import get_checkpointer
 from .config import env_float, env_str, load_dotenv
 from .graph import resume_approval, run_submission
-from .insights import all_scorecards, inbox_groups, scorecard, scorecards_for
+from .insights import (
+    all_scorecards,
+    audit_rows,
+    compute_metrics,
+    inbox_groups,
+    scorecard,
+    scorecards_for,
+)
 from .model_backends import ModelBackend, get_backend
 from .object_store import get_object_store
 from .ports import Checkpointer, EventSink, ObjectStore
@@ -86,10 +95,21 @@ def dispatch_approval_webhook(record: ApprovalRecord) -> str | None:
             "underwriter_packet": result.drafts.underwriter_packet if result.drafts else "",
         },
     }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    # Signed dispatch: when ACTION_WEBHOOK_SECRET is set the receiver
+    # can verify the packet really came from this service — HMAC-SHA256
+    # over the exact body bytes, sent as X-Trida-Signature.
+    secret = env_str("ACTION_WEBHOOK_SECRET")
+    if secret:
+        signature = hmac.new(
+            secret.encode("utf-8"), body, hashlib.sha256
+        ).hexdigest()
+        headers["X-Trida-Signature"] = f"sha256={signature}"
     request = urllib.request.Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        data=body,
+        headers=headers,
         method="POST",
     )
     timeout = env_float("ACTION_WEBHOOK_TIMEOUT_SECONDS", 5.0)
@@ -498,3 +518,13 @@ class SubmissionService:
     def scorecard(self, kind: str, name: str) -> dict | None:
         """One party's scorecard (``kind`` is "insured" or "broker")."""
         return scorecard(self._get_store().all_records(), kind, name)
+
+    def metrics(self) -> dict:
+        """Operational aggregates over the store: run/decision counts,
+        outcome mix, model usage, cost, and latency."""
+        return compute_metrics(self._get_store().all_records())
+
+    def audit_rows(self) -> list[dict]:
+        """The audit trail: one flat row per stored submission,
+        decisions and telemetry included."""
+        return audit_rows(self._get_store().all_records())

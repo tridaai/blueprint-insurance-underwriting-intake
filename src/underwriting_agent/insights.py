@@ -19,6 +19,8 @@ by the model):
 
 from __future__ import annotations
 
+import csv
+import io
 from collections import Counter
 
 from .store import ApprovalRecord, history_entry
@@ -163,3 +165,154 @@ def format_scorecard_line(card: dict) -> str:
         )
         line += f"; top referral reasons: {reasons}"
     return line + ")"
+
+
+# ---------------------------------------------------------------------------
+# Metrics + audit export
+# ---------------------------------------------------------------------------
+
+
+def compute_metrics(records: list[ApprovalRecord]) -> dict:
+    """Operational aggregates over the whole store.
+
+    Run and decision counts, outcome and tier mix, guardrail and
+    reviewer signals, and — from each run's recorded telemetry —
+    model calls, tokens, estimated cost, and latency. Token/cost
+    figures only include runs whose backend reported them (the
+    offline fallback reports tokens as None rather than inventing
+    numbers, and says so via ``costed_runs``/``token_runs``).
+    """
+    statuses: Counter = Counter()
+    outcomes: Counter = Counter()
+    tiers: Counter = Counter()
+    model_calls = 0
+    input_tokens = 0
+    output_tokens = 0
+    token_runs = 0
+    costs: list[float] = []
+    latencies: list[float] = []
+    guardrail_failures = 0
+    reviewer_blocks = 0
+    for record in records:
+        result = record.result
+        statuses[result.status] += 1
+        outcomes[result.triage.outcome] += 1
+        tiers[result.triage.risk_tier] += 1
+        if result.validation is not None and not result.validation.passed:
+            guardrail_failures += 1
+        if result.reviewer_blocked:
+            reviewer_blocks += 1
+        telemetry = result.telemetry
+        if telemetry is None:
+            continue
+        model_calls += telemetry.model_calls
+        latencies.append(telemetry.latency_seconds)
+        if telemetry.input_tokens is not None:
+            token_runs += 1
+            input_tokens += telemetry.input_tokens
+            output_tokens += telemetry.output_tokens or 0
+        if telemetry.estimated_cost_usd is not None:
+            costs.append(telemetry.estimated_cost_usd)
+    decisions = statuses.get("approved", 0) + statuses.get("rejected", 0)
+    return {
+        "runs": len(records),
+        "awaiting_underwriter": statuses.get("awaiting_underwriter", 0),
+        "approved": statuses.get("approved", 0),
+        "rejected": statuses.get("rejected", 0),
+        "approval_rate": (
+            round(statuses.get("approved", 0) / decisions, 3) if decisions else None
+        ),
+        "outcomes": dict(sorted(outcomes.items())),
+        "risk_tiers": dict(sorted(tiers.items())),
+        "guardrail_failures": guardrail_failures,
+        "reviewer_blocks": reviewer_blocks,
+        "model_calls": model_calls,
+        "token_runs": token_runs,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "costed_runs": len(costs),
+        "estimated_cost_usd": round(sum(costs), 4) if costs else None,
+        "latency_seconds": {
+            "mean": round(sum(latencies) / len(latencies), 3) if latencies else None,
+            "max": round(max(latencies), 3) if latencies else None,
+            "total": round(sum(latencies), 3),
+        },
+    }
+
+
+AUDIT_COLUMNS = [
+    "submission_id",
+    "insured_name",
+    "broker_name",
+    "line_of_business",
+    "outcome",
+    "risk_tier",
+    "readiness",
+    "completeness_score",
+    "status",
+    "decided_by",
+    "decision_reason",
+    "dispatch_status",
+    "guardrails_passed",
+    "reviewer_blocked",
+    "backend",
+    "model",
+    "model_calls",
+    "input_tokens",
+    "output_tokens",
+    "estimated_cost_usd",
+    "latency_seconds",
+]
+
+
+def audit_rows(records: list[ApprovalRecord]) -> list[dict]:
+    """The audit trail: one flat row per stored submission — what was
+    analysed, what the agent concluded, what the human decided (and
+    why), and what the run cost."""
+    rows: list[dict] = []
+    for record in records:
+        result = record.result
+        entry = history_entry(record)
+        telemetry = result.telemetry
+        rows.append(
+            {
+                "submission_id": result.submission_id,
+                "insured_name": entry["insured_name"],
+                "broker_name": entry["broker_name"],
+                "line_of_business": entry["line"],
+                "outcome": result.triage.outcome,
+                "risk_tier": result.triage.risk_tier,
+                "readiness": result.facts.readiness,
+                "completeness_score": result.facts.completeness_score,
+                "status": result.status,
+                "decided_by": result.decided_by or "",
+                "decision_reason": result.decision_reason or "",
+                "dispatch_status": record.dispatch_status or "",
+                "guardrails_passed": (
+                    result.validation.passed if result.validation else None
+                ),
+                "reviewer_blocked": result.reviewer_blocked,
+                "backend": telemetry.backend if telemetry else "",
+                "model": telemetry.model if telemetry else "",
+                "model_calls": telemetry.model_calls if telemetry else 0,
+                "input_tokens": telemetry.input_tokens if telemetry else None,
+                "output_tokens": telemetry.output_tokens if telemetry else None,
+                "estimated_cost_usd": (
+                    telemetry.estimated_cost_usd if telemetry else None
+                ),
+                "latency_seconds": (
+                    round(telemetry.latency_seconds, 3) if telemetry else None
+                ),
+            }
+        )
+    return rows
+
+
+def audit_csv(rows: list[dict]) -> str:
+    """The audit rows as CSV text (header + one line per row)."""
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=AUDIT_COLUMNS)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({column: row.get(column) for column in AUDIT_COLUMNS})
+    return buffer.getvalue()

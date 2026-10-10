@@ -345,7 +345,13 @@ numbers on the submission and its loss records. Line aliases fold too
 - **No external action by construction.** No graph node can send,
   file, quote, or bind. The single opt-in egress is the approval
   webhook, fired only *after* a human decision, and its failure
-  never rewrites history.
+  never rewrites history. With `ACTION_WEBHOOK_SECRET` set the
+  dispatch is HMAC-SHA256-signed (`X-Trida-Signature`) over the
+  exact body bytes.
+- **The store is the reporting surface.** Inbox grouping, party
+  scorecards, `/metrics`, and the audit export are deterministic
+  projections of the same records the gate writes (`insights.py`) —
+  no separate analytics pipeline to drift from the record.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 

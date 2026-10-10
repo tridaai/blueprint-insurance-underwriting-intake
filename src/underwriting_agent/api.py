@@ -15,8 +15,14 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 
 from .config import env_str, load_dotenv, silence_langchain_deprecation_warnings
@@ -29,6 +35,7 @@ silence_langchain_deprecation_warnings()
 from .errors import ProviderError
 from .events import CallbackSink, RunEvent
 from .guidelines_data import GUIDELINES
+from .insights import audit_csv
 from .samples import load_sample_submissions
 from .schemas import AgentResult, DecisionRequest, SubmissionInput
 from .wiring import build_service_from_env
@@ -250,6 +257,29 @@ def scorecards() -> dict:
     submissions, outcome mix, approval rate, average completeness,
     top referral reasons."""
     return service.scorecards()
+
+
+@app.get("/metrics", dependencies=_AUTH)
+def metrics() -> dict:
+    """Operational aggregates over the store: runs, decisions,
+    outcome mix, model calls/tokens/cost, latency."""
+    return service.metrics()
+
+
+@app.get("/audit/export", dependencies=_AUTH)
+def audit_export(format: str = Query(default="json")):
+    """The audit trail — one row per stored submission with its
+    decision and telemetry — as JSON (default) or CSV."""
+    rows = service.audit_rows()
+    if format == "csv":
+        return PlainTextResponse(
+            audit_csv(rows),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=audit-export.csv"},
+        )
+    if format != "json":
+        raise HTTPException(status_code=422, detail="format must be 'json' or 'csv'.")
+    return {"count": len(rows), "records": rows}
 
 
 @app.get("/scorecards/insureds/{name}", dependencies=_AUTH)

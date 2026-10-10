@@ -142,6 +142,17 @@ extract → ingest → screen → classify → retrieve ∥ discrepancies ∥ hi
     **approval webhook** routes the packet to the customer's system
     of choice.
 
+**Operations** — the store of record is also the reporting surface,
+all computed in code: the **inbox** groups the queue by insured and
+by broker (counts, latest outcome / tier / readiness), **scorecards**
+aggregate each party's track record (outcome mix, approval rate,
+average completeness, top referral reasons — and a new submission's
+packet cites its parties' scorecards as evidence), **`/metrics`**
+totals runs, decisions, tokens, cost, and latency, and
+**`/audit/export`** emits the full decision trail as JSON or CSV.
+Webhook dispatches can be HMAC-signed (`ACTION_WEBHOOK_SECRET`) so
+the receiving system can verify the packet's origin.
+
 Two samples show the safety story end to end:
 
 - **SUB-1011** — the broker relays a client's demand: their "coverage
@@ -187,7 +198,9 @@ The seams are the product:
   doubles otherwise). Submission documents live in **object
   storage** (S3-compatible) behind a port. `ACTION_WEBHOOK_URL`
   routes an approved packet to your policy admin system, work queue,
-  or automation endpoint. Nothing else leaves the process, ever.
+  or automation endpoint — signed with `ACTION_WEBHOOK_SECRET` when
+  you set one, so the receiver can verify it came from this service.
+  Nothing else leaves the process, ever.
 
 ### The intake contract
 
@@ -272,6 +285,7 @@ load-bearing ones:
 | `RUN_TOKEN_BUDGET` | token cap per run (degrades to templates) | off |
 | `DIAGNOSIS_MAX_TOOL_CALLS` | 0–6 | `4` |
 | `ACTION_WEBHOOK_URL` | approval dispatch endpoint | off |
+| `ACTION_WEBHOOK_SECRET` | HMAC key signing dispatches (`X-Trida-Signature`) | off (unsigned) |
 | `API_KEY` | optional `X-API-Key` gate for the API | off |
 | `DATABASE_URL` | PostgreSQL DSN — store, checkpoints, pgvector | unset → in-memory test doubles |
 | `S3_BUCKET` / `S3_ENDPOINT_URL` / `S3_REGION` | document object storage (S3-compatible) | unset → documents inline only |
