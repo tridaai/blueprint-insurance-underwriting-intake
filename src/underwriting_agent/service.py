@@ -1180,7 +1180,9 @@ class SubmissionService:
         detected_at = now.isoformat(timespec="seconds")
         store = self._get_store()
         records = store.all_records()
-        queue = queue_aging(records, now)
+        queue = queue_aging(
+            records, now, sla_budgets_map=self.effective_sla_budgets()
+        )
         by_id = {r.result.submission_id: r for r in records}
         fired: list[dict] = []
         already_notified: list[str] = []
@@ -1327,8 +1329,46 @@ class SubmissionService:
     def queue(self) -> dict:
         """The awaiting queue by age bucket and outcome — how long
         undecided submissions have been sitting, and which one has
-        been waiting longest."""
-        return queue_aging(self._get_store().all_records())
+        been waiting longest. SLA states are measured against the
+        budgets in force (the settings record an accepted SLA
+        proposal wrote, over the environment)."""
+        view = queue_aging(
+            self._get_store().all_records(),
+            sla_budgets_map=self.effective_sla_budgets(),
+        )
+        view["sla_budgets_source"] = self.sla_budget_settings()["source"]
+        return view
+
+    def effective_sla_budgets(self) -> dict:
+        """The queue SLA budgets in force: the environment budgets,
+        overridden per tier by the settings record an accepted SLA
+        proposal wrote (``proposals.effective_sla_budgets``). The
+        queue projection, the breach check, and the status-note
+        drafting all measure cases against these — accepting an
+        SLA proposal changes the very next queue read."""
+        from .proposals import effective_sla_budgets
+
+        return effective_sla_budgets(self._get_store())
+
+    def sla_budget_settings(self) -> dict:
+        """The SLA budgets in force and their provenance: the
+        values, whether they come from the environment or an
+        accepted proposal, and the settings record's history."""
+        from .proposals import sla_budget_settings_view
+
+        return sla_budget_settings_view(self._get_store())
+
+    def draft_sla_budget_proposals(self) -> dict:
+        """Draft SLA-budget proposals from the decided cases' waits
+        (``proposals.draft_sla_proposals``): candidate budgets
+        whose moved cases carry one-sided decision evidence become
+        stored proposal documents in the same proposals list as
+        the threshold proposals. Drafting changes no budget and no
+        record — a human still decides."""
+        from .proposals import draft_sla_proposals
+
+        store = self._get_store()
+        return draft_sla_proposals(store, store.all_records())
 
     def draft_status_note(self, submission_id: str) -> dict:
         """Draft the underwriter status note for an SLA-breached case.
@@ -1352,7 +1392,7 @@ class SubmissionService:
         record = store.get(submission_id)
         if record is None:
             raise KeyError(f"Unknown submission_id: {submission_id} (analyze it first)")
-        item = queue_item_for(record)
+        item = queue_item_for(record, budgets=self.effective_sla_budgets())
         if item is None:
             raise ValueError(
                 f"Submission {submission_id} is not awaiting an underwriter "

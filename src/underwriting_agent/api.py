@@ -346,6 +346,26 @@ def queue_aging_view() -> dict:
     return service.queue()
 
 
+@app.get("/queue/sla/settings", dependencies=_AUTH)
+def sla_budget_settings() -> dict:
+    """The queue SLA budgets in force and their provenance: the
+    values, the source (environment, or the settings record an
+    accepted SLA proposal wrote), and the record's change
+    history."""
+    return service.sla_budget_settings()
+
+
+@app.post("/queue/sla-proposals/draft", dependencies=_AUTH)
+def draft_sla_budget_proposals() -> dict:
+    """Scan the decided cases' waits for proposal-worthy SLA
+    budget moves and draft them (see proposals.py for the
+    evidence bar: the moved cases must be entirely decided and
+    one-sided). Drafting writes only proposal documents — no
+    budget moves. The drafted proposals join the calibration
+    proposals list and are decided on the same endpoint."""
+    return service.draft_sla_budget_proposals()
+
+
 @app.post("/queue/sla-notifications", dependencies=_AUTH)
 def notify_sla_breaches() -> dict:
     """Run the SLA-breach check: the first time the queue projection
