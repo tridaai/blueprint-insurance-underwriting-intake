@@ -157,6 +157,19 @@ def test_pgvector_retrieval_round_trip(pg_env, monkeypatch):
     assert fake.corpus_embed_calls == calls_after_first
 
 
+def test_readiness_reports_postgres(pg_env):
+    from fastapi.testclient import TestClient
+
+    from underwriting_agent import api as api_module
+
+    # Lifespan runs (migrations) because the client is used as a
+    # context manager; readiness must name the real database.
+    with TestClient(api_module.app) as client:
+        response = client.get("/readiness")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "database": "postgres"}
+
+
 def test_postgres_checkpointer_pauses_and_resumes_across_instances(pg_env):
     from underwriting_agent.checkpoints import get_checkpointer
     from underwriting_agent.samples import sample_submission_models

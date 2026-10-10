@@ -417,12 +417,18 @@ def _postgres_checkpointer(url: str):
 
     One saver (and pool) per database URL per process: surfaces that
     rebuild their service share the pool instead of leaking a new one
-    per construction. The pool carries the settings the saver
-    requires (autocommit, no prepared statements, dict rows); the
-    saver's ``setup()`` creates its checkpoint tables on first use.
+    per construction. A saver whose pool was closed (the API lifespan
+    closes it at shutdown) is rebuilt, never handed out dead. The
+    pool carries the settings the saver requires (autocommit, no
+    prepared statements, dict rows); the saver's ``setup()`` creates
+    its checkpoint tables on first use.
     """
-    if url in _POSTGRES_SAVERS:
-        return _POSTGRES_SAVERS[url]
+    existing = _POSTGRES_SAVERS.get(url)
+    if existing is not None:
+        pool = getattr(existing, "conn", None)
+        if pool is None or not getattr(pool, "closed", False):
+            return existing
+        _POSTGRES_SAVERS.pop(url, None)
     from langgraph.checkpoint.postgres import PostgresSaver
     from psycopg.rows import dict_row
     from psycopg_pool import ConnectionPool
@@ -434,6 +440,7 @@ def _postgres_checkpointer(url: str):
         url,
         min_size=1,
         max_size=8,
+        open=True,
         kwargs={
             "autocommit": True,
             "prepare_threshold": 0,
