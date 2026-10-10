@@ -2188,11 +2188,18 @@ class SubmissionService:
         before refusal (``letter_repair.steer_status_note``: the
         offending sentence rewritten into the family's approved
         note shape, the rewrite revalidated, the repair recorded
-        on the note with the original validation and the guidance
-        that steered it). A note failing anything else — bind
-        language, a premium figure, a promise, PII — is refused
-        outright, never stored, exactly as before: steering is
-        for wording, refusal is for substance.
+        on the note with the original validation, the guidance
+        that steered it, and the families it rewrote). A note
+        failing anything else — bind language, a premium figure,
+        a promise, PII — is refused outright, never stored,
+        exactly as before: steering is for wording, refusal is
+        for substance. Either way the refusal is recorded on the
+        record (``status_note_refusals``: the failed checks, and
+        whether a steered candidate was produced and still
+        failed), because the metrics aggregate the repairs and
+        the refusals as one drafting-quality family — a refusal
+        that evaporated into the raised error would be a signal
+        nobody could trend.
 
         Re-drafting replaces the stored note (the case aged, the
         facts may have moved). Raises KeyError for an unknown id
@@ -2220,11 +2227,13 @@ class SubmissionService:
         text = compose_status_note(record, item, now)
         validation = validate_status_note(text, submission_id)
         repair: dict = {}
+        steered_candidate = False
         if not validation.passed:
             # One steered redraft for a wording-only failure (see
             # the docstring): the steering quotes the offending
             # sentence and rewrites it into the approved shape;
             # the rewrite ships only if it passes the same gate.
+            from .guardrails import letter_wording_hits
             from .letter_repair import (
                 status_note_repair_guidance,
                 steer_status_note,
@@ -2233,6 +2242,7 @@ class SubmissionService:
             guidance = status_note_repair_guidance(validation, text)
             steered = steer_status_note(text, validation) if guidance else None
             if steered is not None:
+                steered_candidate = True
                 steered_validation = validate_status_note(steered, submission_id)
                 if steered_validation.passed:
                     repair = {
@@ -2242,9 +2252,52 @@ class SubmissionService:
                             mode="json"
                         ),
                         "repair_guidance": guidance,
+                        # The families the steering rewrote —
+                        # the vocabulary the metrics aggregate
+                        # counts repairs in (see
+                        # insights._status_note_repair_aggregate).
+                        "repair_families": sorted(
+                            family
+                            for family, hit in letter_wording_hits(
+                                text
+                            ).items()
+                            if hit
+                        ),
                     }
                     text, validation = steered, steered_validation
         if not validation.passed:
+            # The note is refused and never stored — but the
+            # refusal itself is recorded on the record before
+            # raising: a refused draft means record prose the
+            # composition interpolated carried a forbidden
+            # phrasing, and until the refusal was kept it
+            # evaporated into the error, invisible to the
+            # drafting-quality metrics that watch exactly this
+            # signal (see insights._status_note_repair_aggregate).
+            from .guardrails import letter_wording_hits
+
+            failed_checks = [
+                c.name for c in validation.checks if not c.passed
+            ]
+            refusals = list(record.status_note_refusals or [])
+            refusals.append(
+                {
+                    "refused_at": now.isoformat(timespec="seconds"),
+                    "failed_checks": failed_checks,
+                    "steered": steered_candidate,
+                    "repair_families": sorted(
+                        family
+                        for family, hit in letter_wording_hits(
+                            text
+                        ).items()
+                        if hit
+                    )
+                    if "no_forward_motion_in_letter" in failed_checks
+                    else [],
+                }
+            )
+            record.status_note_refusals = refusals
+            store.save(record)
             failed = "; ".join(
                 f"{c.name}: {c.detail}" for c in validation.checks if not c.passed
             )

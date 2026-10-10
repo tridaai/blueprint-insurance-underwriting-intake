@@ -390,11 +390,79 @@ def _letter_advisory_aggregate(records: list[ApprovalRecord]) -> dict:
     }
 
 
+def _status_note_repair_aggregate(records: list[ApprovalRecord]) -> dict:
+    """The status-note repair aggregate over the store's records.
+
+    The note-side twin of :func:`_letter_advisory_aggregate`:
+    since round 15 a wording-only status-note failure earns one
+    steered redraft, recorded on the stored note, and since
+    round 18 a refusal is recorded on the record too — so the
+    whole drafting loop is countable: notes drafted, notes the
+    steering repaired (and the families it rewrote), drafts
+    refused, and the refusal split — refused after a steered
+    candidate still failed the gate, against refused outright
+    on substance (bind language, a premium, a promise, PII:
+    never steered around). A repaired note means interpolated
+    record prose carried a forbidden phrasing; a rising repair
+    or refusal count is an intake-data-quality signal exactly
+    parallel to the letter-advisory trend, and it was invisible
+    while repairs lived note by note and refusals evaporated
+    into the raised error. ``by_family`` counts the families on
+    repairs recorded since families were kept (round 18) plus
+    the families on refusals; earlier repaired notes count in
+    ``repaired_notes`` but carry no family vocabulary to count.
+    The refusal split's denominator discipline mirrors the
+    advisories': the steer success rate is repaired notes over
+    every steer attempted (repairs + refusals after steering).
+    """
+    notes_drafted = 0
+    repaired_notes = 0
+    families: Counter = Counter()
+    refusals = 0
+    refusals_after_steering = 0
+    refusal_checks: Counter = Counter()
+    for record in records:
+        note = record.status_note
+        if note:
+            notes_drafted += 1
+            if note.get("repaired"):
+                repaired_notes += 1
+                for family in note.get("repair_families") or []:
+                    families[family] += 1
+        for refusal in record.status_note_refusals or []:
+            refusals += 1
+            if refusal.get("steered"):
+                refusals_after_steering += 1
+            for name in refusal.get("failed_checks") or []:
+                refusal_checks[name] += 1
+            for family in refusal.get("repair_families") or []:
+                families[family] += 1
+    steer_attempts = repaired_notes + refusals_after_steering
+    return {
+        "notes_drafted": notes_drafted,
+        "repaired_notes": repaired_notes,
+        "by_family": dict(sorted(families.items())),
+        "refusals": refusals,
+        "refusals_after_steering": refusals_after_steering,
+        "refusals_unsteered": refusals - refusals_after_steering,
+        "by_refused_check": dict(sorted(refusal_checks.items())),
+        "steer_attempts": steer_attempts,
+        "steer_success_rate": (
+            round(repaired_notes / steer_attempts, 3)
+            if steer_attempts
+            else None
+        ),
+    }
+
+
 def compute_metrics(records: list[ApprovalRecord]) -> dict:
     """Operational aggregates over the whole store.
 
     Run and decision counts, outcome and tier mix, guardrail and
-    reviewer signals, the **letter-advisory trend** (below), and —
+    reviewer signals, the **letter-advisory trend** (below), the
+    **status-note repair family** (the note-side twin: steered
+    repairs, refusals, and the refusal-vs-steer split — see
+    :func:`_status_note_repair_aggregate`), and —
     from each run's recorded telemetry — model calls, tokens,
     estimated cost, and latency. Token/cost figures only include
     runs whose backend reported them (the offline fallback reports
@@ -473,6 +541,7 @@ def compute_metrics(records: list[ApprovalRecord]) -> dict:
         "guardrail_failures": guardrail_failures,
         "reviewer_blocks": reviewer_blocks,
         "letter_advisories": _letter_advisory_aggregate(records),
+        "status_note_repairs": _status_note_repair_aggregate(records),
         "model_calls": model_calls,
         "token_runs": token_runs,
         "input_tokens": input_tokens,
@@ -2316,7 +2385,12 @@ def ops_digest(
     ``letter_advisories``, the same computation ``/metrics``
     reports), not as worklist items but so the snapshots that
     keep these counts trend **drafting quality** across the kept
-    history beside the operations movement. The counts likewise
+    history beside the operations movement. The note-side
+    drafting quality rides the same counts — status notes the
+    steering repaired and status-note drafts refused, the full
+    family along as ``status_note_repairs`` — so the kept
+    history trends both broker-facing drafts, not only the
+    letter. The counts likewise
     carry the **worked follow-through response** (notes touched,
     and escalations a fresh touch is currently quieting —
     :func:`follow_through_digest`'s own counts): the problem
@@ -2423,6 +2497,7 @@ def ops_digest(
     expired.sort(key=lambda e: e["proposal_id"])
 
     advisory = _letter_advisory_aggregate(records)
+    note_repairs = _status_note_repair_aggregate(records)
     counts = {
         "stuck_dispatches": dispatch["stuck_count"],
         "exhausted_breach_notices": dispatch["exhausted_breach_count"],
@@ -2474,6 +2549,15 @@ def ops_digest(
         # advisories are a quality signal, not a worklist.
         "advisory_runs_with": advisory["runs_with_advisories"],
         "advisory_repaired_runs": advisory["repaired_runs"],
+        # The note-side drafting quality rides the same counts
+        # on the same discipline: status notes the steering
+        # repaired, and status-note drafts refused outright —
+        # the full family rides along below as
+        # ``status_note_repairs``. Neither enters
+        # total_attention — a repaired or refused draft is a
+        # data-quality signal, not a worklist.
+        "status_note_repaired": note_repairs["repaired_notes"],
+        "status_note_refusals": note_repairs["refusals"],
         "proposals_expiring_soon": len(expiring_soon),
         "proposals_expired": len(expired),
     }
@@ -2583,6 +2667,7 @@ def ops_digest(
             "acknowledged_breach_notices"
         ],
         "letter_advisories": advisory,
+        "status_note_repairs": note_repairs,
         "follow_through_response_latency": follow["response_latency"],
         "acknowledged_wait_days": acknowledged_wait_days,
         "proposal_warning_days": proposal_warning_days,
@@ -2616,6 +2701,8 @@ DIGEST_COUNT_KEYS = (
     "follow_through_responses",
     "advisory_runs_with",
     "advisory_repaired_runs",
+    "status_note_repaired",
+    "status_note_refusals",
     "proposals_expiring_soon",
     "proposals_expired",
     "total_attention",
@@ -2655,6 +2742,8 @@ _COUNT_LABELS = {
     "follow_through_responses": "follow-through responses",
     "advisory_runs_with": "runs drafting letter advisories",
     "advisory_repaired_runs": "advisory repairs",
+    "status_note_repaired": "repaired status notes",
+    "status_note_refusals": "refused status-note drafts",
     "proposals_expiring_soon": "proposals nearing expiry",
     "proposals_expired": "expired proposals",
     "total_attention": "total attention",

@@ -57,6 +57,19 @@ class ApprovalRecord:
     # window. An internal draft — it is stored on the record and
     # never sent. Older payloads predate it.
     status_note: dict | None = None
+    # The status-note drafts the guardrails refused (see
+    # service.draft_status_note): one entry per refusal —
+    # {refused_at, failed_checks, steered, repair_families} —
+    # recorded on the record even though the note itself is
+    # never stored, because a refusal is a drafting-quality
+    # event (record prose the composition interpolated carried
+    # a forbidden phrasing) and a rising count is an
+    # intake-data-quality signal; until round 18 it evaporated
+    # into the raised error. ``steered`` says a steered
+    # candidate was produced and still failed the gate, as
+    # against a substance failure refused outright. Older
+    # payloads predate it.
+    status_note_refusals: list[dict] = field(default_factory=list)
     # The SLA-breach webhook notice (see service.notify_sla_breaches):
     # set the first time the queue projection observes this record
     # past its SLA budget AND a breach dispatch was attempted —
@@ -159,6 +172,7 @@ def _record_to_dict(record: ApprovalRecord) -> dict:
         "dispatch_status": record.dispatch_status,
         "dispatch_attempts": record.dispatch_attempts,
         "status_note": record.status_note,
+        "status_note_refusals": record.status_note_refusals,
         "sla_breach_notice": record.sla_breach_notice,
         "sla_breach_attempts": record.sla_breach_attempts,
         "breach_notice_acknowledgement": record.breach_notice_acknowledgement,
@@ -183,6 +197,7 @@ def _record_from_dict(data: dict) -> ApprovalRecord:
         dispatch_status=data.get("dispatch_status"),
         dispatch_attempts=data.get("dispatch_attempts") or [],
         status_note=data.get("status_note"),
+        status_note_refusals=data.get("status_note_refusals") or [],
         sla_breach_notice=data.get("sla_breach_notice"),
         sla_breach_attempts=data.get("sla_breach_attempts") or [],
         breach_notice_acknowledgement=data.get("breach_notice_acknowledgement"),
