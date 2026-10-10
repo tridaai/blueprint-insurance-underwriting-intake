@@ -399,9 +399,10 @@ async function loadProposals() {
     const histLine = (v, kind) => {
       const h = (v.settings && v.settings.history) || [];
       if (!h.length) return '';
-      const describe = e => e.changes
+      const describe = e => (e.changes
         ? e.changes.map(ch => `${esc(ch.dimension)} ${esc(ch.from)} → ${esc(ch.to)}`).join(', ') + (e.restore ? ' (restore)' : ' (revert)')
-        : `${esc(e.dimension)} ${esc(e.from)} → ${esc(e.to)}${e.revert ? ' (revert)' : ''}`;
+        : `${esc(e.dimension)} ${esc(e.from)} → ${esc(e.to)}${e.revert ? ' (revert)' : ''}`)
+        + (e.decision_note ? ` — “${esc(e.decision_note)}”` : '');
       return `<p class="note">History: ${h.map((e, i) => `#${i} ${describe(e)} <button data-restore-preview="${kind}:${i}">Preview</button> <button data-restore="${kind}:${i}">Restore to #${i}</button>`).join(' · ')}</p>`;
     };
     $('proposals').innerHTML =
@@ -417,6 +418,7 @@ async function loadProposals() {
        <button id="draft-sla-proposals">Draft SLA-budget proposals</button>
        ${expiredCount ? `<button id="preview-refresh-expired">Preview sweep</button> <button id="refresh-expired">Refresh all expired (${expiredCount})</button>` : ''}
        <span class="note" id="proposal-status"></span></div>
+       <div class="row" style="margin-top:4px"><input id="restore-note" type="text" placeholder="Why restore? (optional — kept on the restore entry as its decision note)" style="flex:1"></div>
        <p class="note">Accepting writes the value into the settings record the pipeline reads — the change, its evidence, and its decider stay on the record, and a revert restores the prior value as a new audited entry. A draft's evidence expires (14 days by default): an expired draft must be refreshed — its scan re-run against today's store — before it can be decided.</p>`;
     document.querySelectorAll('[data-prop-accept]').forEach(btn =>
       btn.addEventListener('click', () => decideProposal(btn.getAttribute('data-prop-accept'), true)));
@@ -541,14 +543,15 @@ async function previewRefreshAllExpired() {
 async function restoreSettings(kind, index) {
   const actor = $('actor').value.trim();
   if (!actor) { $('proposal-status').textContent = 'Enter the underwriter name in the gate panel first — a restore is audited under its actor.'; return; }
+  const note = ($('restore-note') ? $('restore-note').value : '').trim();
   const path = kind === 'sla' ? '/queue/sla/settings/restore' : '/calibration/settings/restore';
   const res = await fetch(path, {
     method: 'POST', headers: headers(),
-    body: JSON.stringify({actor, history_index: index})
+    body: JSON.stringify({actor, history_index: index, note: note || undefined})
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) { $('proposal-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
-  $('proposal-status').textContent = `Restored the ${kind === 'sla' ? 'SLA-budget' : 'threshold'} settings to history entry #${index} — recorded as one new audited change.`;
+  $('proposal-status').textContent = `Restored the ${kind === 'sla' ? 'SLA-budget' : 'threshold'} settings to history entry #${index} — recorded as one new audited change${note ? ', with your note kept on the entry' : ''}.`;
   loadCalibration();
   loadQueue();
 }
@@ -556,16 +559,18 @@ async function restoreSettings(kind, index) {
 async function previewRestore(kind, index) {
   const label = kind === 'sla' ? 'SLA-budget' : 'threshold';
   const path = kind === 'sla' ? '/queue/sla/settings/restore/preview' : '/calibration/settings/restore/preview';
+  const note = ($('restore-note') ? $('restore-note').value : '').trim();
   $('proposal-status').textContent = `Previewing a restore of the ${label} settings to history entry #${index}…`;
   const res = await fetch(path, {
     method: 'POST', headers: headers(),
-    body: JSON.stringify({history_index: index})
+    body: JSON.stringify({history_index: index, note: note || undefined})
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) { $('proposal-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
-  $('proposal-status').textContent = body.would_change
+  $('proposal-status').textContent = (body.would_change
     ? `Preview: restoring the ${label} settings to #${index} would change ${body.changes.map(ch => `${ch.dimension} ${ch.from} → ${ch.to}`).join(' · ')}. Nothing was written.`
-    : `Preview: restoring the ${label} settings to #${index} would change nothing — the values in force already match that entry.`;
+    : `Preview: restoring the ${label} settings to #${index} would change nothing — the values in force already match that entry.`)
+    + (body.decision_note ? ` Your note would be stored with it: “${body.decision_note}”` : '');
 }
 
 async function revertSettings(path, label) {
@@ -589,14 +594,29 @@ async function loadOpsDigest() {
     const d = await res.json();
     const c = d.counts || {};
     const names = (list, key) => (list || []).map(e => esc(e[key])).join(', ');
+    const movementLine = (() => {
+      const m = d.movement;
+      if (!m) return '';
+      const moves = [];
+      Object.keys(m.sections || {}).forEach(section => {
+        const s = m.sections[section];
+        if (s.entered && s.entered.length) moves.push('entered ' + section.replace(/_/g, ' ') + ': ' + s.entered.map(esc).join(', '));
+        if (s.cleared && s.cleared.length) moves.push('cleared ' + section.replace(/_/g, ' ') + ': ' + s.cleared.map(esc).join(', '));
+      });
+      return moves.length
+        ? `<p class="note">Movement since ${esc(m.since_snapshot)} (${esc(String(m.snapshot_taken_at).slice(0, 10))}, by ${esc(m.snapshot_taken_by)}): ${moves.join(' · ')}.</p>`
+        : `<p class="note">Since ${esc(m.since_snapshot)}: nothing entered or cleared.</p>`;
+    })();
     $('opsdigest').innerHTML =
       `<p class="note">${esc(d.headline)}</p>
        <table><thead><tr><th>Surface</th><th>Needs attention</th><th>Detail</th></tr></thead><tbody>
        <tr><td>Stuck dispatches</td><td>${c.stuck_dispatches ? `<span class="flag">${esc(c.stuck_dispatches)}</span>` : '0'}</td><td><span class="note">${names(d.stuck_dispatches, 'submission_id') || '—'}</span></td></tr>
+       <tr><td>Exhausted breach notices</td><td>${c.exhausted_breach_notices ? `<span class="flag">${esc(c.exhausted_breach_notices)}</span>` : '0'}</td><td><span class="note">${(d.exhausted_breach_notices || []).map(i => `${esc(i.submission_id)} (breach ${esc(i.notice_age_days)}d ago, ${esc(i.attempts)} attempt(s))`).join(', ') || '—'}</span></td></tr>
        <tr><td>Breached queue cases</td><td>${c.breached_queue ? `<span class="flag">${esc(c.breached_queue)}</span>` : '0'}</td><td><span class="note">${(d.breached_queue || []).map(i => `${esc(i.submission_id)} (${esc(i.sla_days_over)}d over)`).join(', ') || '—'}</span></td></tr>
        <tr><td>Follow-through outstanding</td><td>${esc(c.follow_through_outstanding || 0)}${c.follow_through_escalated ? ` · <span class="flag">${esc(c.follow_through_escalated)} escalated</span>` : ''}</td><td><span class="note">${names(d.follow_through_escalated, 'submission_id') ? 'escalated: ' + names(d.follow_through_escalated, 'submission_id') : '—'}</span></td></tr>
        <tr><td>Proposals</td><td>${esc(c.proposals_expired || 0)} expired${c.proposals_expiring_soon ? ` · ${esc(c.proposals_expiring_soon)} nearing expiry` : ''}</td><td><span class="note">${(d.proposals_expired || []).map(p => esc(p.proposal_id)).join(', ') || '—'}</span></td></tr>
        </tbody></table>
+       ${movementLine}
        <p class="note" id="digest-trend"></p>`;
     loadDigestTrend();
   } catch (e) {
@@ -653,14 +673,20 @@ async function loadDispatch() {
     const res = await fetch('/dispatch', {headers: headers()});
     if (!res.ok) throw new Error('none');
     const d = await res.json();
-    if (!d.attempts_total) {
+    if (!d.attempts_total && !d.exhausted_breach_count) {
       $('dispatch').innerHTML = '<span class="empty">No webhook dispatches yet — a dispatch happens on approval when ACTION_WEBHOOK_URL is configured.</span>';
       return;
     }
-    let html = `<p class="note">${esc(d.attempts_total)} attempt(s) across ${esc(d.records_with_attempts)} record(s) · ${esc(d.sent_records)} delivered · ${esc(d.failed_records)} failing${d.oldest_failure_at ? ' · oldest failure ' + esc(d.oldest_failure_at) : ''}${d.stuck_count ? ` · ${esc(d.stuck_count)} stuck (failing over ${esc(d.stuck_age_hours)}h with retries left)` : ''}</p>`;
+    let html = `<p class="note">${esc(d.attempts_total)} attempt(s) across ${esc(d.records_with_attempts)} record(s) · ${esc(d.sent_records)} delivered · ${esc(d.failed_records)} failing${d.oldest_failure_at ? ' · oldest failure ' + esc(d.oldest_failure_at) : ''}${d.stuck_count ? ` · ${esc(d.stuck_count)} stuck (failing over ${esc(d.stuck_age_hours)}h with retries left)` : ''}${d.exhausted_breach_count ? ` · ${esc(d.exhausted_breach_count)} breach notice(s) exhausted — nobody was told` : ''}</p>`;
     if (d.failures && d.failures.length) {
       html += `<table><thead><tr><th>Submission</th><th>Attempts</th><th>Last error</th><th>Retry</th><th></th></tr></thead><tbody>
       ${d.failures.map(f => `<tr><td>${esc(f.submission_id)}<br><span class="note">${esc(f.insured_name)}${f.failure_age_days != null ? ` · failing ${esc(f.failure_age_days)}d (${esc(f.failure_age_bucket)})` : ''}</span></td><td>${esc(f.attempts)}</td><td>${esc(f.last_http_status ? 'HTTP ' + f.last_http_status : f.last_error || '—')}</td><td>${f.stuck ? pill('stuck', 'bad') + ' ' : ''}${f.retry_due ? pill('due', 'warn') : `<span class="note">in ${esc(f.next_backoff_seconds)}s backoff</span>`}</td><td><button data-retry="${esc(f.submission_id)}">Retry</button></td></tr>`).join('')}
+      </tbody></table>`;
+    }
+    if (d.exhausted_breach_notices && d.exhausted_breach_notices.length) {
+      html += `<p class="note">Exhausted breach notices — the SLA-breach webhook spent all ${esc(d.attempt_budget)} attempt(s) and the case is still undecided. No retry is coming; these need a human call:</p>
+      <table><thead><tr><th>Submission</th><th>Breach first seen</th><th>Attempts</th><th>Last error</th></tr></thead><tbody>
+      ${d.exhausted_breach_notices.map(n => `<tr><td>${esc(n.submission_id)}<br><span class="note">${esc(n.insured_name)} · ${esc(n.risk_tier)} tier, ${esc(n.sla_budget_days)}d budget</span></td><td>${esc(n.notice_age_days)}d ago (${esc(n.notice_age_bucket)})</td><td>${esc(n.attempts)}</td><td>${esc(n.last_http_status ? 'HTTP ' + n.last_http_status : n.last_error || '—')}</td></tr>`).join('')}
       </tbody></table>`;
     }
     $('dispatch').innerHTML = html;
