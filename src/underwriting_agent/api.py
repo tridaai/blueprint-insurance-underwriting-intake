@@ -43,6 +43,7 @@ from .schemas import (
     DecisionRequest,
     ProposalDecisionRequest,
     SettingsRestoreRequest,
+    SnapshotPruneRequest,
     SlaCalibrationDraftRequest,
     SubmissionInput,
 )
@@ -562,8 +563,27 @@ def snapshot_sla_calibration(request: DecisionRequest) -> dict:
 
 @app.get("/queue/sla/calibration/snapshots", dependencies=_AUTH)
 def sla_calibration_snapshots() -> dict:
-    """Every stored SLA-calibration snapshot, in the order kept."""
-    return {"snapshots": service.sla_calibration_snapshots()}
+    """Every stored SLA-calibration snapshot, in the order kept,
+    with the prunes recorded on the document."""
+    return {
+        "snapshots": service.sla_calibration_snapshots(),
+        "prunes": service.sla_calibration_snapshot_prunes(),
+    }
+
+
+@app.post("/queue/sla/calibration/snapshots/prune", dependencies=_AUTH)
+def prune_sla_calibration_snapshots(request: SnapshotPruneRequest) -> dict:
+    """Prune the kept calibration snapshots to the newest ``keep``:
+    the only way a kept report leaves the document, operator-called
+    and recorded on the document itself (who, when, what left, the
+    surviving range). ``keep`` below 1 is refused — the document
+    always keeps a baseline for the diff."""
+    try:
+        return service.prune_sla_calibration_snapshots(
+            _decision_actor(request), request.keep
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/queue/sla/calibration/snapshots/diff", dependencies=_AUTH)
@@ -632,8 +652,27 @@ def snapshot_ops_digest(request: DecisionRequest) -> dict:
 
 @app.get("/ops/digest/snapshots", dependencies=_AUTH)
 def ops_digest_snapshots() -> dict:
-    """Every stored ops-digest snapshot, in the order taken."""
-    return {"snapshots": service.ops_digest_snapshots()}
+    """Every stored ops-digest snapshot, in the order taken, with
+    the prunes recorded on the document."""
+    return {
+        "snapshots": service.ops_digest_snapshots(),
+        "prunes": service.ops_digest_snapshot_prunes(),
+    }
+
+
+@app.post("/ops/digest/snapshots/prune", dependencies=_AUTH)
+def prune_ops_digest_snapshots(request: SnapshotPruneRequest) -> dict:
+    """Prune the kept digest snapshots to the newest ``keep``: the
+    only way a kept snapshot leaves the document, operator-called
+    and recorded on the document itself (who, when, what left, the
+    surviving range). ``keep`` below 1 is refused — the document
+    always keeps a baseline for the trend."""
+    try:
+        return service.prune_ops_digest_snapshots(
+            _decision_actor(request), request.keep
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/ops/digest/trend", dependencies=_AUTH)

@@ -573,6 +573,24 @@ class DecisionRequest(BaseModel):
         return self.actor or self.approver or self.reviewer
 
 
+class SnapshotPruneRequest(BaseModel):
+    """An operator's keep-last-N prune of a kept-snapshot
+    document (digest snapshots or calibration snapshots — one
+    retention discipline, see ``service._prune_kept_snapshots``):
+    who is pruning, and how many of the newest snapshots survive.
+    The prune is recorded on the document it prunes; ``keep``
+    below 1 is refused, because emptying the document would erase
+    the baseline the trends read against."""
+
+    actor: Optional[str] = None
+    approver: Optional[str] = None
+    reviewer: Optional[str] = None
+    keep: int
+
+    def actor_name(self) -> Optional[str]:
+        return self.actor or self.approver or self.reviewer
+
+
 class SettingsRestoreRequest(BaseModel):
     """A human's point-in-history restore of a settings record
     (see ``proposals.py``): who is restoring, the index of the

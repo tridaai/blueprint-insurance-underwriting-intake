@@ -2331,3 +2331,75 @@ def digest_trend(snapshots: list[dict]) -> dict:
         "deltas": deltas,
         "movement": movement,
     }
+
+
+# ---------------------------------------------------------------------------
+# Kept-snapshot retention — one discipline for both kept documents
+# ---------------------------------------------------------------------------
+
+
+def prune_snapshot_list(
+    snapshots: list[dict], keep: int
+) -> tuple[list[dict], list[dict]]:
+    """Split a kept-snapshot list for a keep-last-N prune:
+    (survivors, pruned), order preserved in both.
+
+    The one retention discipline for every kept-report document
+    — the digest snapshots above and the calibration snapshots
+    in proposals.py. Snapshots are kept on demand and accumulate
+    one per ask, unboundedly: a year of weekly snapshots becomes
+    an archive nobody trends. Pruning is the only way a kept
+    snapshot ever leaves its document, and it is operator-called,
+    never a timer. ``keep`` below 1 is refused: a prune that
+    emptied the document would erase the baseline every trend
+    reads against, silently.
+    """
+    if keep < 1:
+        raise ValueError(
+            "keep must be at least 1 — a prune keeps the newest "
+            "snapshots; emptying the document would erase the "
+            "baseline the trends read against"
+        )
+    if len(snapshots) <= keep:
+        return list(snapshots), []
+    return list(snapshots[-keep:]), list(snapshots[:-keep])
+
+
+def snapshot_prune_entry(
+    *,
+    actor: str,
+    keep: int,
+    pruned: list[dict],
+    kept: list[dict],
+    pruned_at: str,
+) -> dict:
+    """The prune's own record, kept on the document it pruned:
+    who pruned, when, what they asked to keep, which snapshots
+    left, and the surviving range — so a gap in a trend is
+    explained by the document itself, not by archaeology."""
+    return {
+        "pruned_at": pruned_at,
+        "pruned_by": actor,
+        "requested_keep": keep,
+        "pruned_count": len(pruned),
+        "pruned_ids": [s.get("snapshot_id", "") for s in pruned],
+        "surviving_first": kept[0].get("snapshot_id", "") if kept else "",
+        "surviving_last": kept[-1].get("snapshot_id", "") if kept else "",
+    }
+
+
+def next_snapshot_id(snapshots: list[dict], prefix: str) -> str:
+    """The next id for a kept snapshot: one past the highest
+    number still in the document, not one past its length. After
+    a prune, a length-based id would reissue a number a pruned
+    snapshot already wore — and a citation like "snap-0007" must
+    name exactly one kept report, forever."""
+    highest = 0
+    for snap in snapshots:
+        sid = str(snap.get("snapshot_id") or "")
+        if sid.startswith(prefix):
+            try:
+                highest = max(highest, int(sid[len(prefix):]))
+            except ValueError:
+                continue
+    return f"{prefix}{highest + 1:04d}"

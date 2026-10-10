@@ -65,7 +65,9 @@ from .insights import (
     follow_through_digest,
     inbox_groups,
     insured_loss_timeline,
+    next_snapshot_id,
     ops_digest,
+    prune_snapshot_list,
     queue_aging,
     queue_item_for,
     scorecard,
@@ -1454,21 +1456,79 @@ class SubmissionService:
         the counts, and the ids behind each section, kept under
         the taker's name. Snapshots are operator-taken, never on a
         timer — they are what the digest trend reads. Taking one
-        changes nothing but the snapshot list itself."""
+        changes nothing but the snapshot list itself (the
+        document's prune record rides along untouched), and its id
+        runs one past the highest number still kept, so an id a
+        prune removed is never reissued."""
         store = self._get_store()
         document = store.get_document(DIGEST_SNAPSHOTS_KEY) or {}
         snapshots = list(document.get("snapshots") or [])
         snapshot = build_digest_snapshot(
-            self.ops_digest(), f"snap-{len(snapshots) + 1:04d}", actor
+            self.ops_digest(), next_snapshot_id(snapshots, "snap-"), actor
         )
         snapshots.append(snapshot)
-        store.save_document(DIGEST_SNAPSHOTS_KEY, {"snapshots": snapshots})
+        document["snapshots"] = snapshots
+        store.save_document(DIGEST_SNAPSHOTS_KEY, document)
         return snapshot
 
     def ops_digest_snapshots(self) -> list[dict]:
         """Every stored ops-digest snapshot, in the order taken."""
         document = self._get_store().get_document(DIGEST_SNAPSHOTS_KEY) or {}
         return list(document.get("snapshots") or [])
+
+    def ops_digest_snapshot_prunes(self) -> list[dict]:
+        """Every prune recorded on the digest-snapshot document,
+        in the order they happened."""
+        document = self._get_store().get_document(DIGEST_SNAPSHOTS_KEY) or {}
+        return list(document.get("prunes") or [])
+
+    def prune_ops_digest_snapshots(self, actor: str, keep: int) -> dict:
+        """Prune the kept digest snapshots to the newest ``keep``
+        (see :meth:`_prune_kept_snapshots` — the one retention
+        discipline for both kept-report documents)."""
+        return self._prune_kept_snapshots(DIGEST_SNAPSHOTS_KEY, actor, keep)
+
+    def _prune_kept_snapshots(self, key: str, actor: str, keep: int) -> dict:
+        """Keep-last-N retention for a kept-snapshot document.
+
+        Snapshots accumulate one per operator ask, unboundedly;
+        this is the only way one ever leaves. The prune is
+        recorded on the document itself (who, when, what was
+        asked, what left, the surviving range) before the
+        survivors are written back, so a gap in a trend explains
+        itself. A prune that would remove nothing writes nothing
+        and records nothing — it just reports. ``keep`` below 1
+        is refused by the shared computation
+        (``insights.prune_snapshot_list``).
+        """
+        from .insights import snapshot_prune_entry
+
+        store = self._get_store()
+        document = store.get_document(key) or {}
+        snapshots = list(document.get("snapshots") or [])
+        kept, pruned = prune_snapshot_list(snapshots, keep)
+        entry = None
+        if pruned:
+            entry = snapshot_prune_entry(
+                actor=actor,
+                keep=keep,
+                pruned=pruned,
+                kept=kept,
+                pruned_at=datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                ),
+            )
+            document["snapshots"] = kept
+            document["prunes"] = list(document.get("prunes") or []) + [entry]
+            store.save_document(key, document)
+        return {
+            "kept": len(kept),
+            "pruned_count": len(pruned),
+            "pruned_ids": [s.get("snapshot_id", "") for s in pruned],
+            "surviving_first": kept[0].get("snapshot_id", "") if kept else "",
+            "surviving_last": kept[-1].get("snapshot_id", "") if kept else "",
+            "prune": entry,
+        }
 
     def ops_digest_trend(self) -> dict:
         """Movement across the stored digest snapshots
@@ -1563,13 +1623,12 @@ class SubmissionService:
         snapshots = list(document.get("snapshots") or [])
         snapshot = build_calibration_snapshot(
             self.sla_budget_calibration(),
-            f"cal-{len(snapshots) + 1:04d}",
+            next_snapshot_id(snapshots, "cal-"),
             actor,
         )
         snapshots.append(snapshot)
-        store.save_document(
-            CALIBRATION_SNAPSHOTS_KEY, {"snapshots": snapshots}
-        )
+        document["snapshots"] = snapshots
+        store.save_document(CALIBRATION_SNAPSHOTS_KEY, document)
         return snapshot
 
     def sla_calibration_snapshots(self) -> list[dict]:
@@ -1579,6 +1638,25 @@ class SubmissionService:
 
         document = self._get_store().get_document(CALIBRATION_SNAPSHOTS_KEY) or {}
         return list(document.get("snapshots") or [])
+
+    def sla_calibration_snapshot_prunes(self) -> list[dict]:
+        """Every prune recorded on the calibration-snapshot
+        document, in the order they happened."""
+        from .proposals import CALIBRATION_SNAPSHOTS_KEY
+
+        document = self._get_store().get_document(CALIBRATION_SNAPSHOTS_KEY) or {}
+        return list(document.get("prunes") or [])
+
+    def prune_sla_calibration_snapshots(self, actor: str, keep: int) -> dict:
+        """Prune the kept calibration snapshots to the newest
+        ``keep`` — the same retention discipline as the digest
+        snapshots (see :meth:`_prune_kept_snapshots`), on the
+        document a budget debate cites."""
+        from .proposals import CALIBRATION_SNAPSHOTS_KEY
+
+        return self._prune_kept_snapshots(
+            CALIBRATION_SNAPSHOTS_KEY, actor, keep
+        )
 
     def sla_calibration_snapshot_diff(self) -> dict:
         """The proposal-ready movement between the two latest
