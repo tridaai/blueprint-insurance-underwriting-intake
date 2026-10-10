@@ -2054,10 +2054,16 @@ class SubmissionService:
         document's prune record rides along, so a broker-count
         step down that a prune explains is annotated as
         retention rather than left to read as a drafting
-        collapse (see ``insights._prune_step_annotations``)."""
+        collapse (see ``insights._prune_step_annotations``).
+        The proposals document's prune record rides along too,
+        so a re-ask-count step a proposals prune explains is
+        annotated as retention rather than left to read as the
+        prune-then-re-ask loop converging (see
+        ``insights._proposal_prune_step_annotations``)."""
         return digest_trend(
             self.ops_digest_snapshots(),
             drafting_prunes=self.broker_quality_drafting_prunes(),
+            proposal_prunes=self.calibration_proposal_prunes(),
         )
 
     def effective_sla_budgets(self) -> dict:

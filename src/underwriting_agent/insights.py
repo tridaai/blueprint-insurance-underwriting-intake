@@ -3528,9 +3528,111 @@ def _prune_step_annotations(
     return annotations
 
 
+#: The digest counts a proposals prune can legitimately move
+#: *backwards*: the re-ask counts are computed from the
+#: proposals document as it stands, so pruning decided re-asks
+#: out of it lowers them without the loop converging. See
+#: :func:`_proposal_prune_step_annotations`.
+_REASK_COUNT_KEYS = (
+    "proposal_reasks_decided",
+    "proposal_reasks_reversed",
+    "proposal_reasks_repeated",
+)
+
+
+def _proposal_prune_step_annotations(
+    series: list[dict], proposal_prunes: list[dict]
+) -> list[dict]:
+    """Annotate the trend's re-ask-count steps a proposals
+    prune explains.
+
+    The re-ask counts are cumulative over the proposals
+    document as it stands *now*; a kept snapshot froze the
+    counts of its moment. When retention prunes decided
+    proposals between two snapshots — and some of what left
+    carried a ``previously_decided`` marker (the prune entry
+    counts them, ``pruned_reasks``) — the later snapshot's
+    re-ask counts step *down*, and an unannotated trend reads
+    that step as the prune-then-re-ask loop converging: fewer
+    re-asks decided this week than last. The broker
+    annotation's honesty, one document over (see
+    :func:`_prune_step_annotations`): for each step down in a
+    re-ask count, the prunes inside the step's window that
+    removed markers are named (who, when, how many decided
+    proposals left, how many of them re-asks), so the reader
+    can tell retention from convergence. A prune that removed
+    no markers explains nothing here; a step down no prune
+    explains is left unannotated — it is a real movement, and
+    the trend says nothing to soften it. Prune entries written
+    before ``pruned_reasks`` was recorded read as zero markers
+    — the record did not keep the number, and the annotation
+    does not reconstruct it.
+    """
+    annotations: list[dict] = []
+    for before, after in zip(series, series[1:]):
+        window = [
+            entry
+            for entry in proposal_prunes
+            if before["taken_at"]
+            < (entry.get("pruned_at") or "")
+            <= after["taken_at"]
+            and entry.get("pruned_reasks", 0) > 0
+        ]
+        if not window:
+            continue
+        for key in _REASK_COUNT_KEYS:
+            change = after["counts"][key] - before["counts"][key]
+            if change >= 0:
+                continue
+            named = "; ".join(
+                f"a proposals prune on "
+                f"{(entry.get('pruned_at') or '')[:10]} by "
+                f"{entry.get('pruned_by', '')} removed "
+                f"{entry.get('pruned_count', 0)} decided "
+                f"proposal(s), {entry.get('pruned_reasks', 0)} "
+                "of them re-ask(s)"
+                for entry in window
+            )
+            annotations.append(
+                {
+                    "count": key,
+                    "from_snapshot": before["snapshot_id"],
+                    "to_snapshot": after["snapshot_id"],
+                    "change": change,
+                    "pruned_reasks": sum(
+                        entry.get("pruned_reasks", 0)
+                        for entry in window
+                    ),
+                    "prunes": [
+                        {
+                            "pruned_at": entry.get("pruned_at", ""),
+                            "pruned_by": entry.get("pruned_by", ""),
+                            "pruned_count": entry.get(
+                                "pruned_count", 0
+                            ),
+                            "pruned_reasks": entry.get(
+                                "pruned_reasks", 0
+                            ),
+                        }
+                        for entry in window
+                    ],
+                    "note": (
+                        f"{_COUNT_LABELS[key]} fell "
+                        f"{abs(change)} between "
+                        f"{before['snapshot_id']} and "
+                        f"{after['snapshot_id']} — {named} inside "
+                        "that window, so the step is retention, "
+                        "not the loop converging."
+                    ),
+                }
+            )
+    return annotations
+
+
 def digest_trend(
     snapshots: list[dict],
     drafting_prunes: list[dict] | None = None,
+    proposal_prunes: list[dict] | None = None,
 ) -> dict:
     """Movement across the stored digest snapshots.
 
@@ -3550,7 +3652,12 @@ def digest_trend(
     step's window explains (see :func:`_prune_step_annotations`)
     — a count stepping down because retention removed its
     history is annotated as exactly that, never left to read as
-    drafting quality falling.
+    drafting quality falling. The proposals document's prune
+    record (``proposal_prunes``) annotates the same list for
+    the re-ask counts (see
+    :func:`_proposal_prune_step_annotations`): a step down
+    because retention removed the markers is retention, not
+    the prune-then-re-ask loop converging.
     """
     series = [
         {
@@ -3608,6 +3715,9 @@ def digest_trend(
         "movement": movement,
         "annotations": _prune_step_annotations(
             series, list(drafting_prunes or [])
+        )
+        + _proposal_prune_step_annotations(
+            series, list(proposal_prunes or [])
         ),
     }
 

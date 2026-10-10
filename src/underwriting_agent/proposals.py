@@ -334,7 +334,17 @@ def proposal_prune_entry(
     re-ask it enables to name what it is re-asking (see
     :func:`pruned_rejection_for`). Accepted and withdrawn
     history needs no such afterlife: nothing downstream reads
-    it to decide what may be asked."""
+    it to decide what may be asked.
+
+    And it counts the pruned **re-asks** (``pruned_reasks``:
+    how many of the proposals that left carried a
+    ``previously_decided`` marker). The re-ask counts ride the
+    digest snapshots and are computed from this document as it
+    stands, so a prune that removes decided re-asks steps
+    those counts down — the digest trend annotates the step
+    from this number (see
+    ``insights._proposal_prune_step_annotations``), the way
+    the drafting-events prune explains a broker-count step."""
     by_status: dict[str, int] = {}
     for proposal in pruned:
         status = proposal.get("status", "")
@@ -347,6 +357,9 @@ def proposal_prune_entry(
         "pruned_count": len(pruned),
         "pruned_ids": [p.get("proposal_id", "") for p in pruned],
         "pruned_by_status": dict(sorted(by_status.items())),
+        "pruned_reasks": sum(
+            1 for p in pruned if p.get("previously_decided")
+        ),
         "pruned_rejections": [
             {
                 "proposal_id": p.get("proposal_id", ""),
