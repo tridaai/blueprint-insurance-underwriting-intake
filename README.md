@@ -449,7 +449,15 @@ against the refusal the marker carries: accepted
 (`repeated_first_decision`), or withdrawn, split by the scan
 that drafted them — the population reading of the loop the
 marker makes visible one draft at a time: whether
-prune-then-re-ask converges or circles. And the still-waiting
+prune-then-re-ask converges or circles. The family's headline
+counts ride the **digest snapshots** now, too —
+`proposal_reasks_decided`, `proposal_reasks_reversed`,
+`proposal_reasks_repeated` on the digest's count keys, the
+full aggregate along in the digest body — on the advisory
+discipline (never a second helping of `total_attention`: a
+re-ask decided is governance history, not work outstanding),
+so the kept history trends the loop's convergence instead of
+the point-in-time read being its only witness. And the still-waiting
 surface has a **second rung**: at twice the window a still-
 waiting case is flagged `escalated` in the digest, counted in
 `acknowledged_escalated` (a subset of still-waiting — never a
@@ -490,7 +498,13 @@ further window by default, `OPS_DIGEST_UNANNOUNCED_GAP_DAYS`)
 are counted as `stale_unannounced_escalations` on the same
 subset discipline: a sweep that has not run yet today and a
 sweep that stopped a month ago are the same count and
-different facts, and now the digest says which.
+different facts, and now the digest says which. The queue's
+escalated list is **ordered by that telling**, too: the
+unannounced lead, stalest silence first — a sweep owes those
+cases a voice — then the exhausted, then the announced, then
+the delivered, whose cases wait on a decision rather than a
+telling; inside a band the oldest acknowledgement still
+leads, the order the list has always read.
 
 The escalated follow-through notes have a **worked state** of
 their own (`POST /submissions/{id}/status-note/worked`, console
@@ -710,9 +724,13 @@ row): a debate that renames its milestone moves the address
 on the kept snapshot itself — the move recorded in the
 snapshot's `label_history` (from, to, who, when) — instead of
 re-keeping the report and forking the citation. The old
-label is freed at once (a by-label read of it answers 404,
-and a later keep may take it), the evidence is untouched,
-and the new label answers to every keep's rules: `current`
+label is freed at once — a later keep may take it — and a
+by-label read of it is **repaired** through the rename
+history: it answers with a successor read naming the cited
+label, the label the report wears now, and the chain of
+renames between, a redirect in data that never pretends the
+old address still names the report. The evidence is
+untouched, and the new label answers to every keep's rules: `current`
 refused as reserved, a label another kept report carries
 refused naming the holder, an empty or unchanged target
 refused as no rename at all. The rename is read back where
@@ -727,7 +745,17 @@ And every rename across the kept reports is one read —
 calibration panel renders it under the kept reports): the
 addressing archaeology of the whole document in the order
 the renames happened, each entry naming the report it moved
-on and the label that report wears now.
+on and the label that report wears now. A prune no longer
+takes a report's renames with it, either: the calibration
+prune entry keeps each pruned report's `label_history` whole
+(`pruned_renames`, named in the prune preview before the
+act), and the log reads those renames back behind the kept
+reports' own as a named stratum — each marked `pruned`, the
+prune that removed its report named, the entry's label
+reading the one the report wore when it left — so the
+addressing history survives the report, and a citation by a
+pruned report's old label 404s with its fate on the record
+rather than into silence.
 
 Two disciplines keep the proposals honest over time. A draft's
 evidence is a snapshot, so drafts **expire** (`PROPOSAL_EXPIRY_DAYS`,

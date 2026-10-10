@@ -955,6 +955,38 @@ numbers on the submission and its loss records. Line aliases fold too
   reading — and age the unannounced with the digest's own
   formula, so the morning read and the worklist cannot
   disagree about whether an escalation landed.
+- **Round 23 gives the round-22 readings their memory and
+  their order.** (1) The re-ask family was a point-in-time
+  /metrics read; its headline counts (decided, reversed,
+  repeated) now ride `DIGEST_COUNT_KEYS` and the full
+  aggregate rides the digest body as `proposal_reasks`, on the
+  advisory discipline the drafting families set — governance
+  history, never a second helping of `total_attention` — so
+  whether prune-then-re-ask converges is a trend the kept
+  snapshots answer, not an impression the current document
+  leaves. (2) A prune no longer takes a report's renames with
+  it: the shared snapshot prune entry keeps each pruned
+  report's `label_history` whole (`pruned_renames`, the
+  proposals prune's pruned-rejections discipline applied to
+  addressing history), the preview names them before the act,
+  and the rename log reads them back as a named stratum —
+  marked pruned, the prune named — rather than a silently
+  blended record. (3) A by-label read that would 404 is
+  repaired through the rename history: it follows the chain
+  (`calibration_snapshot_successor`, per report, the name's
+  most recent fate winning when a freed label was retaken)
+  and answers with a successor read naming the rename — a
+  redirect in data, distinctly shaped from the report itself;
+  the 404 survives for names that never named anything and
+  for reports a prune removed, and the diff's resolve step
+  deliberately does *not* repair, so a comparison is never
+  silently re-pointed. (4) The queue's escalated list is
+  ordered by the telling it carries: unannounced first,
+  stalest silence leading, then exhausted, then announced,
+  then delivered — the order the work is owed (a telling, a
+  re-telling by hand, patience, a decision); inside a band
+  the oldest acknowledgement still leads, so round 16's pin
+  survives as the unannounced band's own rule.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 
