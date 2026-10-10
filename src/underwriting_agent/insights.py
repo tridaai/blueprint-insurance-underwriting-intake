@@ -24,6 +24,7 @@ import io
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
+from .config import env_float, env_int
 from .facts import _parse_date
 from .store import ApprovalRecord, history_entry
 
@@ -611,8 +612,19 @@ def _parse_timestamp(raw: str) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def _age_bucket(age_days: int) -> str:
+    for label, low, high in QUEUE_AGE_BUCKETS:
+        if age_days >= low and (high is None or age_days <= high):
+            return label
+    return QUEUE_AGE_BUCKETS[-1][0]
+
+
 def dispatch_overview(
-    records: list[ApprovalRecord], now: datetime | None = None
+    records: list[ApprovalRecord],
+    now: datetime | None = None,
+    *,
+    stuck_age_hours: float | None = None,
+    attempt_budget: int | None = None,
 ) -> dict:
     """The dispatch operations view over every record's ledger.
 
@@ -624,8 +636,23 @@ def dispatch_overview(
     schedule (last attempt + the next attempt's backoff <= now).
     Retries stay operator-triggered; "due" is the schedule's word,
     computed here, not a timer the service runs.
+
+    Failures also **age**: a failure's age runs from its *first*
+    failed attempt, bucketed on the same day buckets as the queue
+    aging view, and a failure is flagged **stuck** when it is older
+    than ``DISPATCH_STUCK_AGE_HOURS`` (default 24) and still has
+    attempts left under ``DISPATCH_ATTEMPT_BUDGET`` (default 8) —
+    old enough to be an incident, young enough in attempts that
+    another retry is still the right move. A failure past its
+    budget is exhausted, not stuck: it needs a decision (fix the
+    receiver, reroute, write it off), not another attempt, and the
+    view says which is which.
     """
     now = now or datetime.now(timezone.utc)
+    if stuck_age_hours is None:
+        stuck_age_hours = env_float("DISPATCH_STUCK_AGE_HOURS", 24.0)
+    if attempt_budget is None:
+        attempt_budget = env_int("DISPATCH_ATTEMPT_BUDGET", 8)
     attempts_total = 0
     sent_records = 0
     failures: list[dict] = []
@@ -644,20 +671,40 @@ def dispatch_overview(
         entry = history_entry(record)
         last = attempts[-1]
         last_at = _parse_timestamp(last.get("attempted_at") or "")
+        first_at = _parse_timestamp(attempts[0].get("attempted_at") or "")
         backoff = _next_backoff_seconds(len(attempts))
         due_at = last_at + timedelta(seconds=backoff) if last_at else None
+        if first_at is not None:
+            age_seconds = max(0.0, (now - first_at).total_seconds())
+            age_days = int(age_seconds // 86400)
+            age_bucket: str | None = _age_bucket(age_days)
+        else:
+            age_seconds = None
+            age_days = None
+            age_bucket = None
+        attempts_remaining = max(0, attempt_budget - len(attempts))
+        stuck = bool(
+            age_seconds is not None
+            and age_seconds >= stuck_age_hours * 3600
+            and attempts_remaining > 0
+        )
         failures.append(
             {
                 "submission_id": record.result.submission_id,
                 "insured_name": entry["insured_name"],
                 "broker_name": entry["broker_name"],
                 "attempts": len(attempts),
+                "first_attempt_at": attempts[0].get("attempted_at") or "",
                 "last_attempt_at": last.get("attempted_at") or "",
                 "last_http_status": last.get("http_status"),
                 "last_error": last.get("error"),
                 "next_attempt": len(attempts) + 1,
                 "next_backoff_seconds": backoff,
                 "retry_due": due_at is None or now >= due_at,
+                "failure_age_days": age_days,
+                "failure_age_bucket": age_bucket,
+                "attempts_remaining": attempts_remaining,
+                "stuck": stuck,
                 "_sort": last_at or datetime.max.replace(tzinfo=timezone.utc),
             }
         )
@@ -667,6 +714,18 @@ def dispatch_overview(
     failures.sort(key=lambda f: (f["_sort"], f["submission_id"]))
     for failure in failures:
         failure.pop("_sort", None)
+    bucket_counts: dict[str, list[str]] = {
+        label: [] for label, _, _ in QUEUE_AGE_BUCKETS
+    }
+    unknown_age: list[str] = []
+    for failure in failures:
+        if failure["failure_age_bucket"] is None:
+            unknown_age.append(failure["submission_id"])
+        else:
+            bucket_counts[failure["failure_age_bucket"]].append(
+                failure["submission_id"]
+            )
+    stuck_failures = [f for f in failures if f["stuck"]]
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "attempts_total": attempts_total,
@@ -676,4 +735,17 @@ def dispatch_overview(
         "due_retries": [f for f in failures if f["retry_due"]],
         "failures": failures,
         "oldest_failure_at": oldest_failure_at,
+        "failure_age_buckets": [
+            {
+                "bucket": label,
+                "count": len(bucket_counts[label]),
+                "submission_ids": bucket_counts[label],
+            }
+            for label, _, _ in QUEUE_AGE_BUCKETS
+        ],
+        "unknown_failure_age": unknown_age,
+        "stuck_count": len(stuck_failures),
+        "stuck_failures": stuck_failures,
+        "stuck_age_hours": stuck_age_hours,
+        "attempt_budget": attempt_budget,
     }

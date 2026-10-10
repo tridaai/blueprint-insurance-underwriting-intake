@@ -248,10 +248,10 @@ async function loadDispatch() {
       $('dispatch').innerHTML = '<span class="empty">No webhook dispatches yet — a dispatch happens on approval when ACTION_WEBHOOK_URL is configured.</span>';
       return;
     }
-    let html = `<p class="note">${esc(d.attempts_total)} attempt(s) across ${esc(d.records_with_attempts)} record(s) · ${esc(d.sent_records)} delivered · ${esc(d.failed_records)} failing${d.oldest_failure_at ? ' · oldest failure ' + esc(d.oldest_failure_at) : ''}</p>`;
+    let html = `<p class="note">${esc(d.attempts_total)} attempt(s) across ${esc(d.records_with_attempts)} record(s) · ${esc(d.sent_records)} delivered · ${esc(d.failed_records)} failing${d.oldest_failure_at ? ' · oldest failure ' + esc(d.oldest_failure_at) : ''}${d.stuck_count ? ` · ${esc(d.stuck_count)} stuck (failing over ${esc(d.stuck_age_hours)}h with retries left)` : ''}</p>`;
     if (d.failures && d.failures.length) {
       html += `<table><thead><tr><th>Submission</th><th>Attempts</th><th>Last error</th><th>Retry</th><th></th></tr></thead><tbody>
-      ${d.failures.map(f => `<tr><td>${esc(f.submission_id)}<br><span class="note">${esc(f.insured_name)}</span></td><td>${esc(f.attempts)}</td><td>${esc(f.last_http_status ? 'HTTP ' + f.last_http_status : f.last_error || '—')}</td><td>${f.retry_due ? pill('due', 'warn') : `<span class="note">in ${esc(f.next_backoff_seconds)}s backoff</span>`}</td><td><button data-retry="${esc(f.submission_id)}">Retry</button></td></tr>`).join('')}
+      ${d.failures.map(f => `<tr><td>${esc(f.submission_id)}<br><span class="note">${esc(f.insured_name)}${f.failure_age_days != null ? ` · failing ${esc(f.failure_age_days)}d (${esc(f.failure_age_bucket)})` : ''}</span></td><td>${esc(f.attempts)}</td><td>${esc(f.last_http_status ? 'HTTP ' + f.last_http_status : f.last_error || '—')}</td><td>${f.stuck ? pill('stuck', 'bad') + ' ' : ''}${f.retry_due ? pill('due', 'warn') : `<span class="note">in ${esc(f.next_backoff_seconds)}s backoff</span>`}</td><td><button data-retry="${esc(f.submission_id)}">Retry</button></td></tr>`).join('')}
       </tbody></table>`;
     }
     $('dispatch').innerHTML = html;

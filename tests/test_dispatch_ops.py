@@ -129,6 +129,79 @@ def test_overview_of_an_empty_store_is_all_zeros():
 
 
 # ---------------------------------------------------------------------------
+# Failure aging: buckets by first failure, and the stuck flag
+# ---------------------------------------------------------------------------
+
+
+def test_failure_age_runs_from_the_first_failed_attempt():
+    attempts = [
+        attempt(NOW - timedelta(days=10)),
+        attempt(NOW - timedelta(hours=1)),
+    ]
+    overview = dispatch_overview(
+        [record("SUB-AGED", "Aged Insured", attempts, "failed")], now=NOW
+    )
+    row = overview["failures"][0]
+    # Ten days since the delivery started failing — not one hour
+    # since the latest attempt.
+    assert row["first_attempt_at"] == attempts[0]["attempted_at"]
+    assert row["failure_age_days"] == 10
+    assert row["failure_age_bucket"] == "8-14 days"
+    buckets = {b["bucket"]: b for b in overview["failure_age_buckets"]}
+    assert buckets["8-14 days"]["submission_ids"] == ["SUB-AGED"]
+    assert buckets["0-1 days"]["count"] == 0
+
+
+def test_a_failure_older_than_the_threshold_with_budget_left_is_stuck():
+    old = record(
+        "SUB-STUCK", "Stuck Insured",
+        [attempt(NOW - timedelta(days=3))], "failed",
+    )
+    overview = dispatch_overview([old], now=NOW)
+    row = overview["failures"][0]
+    assert row["attempts_remaining"] == 7  # default budget 8, one attempt made
+    assert row["stuck"] is True
+    assert overview["stuck_count"] == 1
+    assert [f["submission_id"] for f in overview["stuck_failures"]] == ["SUB-STUCK"]
+
+
+def test_a_recent_failure_is_not_stuck_however_due():
+    fresh = record(
+        "SUB-FRESH", "Fresh Insured",
+        [attempt(NOW - timedelta(hours=2))], "failed",
+    )
+    overview = dispatch_overview([fresh], now=NOW)
+    assert overview["failures"][0]["stuck"] is False
+    assert overview["stuck_count"] == 0
+
+
+def test_a_failure_past_its_attempt_budget_is_exhausted_not_stuck():
+    attempts = [attempt(NOW - timedelta(days=5)) for _ in range(8)]
+    overview = dispatch_overview(
+        [record("SUB-SPENT", "Spent Insured", attempts, "failed")], now=NOW
+    )
+    row = overview["failures"][0]
+    assert row["attempts_remaining"] == 0
+    assert row["stuck"] is False  # old, but it needs a decision, not a retry
+    assert overview["stuck_count"] == 0
+
+
+def test_stuck_threshold_and_budget_are_configurable():
+    rec = record(
+        "SUB-CFG", "Configured Insured",
+        [attempt(NOW - timedelta(hours=30))], "failed",
+    )
+    lenient = dispatch_overview([rec], now=NOW, stuck_age_hours=48.0)
+    assert lenient["failures"][0]["stuck"] is False
+    strict = dispatch_overview([rec], now=NOW, stuck_age_hours=12.0, attempt_budget=1)
+    assert strict["failures"][0]["attempts_remaining"] == 0
+    assert strict["failures"][0]["stuck"] is False
+    strict = dispatch_overview([rec], now=NOW, stuck_age_hours=12.0, attempt_budget=4)
+    assert strict["failures"][0]["stuck"] is True
+    assert strict["stuck_age_hours"] == 12.0 and strict["attempt_budget"] == 4
+
+
+# ---------------------------------------------------------------------------
 # Service + API: bulk retry works the failure list
 # ---------------------------------------------------------------------------
 
