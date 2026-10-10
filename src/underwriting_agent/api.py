@@ -557,11 +557,14 @@ def metrics() -> dict:
 @app.get("/ops/digest", dependencies=_AUTH)
 def ops_digest_view() -> dict:
     """The operator digest: one composed read over the surfaces
-    that rot quietly — stuck approval-webhook dispatches, queue
-    cases past their SLA budget, status-note follow-through still
-    outstanding (aged ones escalated), and calibration proposals
-    nearing or past their evidence expiry. Computed at read time
-    and never sent; reading it changes nothing."""
+    that rot quietly — stuck approval-webhook dispatches,
+    exhausted SLA-breach notices, queue cases past their SLA
+    budget, status-note follow-through still outstanding (aged
+    ones escalated), and calibration proposals nearing or past
+    their evidence expiry. Computed at read time and never sent;
+    reading it changes nothing. When a snapshot has been kept,
+    the digest carries a ``movement`` block against the latest
+    snapshot and the headline speaks it."""
     return service.ops_digest()
 
 

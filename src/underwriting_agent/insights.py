@@ -1767,6 +1767,7 @@ def ops_digest(
     sla_budgets_map: dict[str, int] | None = None,
     follow_escalation_days: int | None = None,
     proposal_warning_days: int | None = None,
+    latest_snapshot: dict | None = None,
 ) -> dict:
     """One operator digest over the surfaces that rot quietly.
 
@@ -1791,6 +1792,15 @@ def ops_digest(
     ``headline`` an operator reads first and the section entries
     behind it. Pure projection — reading it writes nothing,
     retries nothing, and refreshes nothing.
+
+    With ``latest_snapshot`` — the newest stored digest snapshot
+    (see :func:`build_digest_snapshot`) — the digest is also
+    **trend-aware**: a ``movement`` block reads the live counts
+    and section membership against the snapshot's (per-count
+    change and direction, per-section entered/cleared ids), and
+    the headline gains one sentence speaking that movement.
+    Without a snapshot the block is ``None`` — movement is
+    absent, never invented.
     """
     now = now or datetime.now(timezone.utc)
     if proposal_warning_days is None:
@@ -1895,10 +1905,7 @@ def ops_digest(
         "dispatches, no exhausted breach notices, no breached "
         "cases, no escalated notes, no proposals nearing expiry."
     )
-    return {
-        "generated_at": now.isoformat(timespec="seconds"),
-        "headline": headline,
-        "counts": counts,
+    sections = {
         "stuck_dispatches": dispatch["stuck_failures"],
         "exhausted_breach_notices": dispatch["exhausted_breach_notices"],
         "breached_queue": queue["breaches"],
@@ -1906,7 +1913,24 @@ def ops_digest(
         "follow_through_escalated": follow["escalated"],
         "proposals_expiring_soon": expiring_soon,
         "proposals_expired": expired,
+    }
+    # Trend-aware: when a snapshot exists, the digest reads
+    # itself against it — the movement block carries the deltas
+    # as data and the headline speaks them as one sentence, so
+    # the first screen an operator opens already says what got
+    # worse. No snapshot, no movement: the block is None rather
+    # than a fabricated baseline.
+    movement = None
+    if latest_snapshot is not None:
+        movement = _digest_movement(counts, sections, latest_snapshot)
+        headline = f"{headline} {_movement_sentence(movement)}"
+    return {
+        "generated_at": now.isoformat(timespec="seconds"),
+        "headline": headline,
+        "counts": counts,
+        **sections,
         "proposal_warning_days": proposal_warning_days,
+        "movement": movement,
     }
 
 
@@ -1945,6 +1969,92 @@ _DIGEST_SECTION_IDS = {
     "proposals_expiring_soon": "proposal_id",
     "proposals_expired": "proposal_id",
 }
+
+
+#: Headline-count labels for the digest's own prose — the
+#: movement sentence the trend-aware digest speaks.
+_COUNT_LABELS = {
+    "stuck_dispatches": "stuck dispatches",
+    "exhausted_breach_notices": "exhausted breach notices",
+    "breached_queue": "breached queue cases",
+    "follow_through_outstanding": "outstanding follow-through notes",
+    "follow_through_escalated": "escalated follow-through notes",
+    "proposals_expiring_soon": "proposals nearing expiry",
+    "proposals_expired": "expired proposals",
+    "total_attention": "total attention",
+}
+
+
+def _digest_movement(
+    counts: dict, sections: dict, snapshot: dict
+) -> dict:
+    """A live digest read against the latest stored snapshot.
+
+    Per headline count: the snapshot's value, the current value,
+    the change, and its direction. Per section: which ids
+    **entered** and which **cleared** since the snapshot — the
+    same entered/cleared discipline :func:`digest_trend` applies
+    between two snapshots, here between a snapshot and now. A
+    snapshot taken before a count or section existed reads as
+    zero/empty for it — absence in the snapshot is a fact about
+    the snapshot, not something to invent around.
+    """
+    snap_counts = snapshot.get("counts") or {}
+    count_rows: dict[str, dict] = {}
+    for key in DIGEST_COUNT_KEYS:
+        before = snap_counts.get(key, 0)
+        current = counts.get(key, 0)
+        change = current - before
+        count_rows[key] = {
+            "snapshot": before,
+            "current": current,
+            "change": change,
+            "direction": (
+                "up" if change > 0 else "down" if change < 0 else "flat"
+            ),
+        }
+    snap_sections = snapshot.get("sections") or {}
+    section_rows: dict[str, dict] = {}
+    for section, id_field in _DIGEST_SECTION_IDS.items():
+        before_ids = set(snap_sections.get(section) or [])
+        current_ids = {
+            entry[id_field]
+            for entry in sections.get(section) or []
+            if entry.get(id_field)
+        }
+        section_rows[section] = {
+            "entered": sorted(current_ids - before_ids),
+            "cleared": sorted(before_ids - current_ids),
+        }
+    return {
+        "since_snapshot": snapshot.get("snapshot_id", ""),
+        "snapshot_taken_at": snapshot.get("taken_at", ""),
+        "snapshot_taken_by": snapshot.get("taken_by", ""),
+        "counts": count_rows,
+        "sections": section_rows,
+    }
+
+
+def _movement_sentence(movement: dict) -> str:
+    """The movement block as one line in the digest's own voice:
+    each headline count that moved, named and directed — or the
+    plain statement that nothing did."""
+    moved = [
+        f"{_COUNT_LABELS[key]} {row['direction']} "
+        f"{abs(row['change'])}"
+        for key, row in movement["counts"].items()
+        if row["change"]
+    ]
+    if not moved:
+        return (
+            f"Since {movement['since_snapshot']}: no movement in "
+            "the headline counts."
+        )
+    return (
+        f"Since {movement['since_snapshot']}: "
+        + ", ".join(moved)
+        + "."
+    )
 
 
 def build_digest_snapshot(

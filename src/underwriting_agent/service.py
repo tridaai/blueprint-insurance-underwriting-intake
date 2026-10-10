@@ -1354,15 +1354,21 @@ class SubmissionService:
 
     def ops_digest(self) -> dict:
         """The operator digest (``insights.ops_digest``): stuck
-        dispatches, breached queue cases, outstanding/escalated
-        follow-through, and calibration proposals nearing or past
-        expiry — one composed read over the store, measured
-        against the SLA budgets in force. Computed, never sent;
-        reading it changes nothing."""
+        dispatches, exhausted breach notices, breached queue
+        cases, outstanding/escalated follow-through, and
+        calibration proposals nearing or past expiry — one
+        composed read over the store, measured against the SLA
+        budgets in force. Computed, never sent; reading it
+        changes nothing. When a digest snapshot has been kept,
+        the digest is trend-aware: its ``movement`` block reads
+        the live counts against the latest snapshot's, and the
+        headline says what moved."""
+        snapshots = self.ops_digest_snapshots()
         return ops_digest(
             self._get_store().all_records(),
             self.calibration_proposals(),
             sla_budgets_map=self.effective_sla_budgets(),
+            latest_snapshot=snapshots[-1] if snapshots else None,
         )
 
     def snapshot_ops_digest(self, actor: str) -> dict:
