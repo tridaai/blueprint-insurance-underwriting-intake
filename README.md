@@ -160,6 +160,11 @@ retry schedule assigned it — and a failed dispatch can be retried
 (`POST /submissions/{id}/dispatch/retry`) instead of being a dead
 status string; the ledger is readable at
 `GET /submissions/{id}/dispatch` and counted in the audit export.
+And because guidelines change, the corpus is versioned
+(`GUIDELINES_VERSION`, stamped on every result) and
+**`GET /guidelines/change-impact`** re-runs rules-only triage over
+the awaiting queue to report which outcomes a corpus change would
+move — a report, never a rewrite; acting on it stays human.
 
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:

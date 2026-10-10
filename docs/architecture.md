@@ -381,6 +381,13 @@ numbers on the submission and its loss records. Line aliases fold too
    `facts.py` required elements, classes, limits, triggers. Add
    golden cases for every rule you change.
 2. **Your guidelines** — replace the corpus behind the retriever.
+   Bump `GUIDELINES_VERSION` when you do: results are stamped with
+   the version they triaged under, and `GET /guidelines/change-impact`
+   (service: `guideline_change_impact`, `retriage.py`) re-runs
+   rules-only triage over the awaiting queue to report which
+   outcomes the change would move. The report mutates nothing —
+   whether a moved submission is re-run or left to its underwriter
+   with the note is a human call.
 3. **Your intake adapter** — map your inbox/portal feed to
    `SubmissionInput`.
 4. **Your output route** — point `ACTION_WEBHOOK_URL` at your work

@@ -229,6 +229,15 @@ def list_guidelines() -> list[dict]:
     return GUIDELINES
 
 
+@app.get("/guidelines/change-impact", dependencies=_AUTH)
+def guidelines_change_impact() -> dict:
+    """Guideline change-impact report: rules-only re-triage over the
+    awaiting queue against the current corpus version — which
+    submissions' outcome or tier would move. Report only; nothing
+    stored is changed by reading it."""
+    return service.guideline_change_impact()
+
+
 @app.get("/samples", dependencies=_AUTH)
 def list_samples() -> list[dict]:
     return load_sample_submissions()

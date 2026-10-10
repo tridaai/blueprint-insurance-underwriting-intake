@@ -57,6 +57,7 @@ from .events import NullSink, RunEvent
 from .extractor import extract_documents, extraction_discrepancies
 from .facts import compute_facts
 from .guardrails import validate_drafts
+from .guidelines_data import GUIDELINES_VERSION
 from .model_backends import DraftContext, estimate_cost_usd
 from .options import build_options
 from .resilience import ResilientBackend
@@ -962,6 +963,7 @@ def run_submission(
         status="awaiting_underwriter",
         insured_name=submission.insured_name,
         line_of_business=submission.line_of_business,
+        guidelines_version=GUIDELINES_VERSION,
         submission_diff=(
             SubmissionDiff.model_validate(state["submission_diff"])
             if state.get("submission_diff")

@@ -662,6 +662,19 @@ class SubmissionService:
         outcome mix, model usage, cost, and latency."""
         return compute_metrics(self._get_store().all_records())
 
+    def guideline_change_impact(self, classifier=None) -> dict:
+        """Which awaiting submissions would re-triage differently
+        under the current guidelines/rules (``retriage.py``).
+
+        Report only — the store is read, never written. ``classifier``
+        lets a caller (or a test) simulate a changed rule set.
+        """
+        from .retriage import guideline_change_impact
+
+        return guideline_change_impact(
+            self._get_store().all_records(), classifier=classifier
+        )
+
     def audit_rows(self) -> list[dict]:
         """The audit trail: one flat row per stored submission,
         decisions and telemetry included."""

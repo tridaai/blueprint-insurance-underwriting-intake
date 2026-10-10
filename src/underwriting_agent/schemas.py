@@ -372,6 +372,11 @@ class AgentResult(BaseModel):
     status: str = "awaiting_underwriter"  # awaiting_underwriter | approved | rejected
     insured_name: str = ""
     line_of_business: str = ""
+    # The guideline corpus version this run triaged under (see
+    # guidelines_data.GUIDELINES_VERSION); the change-impact report
+    # groups awaiting submissions by it. Empty on results stored
+    # before corpus versioning.
+    guidelines_version: str = ""
     # Renewal diff vs this insured's previous stored submission
     # (None on a first submission — absence is not a change).
     submission_diff: Optional[SubmissionDiff] = None

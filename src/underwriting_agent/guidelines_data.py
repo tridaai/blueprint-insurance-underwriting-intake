@@ -11,6 +11,13 @@ To adapt the blueprint, replace this corpus with your own guidelines
 
 from __future__ import annotations
 
+# The corpus version. Bump it whenever guideline text, appetite, or
+# the triage rules that read this corpus change: every result is
+# stamped with the version it triaged under, and the change-impact
+# report (``retriage.py``) re-runs rules-only triage over the
+# awaiting queue to show which outcomes a corpus change would move.
+GUIDELINES_VERSION = "2026.10.1"
+
 GUIDELINES: list[dict] = [
     {
         "id": "UW-CYB-01",
