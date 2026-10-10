@@ -3252,7 +3252,9 @@ def digest_trend(snapshots: list[dict]) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Kept-snapshot retention — one discipline for both kept documents
+# Retention — one discipline for the kept documents: the two
+# snapshot documents, the broker drafting events, and (in
+# proposals.py) the proposals document's decided history
 # ---------------------------------------------------------------------------
 
 
@@ -3329,6 +3331,91 @@ def snapshot_prune_entry(
         "pruned_ids": [s.get("snapshot_id", "") for s in pruned],
         "surviving_first": kept[0].get("snapshot_id", "") if kept else "",
         "surviving_last": kept[-1].get("snapshot_id", "") if kept else "",
+    }
+
+
+def prune_drafting_event_list(
+    events: list[dict], keep: int
+) -> tuple[list[dict], list[dict]]:
+    """Split a drafting-event list for a keep-last-N prune:
+    (survivors, pruned), order preserved in both.
+
+    The snapshot retention discipline applied to the
+    broker-quality drafting events: one event lands per served
+    report, unboundedly, and the aggregate that reads them
+    needs history, not infinity. Pruning is the only way an
+    event ever leaves its document, and it is operator-called,
+    never a timer. ``keep`` below 1 is refused: the events are
+    the aggregate's only source, and emptying the document
+    would zero the broker drafting counts everywhere they are
+    read — snapshots included — with no record of why.
+    """
+    if keep < 1:
+        raise ValueError(
+            "keep must be at least 1 — a prune keeps the newest "
+            "drafting events; emptying the document would erase "
+            "the history the broker drafting counts are computed "
+            "from"
+        )
+    if len(events) <= keep:
+        return list(events), []
+    return list(events[-keep:]), list(events[:-keep])
+
+
+def drafting_event_prune_preview(events: list[dict], keep: int) -> dict:
+    """A drafting-event prune, dry-run: what it *would* do.
+
+    The snapshot preview's idiom over events, which carry no
+    ids: the plan is stated as the count that would leave and
+    the drafted-at range it spans, beside the range that would
+    survive — writing nothing and recording nothing, so the
+    preview and the prune that follows it on the same document
+    cannot disagree: both read the one split
+    (:func:`prune_drafting_event_list`, whose refusal of
+    ``keep`` below 1 applies here too).
+    """
+    kept, pruned = prune_drafting_event_list(events, keep)
+    return {
+        "event_count": len(events),
+        "keep": keep,
+        "would_change": bool(pruned),
+        "would_prune_count": len(pruned),
+        "would_prune_oldest": (
+            pruned[0].get("drafted_at", "") if pruned else ""
+        ),
+        "would_prune_newest": (
+            pruned[-1].get("drafted_at", "") if pruned else ""
+        ),
+        "surviving_count": len(kept),
+        "surviving_first": kept[0].get("drafted_at", "") if kept else "",
+        "surviving_last": kept[-1].get("drafted_at", "") if kept else "",
+    }
+
+
+def drafting_event_prune_entry(
+    *,
+    actor: str,
+    keep: int,
+    pruned: list[dict],
+    kept: list[dict],
+    pruned_at: str,
+) -> dict:
+    """The event prune's own record, kept on the document it
+    pruned: who pruned, when, what they asked to keep, how many
+    events left and the drafted-at range they spanned, and the
+    range that survived — so a step down in the broker drafting
+    counts is explained by the document itself: the counts are
+    computed from the events, and a prune is the one act that
+    legitimately moves them backwards."""
+    return {
+        "pruned_at": pruned_at,
+        "pruned_by": actor,
+        "requested_keep": keep,
+        "pruned_count": len(pruned),
+        "pruned_oldest": pruned[0].get("drafted_at", "") if pruned else "",
+        "pruned_newest": pruned[-1].get("drafted_at", "") if pruned else "",
+        "surviving_first": kept[0].get("drafted_at", "") if kept else "",
+        "surviving_last": kept[-1].get("drafted_at", "") if kept else "",
     }
 
 

@@ -1801,6 +1801,88 @@ class SubmissionService:
         )
         return list(document.get("events") or [])
 
+    def broker_quality_drafting_prunes(self) -> list[dict]:
+        """Every prune recorded on the drafting-events document,
+        in the order they happened."""
+        document = (
+            self._get_store().get_document(BROKER_QUALITY_DRAFTING_KEY)
+            or {}
+        )
+        return list(document.get("prunes") or [])
+
+    def prune_broker_quality_drafting_events(
+        self, actor: str, keep: int
+    ) -> dict:
+        """Prune the drafting events to the newest ``keep`` — the
+        snapshot documents' retention discipline on the one
+        document that grows per read rather than per ask. The
+        events are the broker drafting counts' only source, so
+        the prune is recorded on the document itself (who, when,
+        what was asked, how many left and the range they spanned,
+        what survived) before the survivors are written back: a
+        step down in the counts afterwards explains itself. A
+        prune that would remove nothing writes nothing and
+        records nothing — it just reports. ``keep`` below 1 is
+        refused by the shared computation
+        (``insights.prune_drafting_event_list``)."""
+        from .insights import (
+            drafting_event_prune_entry,
+            prune_drafting_event_list,
+        )
+
+        store = self._get_store()
+        document = store.get_document(BROKER_QUALITY_DRAFTING_KEY) or {}
+        events = list(document.get("events") or [])
+        kept, pruned = prune_drafting_event_list(events, keep)
+        entry = None
+        if pruned:
+            entry = drafting_event_prune_entry(
+                actor=actor,
+                keep=keep,
+                pruned=pruned,
+                kept=kept,
+                pruned_at=datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                ),
+            )
+            document["events"] = kept
+            document["prunes"] = list(document.get("prunes") or []) + [
+                entry
+            ]
+            store.save_document(BROKER_QUALITY_DRAFTING_KEY, document)
+        return {
+            "kept": len(kept),
+            "pruned_count": len(pruned),
+            "pruned_oldest": (
+                pruned[0].get("drafted_at", "") if pruned else ""
+            ),
+            "pruned_newest": (
+                pruned[-1].get("drafted_at", "") if pruned else ""
+            ),
+            "surviving_first": (
+                kept[0].get("drafted_at", "") if kept else ""
+            ),
+            "surviving_last": (
+                kept[-1].get("drafted_at", "") if kept else ""
+            ),
+            "prune": entry,
+        }
+
+    def preview_prune_broker_quality_drafting_events(
+        self, keep: int
+    ) -> dict:
+        """Preview a drafting-event prune (see
+        :meth:`prune_broker_quality_drafting_events`): how many
+        events a keep-last-N would remove and the drafted-at
+        ranges on both sides of the cut, before anything is
+        written — the document behind the drafting counts is
+        pruned against evidence, not memory."""
+        from .insights import drafting_event_prune_preview
+
+        return drafting_event_prune_preview(
+            self.broker_quality_drafting_events(), keep
+        )
+
     def metrics(self) -> dict:
         """Operational aggregates over the store: run/decision counts,
         outcome mix, the letter-advisory trend (borderline drafting

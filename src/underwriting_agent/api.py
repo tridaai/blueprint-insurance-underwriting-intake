@@ -909,6 +909,61 @@ def broker_quality(name: str) -> dict:
     return report
 
 
+@app.get("/reports/broker-quality/drafting-events", dependencies=_AUTH)
+def broker_quality_drafting_events() -> dict:
+    """Every recorded broker-quality drafting event, in the order
+    drafted, with the prunes recorded on the document. The events
+    are the broker drafting counts' only source — in /metrics and,
+    since round 20, in the digest snapshots — so the document
+    behind them is itself a read."""
+    return {
+        "events": service.broker_quality_drafting_events(),
+        "prunes": service.broker_quality_drafting_prunes(),
+    }
+
+
+@app.post(
+    "/reports/broker-quality/drafting-events/prune",
+    dependencies=_AUTH,
+)
+def prune_broker_quality_drafting_events(
+    request: SnapshotPruneRequest,
+) -> dict:
+    """Prune the drafting events to the newest ``keep``: the
+    snapshot documents' retention discipline on the document that
+    grows one event per served report. Operator-called and
+    recorded on the document itself (who, when, how many left,
+    the ranges on both sides of the cut). ``keep`` below 1 is
+    refused — the counts are computed from the events, and
+    emptying the document would zero them without a record."""
+    try:
+        return service.prune_broker_quality_drafting_events(
+            _decision_actor(request), request.keep
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post(
+    "/reports/broker-quality/drafting-events/prune/preview",
+    dependencies=_AUTH,
+)
+def preview_prune_broker_quality_drafting_events(
+    request: SnapshotPruneRequest,
+) -> dict:
+    """Preview the drafting-event prune: how many events a
+    keep-last-``keep`` would remove and the drafted-at ranges on
+    both sides of the cut — a dry run that writes nothing and
+    records nothing. ``keep`` below 1 is refused, exactly as the
+    prune refuses it."""
+    try:
+        return service.preview_prune_broker_quality_drafting_events(
+            request.keep
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.post("/submissions/analyze", response_model=AgentResult, dependencies=_AUTH)
 def analyze(submission: SubmissionInput) -> AgentResult:
     return service.analyze(submission)
