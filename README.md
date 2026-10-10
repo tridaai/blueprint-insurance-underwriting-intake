@@ -174,7 +174,20 @@ deliberately miss) into a drafting-quality trend: runs with
 advisories, the total, the per-run rate, the family mix, and how
 often the one steered redraft cleared them, so a model or prompt
 regression shows up as a number before it becomes guardrail
-failures — and **`/audit/export`** emits the full decision trail
+failures. The same endpoint carries the advisories' note-side
+twin, **`status_note_repairs`**: the drafted status note is
+held to the same families and earns the same one steered
+redraft, and its loop is now countable — notes drafted, notes
+repaired with the family mix they rewrote, drafts refused, and
+the refusal split (refused after a steered candidate still
+failed the gate, against refused outright on substance), with
+the steer success rate over every steer attempted. A refusal is
+recorded on the record even though the note is never stored: a
+refused draft means record prose the composition interpolated
+carried a forbidden phrasing, and until it was kept it
+evaporated into the raised error — a rising repair or refusal
+count is an intake-data-quality signal, not a footnote — and
+**`/audit/export`** emits the full decision trail
 as JSON or CSV. Decisions record **`decided_at`** alongside who
 decided and why — on the result, in the audit export, in the
 feedback entries, and in the webhook payload — and **`/queue`**
@@ -385,7 +398,19 @@ carrying the original snapshot), and an escalation ledger that
 spends its attempts joins the dispatch view's worklist in its
 own list beside the breach notices' — same surface, different
 event: the case *was* told about, and the escalation that said
-it is still waiting is the thing that never landed.
+it is still waiting is the thing that never landed. The digest
+now **reads that telling back**: every still-waiting entry
+carries its escalation-notice state (`delivered`, `announced`
+— fired, failing, retries left — `exhausted`, or
+`unannounced`), and the digest counts both failure shapes on
+the subset discipline (never a second helping of
+`total_attention`): `exhausted_escalation_notices`, whose
+entries join the digest as their own section — the case was
+told about and called on; the escalation saying so never
+landed, a different event from an exhausted breach notice,
+where nobody was told at all — and `unannounced_escalations`,
+the escalated cases no escalation check has ever fired for,
+so a sweep nobody ran is itself visible in the morning read.
 
 The escalated follow-through notes have a **worked state** of
 their own (`POST /submissions/{id}/status-note/worked`, console
@@ -403,13 +428,25 @@ aggregates** (`advisory_runs_with`, `advisory_repaired_runs` —
 the same aggregation `/metrics` reports), so a kept digest
 snapshot keeps them too and the trend reads **drafting
 quality** across the kept mornings beside the operations
-movement. A quality signal, not a worklist: the counts never
+movement. The note-side drafting quality rides the same counts
+(`status_note_repaired`, `status_note_refusals` — the full
+family along as `status_note_repairs`), so the kept history
+trends both drafts, not only the letter. A quality signal, not
+a worklist: the counts never
 enter `total_attention`. The counts likewise carry the
 **worked response** (`follow_through_worked`,
 `follow_through_quieted`): kept snapshots now trend whether
 touches keep pace with escalations — the response beside the
 problem — on the same discipline, effort never entering
-`total_attention` either.
+`total_attention` either. And the response is now **priced**:
+each touched note carries a response latency (the days from
+the moment it first escalated — drafted plus one window — to
+its first touch; a note answered only after re-escalating
+carries the whole wait), the digest aggregates it as
+`follow_through_response_latency` (notes measured, median /
+mean / max days), and the count of measured responses rides
+the snapshot counts as `follow_through_responses` — the pace
+beside the volume, on the same effort discipline.
 
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:
@@ -547,7 +584,16 @@ digest headline's register — *"Since 'pre-budget-change': the
 high tier's 3-day row became proposal-ready as the budget held
 at 3 days"* — entered and cleared rows named, with the budget
 context (held, or moved from–to) that decides whether the
-movement is evidence growing or a budget changing.
+movement is evidence growing or a budget changing. And the
+diff's newer side need not be a kept report at all:
+`to_label=current` diffs a kept report — the `from_label` one,
+or the latest kept — against the **live report** as it stands
+now, shaped in memory and cited as `current`, so "what moved
+since 'march'?" is answered without keeping a throwaway
+snapshot to diff against, and nothing is stored to answer it.
+`current` is reserved for that side: keeping a snapshot under
+it is refused, and naming it as the `from_label` is refused —
+the live report is the newest side there is.
 
 Two disciplines keep the proposals honest over time. A draft's
 evidence is a snapshot, so drafts **expire** (`PROPOSAL_EXPIRY_DAYS`,

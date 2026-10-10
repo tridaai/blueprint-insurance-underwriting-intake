@@ -778,6 +778,46 @@ numbers on the submission and its loss records. Line aliases fold too
   quieted; and effort, like drafting quality, trends beside
   `total_attention` without entering it — a count of work
   counts work outstanding.
+- **Round 18 reads the tellings back, prices the response, and
+  counts the note's drafting loop.** (1) The ops digest carries
+  each still-waiting case's escalation-notice state and counts
+  the second rung's two failure shapes on the subset
+  discipline: an exhausted escalation notice is a different
+  event from an exhausted breach notice (the case was told and
+  called on; the escalation is what never landed), so it joins
+  the digest in its own section rather than merging into the
+  breach list — the same separation round 16 kept in the
+  dispatch overview — and unannounced escalations count the
+  cases no sweep has ever fired for, because a digest that
+  only reads ledgers cannot notice the sweep nobody ran; the
+  cases were already counted once as still waiting, so neither
+  count enters `total_attention`. (2) Response latency is
+  measured from the escalation's own definition — drafted plus
+  one window — to the *first* touch, and a note answered only
+  after re-escalating carries the whole wait: a later touch
+  re-quiets, it does not re-answer. The count of measured
+  responses rides the snapshot counts; the median rides the
+  digest body beside them, the split the letter advisories
+  established (counts are what snapshots subtract; rates and
+  medians are statistics, and they live in the aggregate).
+  (3) A refused status-note draft is recorded on the record
+  before the refusal raises: the note is never stored, but the
+  refusal is a drafting-quality event — interpolated record
+  prose carried a forbidden phrasing — and a signal that
+  evaporates into an error cannot be trended. The repair
+  records the families it rewrote at draft time, in the
+  guardrail's own vocabulary, so the metrics family never
+  parses prose to count; repairs recorded before families were
+  kept count in the totals and not in the family mix, rather
+  than being recounted in a vocabulary they never carried.
+  (4) `current` is a reserved label, enforced at both writes
+  it could corrupt: it cannot be kept (a citation must name a
+  kept report, not a moving target) and it cannot be a diff's
+  older side (the live report is the newest side there is).
+  The live side is shaped by the same builder the keeps use,
+  so the diff reads it with no special case — and it is never
+  stored, because a report kept to answer one question is a
+  citation nobody made.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 
