@@ -14,7 +14,13 @@ routes it through their own system.
 from __future__ import annotations
 
 from .model_backends import DraftContext
-from .schemas import InformationRequest, SubmissionFacts, SubmissionInput
+from .schemas import (
+    InformationRequest,
+    LineAnalysis,
+    LineInformationRequest,
+    SubmissionFacts,
+    SubmissionInput,
+)
 
 # Broker-facing wording for each computed missing element.
 _ELEMENT_PHRASES = {
@@ -104,3 +110,73 @@ def build_information_request(
         if llm_message:
             message = llm_message
     return InformationRequest(needed=True, missing_items=items, message=message)
+
+
+def bundle_template_message(
+    submission: SubmissionInput, line_requests: list[LineInformationRequest]
+) -> str:
+    """The bundle request, sectioned per line: each gapped line
+    gets its own ask, lines with nothing missing are not listed —
+    the broker is never sent chasing one line's file for another
+    line's gap."""
+    lines = [
+        f"Re: submission {submission.submission_id} — {submission.insured_name} "
+        "(multi-line bundle)",
+        "",
+        "Thank you for the submission. Before it can be assessed, we "
+        "still need the following, by line:",
+    ]
+    for line_request in line_requests:
+        lines.append("")
+        lines.append(f"For the {line_request.line_of_business} line:")
+        lines += [f"- {item}" for item in line_request.missing_items]
+    lines += [
+        "",
+        "Lines not listed above have everything they need. Once we "
+        "have these items, the affected lines will be triaged in "
+        "full. This message requests information only — it is not a "
+        "quotation and nothing in it binds or places coverage.",
+    ]
+    return "\n".join(lines)
+
+
+def build_bundle_information_request(
+    *,
+    submission: SubmissionInput,
+    triage_outcome: str,
+    analyses: list[LineAnalysis],
+) -> InformationRequest | None:
+    """Compose a bundle's information request, per line.
+
+    Each line's items are computed from that line's own facts —
+    the request asks only the lines that are actually missing
+    something, each for exactly its own gaps. The message is
+    composed in code (not model-worded): line attribution is
+    structural, and a model paraphrase is exactly how a cyber gap
+    ends up described as a property one. Composed, never sent —
+    the same discipline as every request here.
+    """
+    line_requests: list[LineInformationRequest] = []
+    flat: list[str] = []
+    for analysis in analyses:
+        items = missing_items(analysis.result.facts, analysis.result.extractions)
+        if not items:
+            continue
+        line_requests.append(
+            LineInformationRequest(
+                line_of_business=analysis.line_of_business,
+                submission_id=analysis.submission_id,
+                missing_items=items,
+            )
+        )
+        for item in items:
+            if item not in flat:
+                flat.append(item)
+    if not needs_information(triage_outcome, flat):
+        return None
+    return InformationRequest(
+        needed=True,
+        missing_items=flat,
+        message=bundle_template_message(submission, line_requests),
+        line_requests=line_requests,
+    )

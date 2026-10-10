@@ -24,6 +24,7 @@ the bundle mechanics, all computed in code:
 
 from __future__ import annotations
 
+from .clarify import missing_items
 from .facts import normalize_line
 from .model_backends import _NEXT_STEP, _TRIAGE_SENTENCE
 from .schemas import (
@@ -199,6 +200,16 @@ def rollup_facts(analyses: list[LineAnalysis]) -> SubmissionFacts:
     )
 
 
+def blocking_lines(analyses: list[LineAnalysis]) -> list[str]:
+    """The lines holding the bundle back from ready: the ones whose
+    own facts are missing required elements. Recorded on the gate
+    result and named in the packet, so which line blocks readiness
+    is a fact of the record, not something to re-derive by eye."""
+    return [
+        a.line_of_business for a in analyses if a.result.facts.missing_elements
+    ]
+
+
 def bundle_citations(analyses: list[LineAnalysis]) -> list[str]:
     """Every guideline any line retrieved, in line order, deduped —
     the citation set the combined drafts are validated against."""
@@ -248,6 +259,18 @@ def compose_bundle_drafts(
             for a in analyses
         ),
     ]
+    # Per-line gap sections: a line that is missing something is
+    # asked for exactly its own items, under its own heading; a
+    # complete line gets no section and is never implied to owe
+    # anything. Status only, like the rest of the letter.
+    for a in analyses:
+        items = missing_items(a.result.facts, a.result.extractions)
+        if not items:
+            continue
+        paragraphs.append(
+            f"Still needed for the {a.line_of_business} line:\n"
+            + "\n".join(f"- {item}" for item in items)
+        )
     broker_text = sanitized_notes(model)
     if broker_text:
         paragraphs.append(f"For reference, your note: \"{broker_text}\"")
@@ -270,8 +293,19 @@ def compose_bundle_drafts(
         f"Bundle triage: {triage.outcome} · Risk tier: {triage.risk_tier} "
         f"· Confidence: {triage.confidence}",
         f"Rationale: {triage.rationale}",
-        "Per-line outcomes:",
     ]
+    blocking = blocking_lines(analyses)
+    if blocking:
+        packet_lines.append(
+            "Lines blocking readiness: "
+            + "; ".join(
+                f"{a.line_of_business} (missing: "
+                f"{', '.join(a.result.facts.missing_elements)})"
+                for a in analyses
+                if a.line_of_business in blocking
+            )
+        )
+    packet_lines.append("Per-line outcomes:")
     packet_lines += [
         f"- {a.line_of_business} ({a.submission_id}): "
         f"{a.result.triage.outcome} / {a.result.triage.risk_tier} · "

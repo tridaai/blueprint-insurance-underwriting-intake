@@ -399,10 +399,25 @@ class Validation(BaseModel):
     checks: list[GuardrailCheck] = Field(default_factory=list)
 
 
+class LineInformationRequest(BaseModel):
+    """One line's slice of a bundle information request: what that
+    line — and only that line — is still missing. A bundle's gaps
+    live on lines, not on the bundle, and the broker is asked per
+    line so nobody chases the property file for a cyber gap."""
+
+    line_of_business: str = ""
+    submission_id: str = ""  # the sub-analysis id, e.g. SUB-1014-CYBER
+    missing_items: list[str] = Field(default_factory=list)
+
+
 class InformationRequest(BaseModel):
     needed: bool = False
     missing_items: list[str] = Field(default_factory=list)
     message: str = ""
+    # Multi-line bundles: the same request broken down per line
+    # (empty for single-line submissions). ``missing_items`` stays
+    # the flat union for surfaces that do not render per line.
+    line_requests: list[LineInformationRequest] = Field(default_factory=list)
 
 
 class AutonomyRecommendation(BaseModel):
@@ -506,6 +521,12 @@ class AgentResult(BaseModel):
     # outcome — and there is exactly one gate, on the bundle.
     multi_line: bool = False
     line_analyses: list["LineAnalysis"] = Field(default_factory=list)
+    # Multi-line bundles: the lines whose own facts are missing
+    # required elements — the lines holding the bundle back from
+    # ready. The gate record names them, so the underwriter sees
+    # which line blocks readiness without opening every section.
+    # Empty for single-line submissions and complete bundles.
+    blocking_lines: list[str] = Field(default_factory=list)
 
 
 class LineAnalysis(BaseModel):

@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 
 from .autonomy import recommend_autonomy
 from .bundles import (
+    blocking_lines as bundle_blocking_lines,
     bundle_citations,
     compose_bundle_drafts,
     driving_line_index,
@@ -46,7 +47,7 @@ from .bundles import (
     split_bundle,
 )
 from .checkpoints import get_checkpointer
-from .clarify import build_information_request
+from .clarify import build_bundle_information_request
 from .config import env_float, env_str, load_dotenv
 from .graph import resume_approval, run_submission
 from .guardrails import validate_drafts
@@ -549,15 +550,13 @@ class SubmissionService:
             reviewer_blocked=reviewer_blocked,
         )
         extractions = [e for a in analyses for e in a.result.extractions]
-        display = model.model_copy(
-            update={"line_of_business": f"multi-line ({lines_text})"}
-        )
-        info = build_information_request(
-            submission=display,
+        # The bundle's information request is per line: only the
+        # lines actually missing something are asked, each for its
+        # own items (clarify.build_bundle_information_request).
+        info = build_bundle_information_request(
+            submission=model,
             triage_outcome=triage.outcome,
-            facts=facts,
-            extractions=extractions,
-            backend=backend,
+            analyses=analyses,
         )
         trace = [
             TraceStep(
@@ -641,6 +640,7 @@ class SubmissionService:
             trace=trace,
             multi_line=True,
             line_analyses=analyses,
+            blocking_lines=bundle_blocking_lines(analyses),
         )
         self._get_store().save(
             ApprovalRecord(result=result, submission=self._archive_documents(model))
