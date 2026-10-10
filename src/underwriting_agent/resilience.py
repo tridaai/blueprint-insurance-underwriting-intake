@@ -45,10 +45,10 @@ _METHOD_NODES = {
     "diagnose": "diagnose",
     "diagnose_with_tools": "diagnose",
     "propose_options": "options",
-    "draft_customer_update": "draft",
+    "draft_documents": "draft",
     "verify_draft": "verify",
     "review_draft": "review",
-    "compose_information_request": "human_approval",
+    "compose_information_request": "gate",
 }
 
 # The idempotent language steps: re-asking costs tokens, changes

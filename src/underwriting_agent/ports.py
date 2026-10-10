@@ -8,11 +8,11 @@ having the methods, not by inheriting):
   (OpenAI / Anthropic / Ollama) in provider mode; the deterministic
   template renderer as the offline fallback. Implementations live in
   ``model_backends.py``.
-- :class:`Retriever` — policy retrieval (keyword / semantic / hybrid).
+- :class:`Retriever` — guideline retrieval (keyword / semantic / hybrid).
   Implementations live in ``retriever.py``.
 - :class:`Store` — where analysis records and human decisions live
   (SQLite by default, in-memory as a test double). Implementations
-  live in ``store.py`` (which calls this protocol ``ApprovalStore``).
+  live in ``store.py`` (SQLite default, in-memory for tests).
 - :class:`EventSink` — where structured run events go (streaming,
   tracing). Implementations live in ``events.py``.
 - :class:`Checkpointer` — LangGraph graph-state persistence behind
@@ -44,20 +44,20 @@ if TYPE_CHECKING:  # annotation-only imports (no runtime cycles)
 
 class ModelBackend(Protocol):
     """The language-model seam. Only drafting is mandatory: every other
-    capability (extraction, classification, diagnosis, options,
+    capability (extraction, triage cross-check, diagnosis, options,
     verification, review) is optional and discovered with ``getattr`` —
     a backend that lacks one simply engages that node's deterministic
     path. The offline fallback implements drafting only."""
 
     name: str
 
-    def draft_customer_update(self, context: "DraftContext") -> tuple[str, str]:
-        """Return (subject, body) for a customer update draft."""
+    def draft_documents(self, context: "DraftContext") -> tuple[str, str, str]:
+        """Return (subject, broker letter, underwriter packet) drafts."""
         ...
 
 
 class Retriever(Protocol):
-    """The policy-retrieval seam."""
+    """The guideline-retrieval seam."""
 
     def retrieve(self, query: str, top_k: int = 3) -> list["RetrievedGuideline"]: ...
 

@@ -1,0 +1,421 @@
+"""Retrieval behind a small interface — the LlamaIndex-style layer.
+
+Three implementations ship in the repo, selected with the ``RETRIEVER``
+environment variable (see :func:`get_retriever`):
+
+- ``keyword`` (default) — transparent token overlap, deterministic, offline.
+- ``semantic`` — embeds the guideline corpus and the query with an embeddings
+  API and ranks by cosine similarity. Embeddings come from the local
+  Ollama server when ``MODEL_BACKEND=ollama``, otherwise from OpenAI
+  (or an OpenAI-compatible endpoint via ``OPENAI_BASE_URL``): Anthropic
+  has no embeddings API, so ``MODEL_BACKEND=anthropic`` still needs
+  ``OPENAI_API_KEY`` for this retriever — the failure message says
+  exactly that when the key is missing.
+- ``hybrid`` — runs both, merges the candidate pools, and applies an
+  explicit rerank step: reciprocal-rank score fusion in code (see
+  :func:`rerank_fused`). This is score-fusion reranking, not a
+  cross-encoder — the repo ships no cross-encoder and claims none.
+
+Production deployments would swap any of these for LlamaIndex over a
+vector store (pgvector, Qdrant, …) fed by the client's document
+systems. The agent only depends on the ``Retriever`` protocol, so that
+swap touches one file, not the graph.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+
+from .config import env_float, env_str, load_dotenv
+from .errors import translate_construction_error, translate_provider_error
+from .model_backends import DEFAULT_TIMEOUT_SECONDS, _missing_sdk_error
+from .guidelines_data import GUIDELINES
+from .schemas import RetrievedGuideline
+
+_STOPWORDS = {
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "was",
+    "by", "with", "when", "if", "it", "its", "are", "be", "at", "as",
+}
+
+
+def _tokens(text: str) -> list[str]:
+    return [t for t in re.findall(r"[a-z0-9]+", text.lower()) if t not in _STOPWORDS]
+
+
+# The Retriever protocol is declared in ports.py (the seam registry);
+# it is re-exported here so existing imports keep working.
+from .ports import Retriever  # noqa: E402,F401
+
+
+class KeywordRetriever:
+    """Transparent keyword-overlap retriever over the guideline corpus.
+
+    Deliberately simple and deterministic so evals and tests are stable
+    offline. Score = shared tokens normalised by guideline length.
+    """
+
+    name = "keyword"
+
+    def __init__(self, guidelines: list[dict[str, str]] | None = None) -> None:
+        self._guidelines = guidelines if guidelines is not None else GUIDELINES
+        self._index = [
+            (p, set(_tokens(f"{p['title']} {p['text']}"))) for p in self._guidelines
+        ]
+
+    def retrieve(self, query: str, top_k: int = 3) -> list[RetrievedGuideline]:
+        query_tokens = set(_tokens(query))
+        if not query_tokens:
+            return []
+        scored: list[RetrievedGuideline] = []
+        for guideline, tokens in self._index:
+            overlap = len(query_tokens & tokens)
+            if overlap == 0:
+                continue
+            score = round(overlap / math.sqrt(len(tokens)), 4)
+            scored.append(
+                RetrievedGuideline(
+                    guideline_id=guideline["id"],
+                    title=guideline["title"],
+                    text=guideline["text"],
+                    score=score,
+                    sources=["keyword"],
+                )
+            )
+        scored.sort(key=lambda r: r.score, reverse=True)
+        return scored[:top_k]
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
+    return dot / norm if norm else 0.0
+
+
+class SemanticRetriever:
+    """Cosine-similarity retriever over the guideline corpus, via embeddings.
+
+    The corpus is embedded once (lazily, on first use) and cached; each
+    query is embedded per call. Same return shape as the keyword
+    retriever: ``RetrievedGuideline`` snippets with similarity scores.
+    """
+
+    name = "semantic"
+
+    def __init__(
+        self,
+        guidelines: list[dict[str, str]] | None = None,
+        *,
+        mode_label: str = "semantic",
+    ) -> None:
+        self._guidelines = guidelines if guidelines is not None else GUIDELINES
+        # The RETRIEVER value this instance serves ("semantic", or
+        # "hybrid" when the hybrid retriever owns it) — error messages
+        # name the value the operator actually set, never a sibling mode.
+        self._mode_label = mode_label
+        (
+            self._client,
+            self._model,
+            self._embeddings_backend,
+            self._embeddings_base_url,
+        ) = self._build_embeddings_client()
+        self._corpus_vectors: list[list[float]] | None = None
+        # Which store actually serves queries: "chroma" when the optional
+        # vectordb extra is installed (local persistent store), else
+        # "memory" (in-repo cosine over freshly embedded vectors).
+        self.vector_store = "memory"
+        self._chroma_collection = None
+        self._chroma_checked = False
+
+    def _build_embeddings_client(self):
+        """Resolve the embeddings client, failing loudly when unusable.
+
+        Embeddings follow the configured stack:
+
+        - ``MODEL_BACKEND=ollama`` → embeddings from the local Ollama
+          server (``OLLAMA_EMBEDDING_MODEL``, default ``nomic-embed-text``)
+          — fully local, no cloud key.
+        - Otherwise → OpenAI (or an OpenAI-compatible endpoint via
+          ``OPENAI_BASE_URL``), regardless of the drafting backend:
+          Anthropic offers no embeddings API. That is stated, not hidden:
+          with ``MODEL_BACKEND=anthropic`` (or ``mock``) an
+          ``OPENAI_API_KEY`` is still required, and the error says so.
+
+        Returns (client, model, provider_name, base_url).
+        """
+        load_dotenv()
+        backend = (env_str("MODEL_BACKEND") or "mock").lower()
+        timeout = env_float("LLM_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS)
+        if backend == "ollama":
+            try:
+                from openai import OpenAI
+            except ImportError as exc:
+                raise _missing_sdk_error("ollama (embeddings)", "OpenAI") from exc
+            base_url = env_str("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+            try:
+                client = OpenAI(
+                    api_key="ollama",  # placeholder — Ollama ignores it
+                    base_url=base_url,
+                    timeout=timeout,
+                    max_retries=0,
+                )
+            except Exception as exc:  # construction failures are translated too
+                raise translate_construction_error(
+                    exc,
+                    backend=f"ollama embeddings (RETRIEVER={self._mode_label})",
+                    base_url=base_url,
+                ) from exc
+            return client, env_str("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text"), "ollama", base_url
+        if not env_str("OPENAI_API_KEY"):
+            hint = (
+                f" MODEL_BACKEND={backend} has no embeddings API to use instead —"
+                " drafting and embeddings are separate providers here."
+                if backend != "openai"
+                else ""
+            )
+            raise RuntimeError(
+                f"RETRIEVER={self._mode_label} needs embeddings, which run through OpenAI, "
+                "but OPENAI_API_KEY is not set." + hint
+                + " Add OPENAI_API_KEY=<your key> to the .env file in the repo root "
+                "(copy .env.example to .env) or export it, set MODEL_BACKEND=ollama "
+                "to embed locally with Ollama, or set RETRIEVER=keyword."
+            )
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise _missing_sdk_error("openai (embeddings)", "OpenAI") from exc
+        client_kwargs: dict = {
+            "api_key": env_str("OPENAI_API_KEY"),
+            "timeout": timeout,
+            "max_retries": 0,
+        }
+        base_url = env_str("OPENAI_BASE_URL")
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        model = env_str("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+        try:
+            client = OpenAI(**client_kwargs)
+        except Exception as exc:  # construction failures are translated too
+            raise translate_construction_error(
+                exc,
+                backend=f"openai embeddings (RETRIEVER={self._mode_label})",
+                base_url=base_url or "https://api.openai.com/v1",
+            ) from exc
+        return (client, model, "openai", base_url or "https://api.openai.com/v1")
+
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        try:
+            response = self._client.embeddings.create(model=self._model, input=texts)
+        except Exception as exc:
+            raise translate_provider_error(
+                exc,
+                backend=f"{self._embeddings_backend} embeddings (RETRIEVER={self._mode_label})",
+                base_url=self._embeddings_base_url,
+            ) from exc
+        ordered = sorted(response.data, key=lambda d: getattr(d, "index", 0))
+        return [list(d.embedding) for d in ordered]
+
+    def _get_chroma_collection(self):
+        """Lazily open the local Chroma store, indexing the corpus once.
+
+        Returns the collection, or ``None`` when chromadb is not
+        installed (the in-memory fallback then serves queries). The
+        store is either a Chroma server (``CHROMA_HOST`` set — the
+        docker-compose local stack runs one) or an embedded persistent
+        directory (``CHROMA_DIR``, default ``<repo>/.chroma``,
+        git-ignored): the guideline corpus is embedded and added on first
+        use, and survives restarts after that. Embeddings are always
+        computed by our configured provider client and passed in
+        explicitly — Chroma's own default embedding function (which
+        downloads a model) is never used.
+        """
+        if self._chroma_checked:
+            return self._chroma_collection
+        self._chroma_checked = True
+        try:
+            import chromadb
+        except ImportError:
+            return None
+        try:
+            import hashlib
+            from pathlib import Path
+
+            chroma_host = env_str("CHROMA_HOST")
+            if chroma_host:
+                client = chromadb.HttpClient(
+                    host=chroma_host, port=int(env_str("CHROMA_PORT") or "8000")
+                )
+            else:
+                persist_dir = env_str("CHROMA_DIR") or str(
+                    Path(__file__).resolve().parents[2] / ".chroma"
+                )
+                client = chromadb.PersistentClient(path=persist_dir)
+            # The collection is named by a fingerprint of the corpus
+            # contents: a changed corpus (edited guidelines, a different
+            # corpus in tests) gets its own collection instead of
+            # silently querying stale vectors.
+            fingerprint = hashlib.sha256(
+                "\n".join(
+                    f"{p['id']}|{p['title']}|{p['text']}" for p in self._guidelines
+                ).encode("utf-8")
+            ).hexdigest()[:12]
+            collection = client.get_or_create_collection(
+                f"guidelines-{fingerprint}", metadata={"hnsw:space": "cosine"}
+            )
+            if collection.count() != len(self._guidelines):
+                if collection.count() > 0:  # partial/stale write — rebuild
+                    collection.delete(
+                        ids=[p["id"] for p in self._guidelines]
+                    )
+                texts = [f"{p['title']} {p['text']}" for p in self._guidelines]
+                collection.add(
+                    ids=[p["id"] for p in self._guidelines],
+                    embeddings=self._embed(texts),
+                    documents=texts,
+                    metadatas=[{"title": p["title"]} for p in self._guidelines],
+                )
+            self._chroma_collection = collection
+            self.vector_store = "chroma"
+        except Exception:  # a broken local store must not break retrieval
+            self._chroma_collection = None
+        return self._chroma_collection
+
+    def _retrieve_chroma(self, collection, query: str, top_k: int) -> list[RetrievedGuideline]:
+        query_vector = self._embed([query])[0]
+        result = collection.query(
+            query_embeddings=[query_vector],
+            n_results=min(top_k, len(self._guidelines)),
+        )
+        by_id = {p["id"]: p for p in self._guidelines}
+        retrieved: list[RetrievedGuideline] = []
+        for guideline_id, distance in zip(result["ids"][0], result["distances"][0]):
+            guideline = by_id.get(guideline_id)
+            if guideline is None:  # foreign id in a shared store — skip it
+                continue
+            retrieved.append(
+                RetrievedGuideline(
+                    guideline_id=guideline_id,
+                    title=guideline["title"],
+                    text=guideline["text"],
+                    # hnsw:space=cosine -> distance is 1 - cosine similarity.
+                    score=round(1.0 - float(distance), 4),
+                    sources=["semantic"],
+                )
+            )
+        return retrieved
+
+    def retrieve(self, query: str, top_k: int = 3) -> list[RetrievedGuideline]:
+        collection = self._get_chroma_collection()
+        if collection is not None:
+            return self._retrieve_chroma(collection, query, top_k)
+        if self._corpus_vectors is None:
+            self._corpus_vectors = self._embed(
+                [f"{p['title']} {p['text']}" for p in self._guidelines]
+            )
+        query_vector = self._embed([query])[0]
+        scored = [
+            RetrievedGuideline(
+                guideline_id=guideline["id"],
+                title=guideline["title"],
+                text=guideline["text"],
+                score=round(_cosine(query_vector, vector), 4),
+                sources=["semantic"],
+            )
+            for guideline, vector in zip(self._guidelines, self._corpus_vectors)
+        ]
+        scored.sort(key=lambda r: r.score, reverse=True)
+        return scored[:top_k]
+
+
+def rerank_fused(
+    keyword_results: list[RetrievedGuideline],
+    semantic_results: list[RetrievedGuideline],
+    top_k: int = 3,
+    *,
+    rrf_k: int = 60,
+) -> list[RetrievedGuideline]:
+    """The hybrid rerank step: reciprocal-rank score fusion, in code.
+
+    Keyword scores (token overlap) and semantic scores (cosine) live on
+    incomparable scales, so the merge never compares them directly.
+    Each list contributes ``1 / (rrf_k + rank)`` per guideline; the fused
+    score is the sum across lists, and guidelines found by both retrievers
+    rank above single-list finds at similar ranks. The returned score
+    IS the fused score — labelled as such via ``retrieval`` ("keyword",
+    "semantic", or "keyword+semantic"). This is score-fusion reranking:
+    transparent and deterministic, not a cross-encoder model.
+    """
+    fused: dict[str, dict] = {}
+    for source, results in (("keyword", keyword_results), ("semantic", semantic_results)):
+        for rank, result in enumerate(results):
+            entry = fused.setdefault(
+                result.guideline_id, {"guideline": result, "score": 0.0, "sources": []}
+            )
+            entry["score"] += 1.0 / (rrf_k + rank + 1)
+            entry["sources"].append(source)
+            if result.score > entry["guideline"].score:
+                entry["guideline"] = result
+    merged = sorted(
+        fused.values(), key=lambda e: (-e["score"], e["guideline"].guideline_id)
+    )
+    reranked: list[RetrievedGuideline] = []
+    for entry in merged[:top_k]:
+        sources = [s for s in ("keyword", "semantic") if s in entry["sources"]]
+        reranked.append(
+            entry["guideline"].model_copy(
+                update={"score": round(entry["score"], 4), "sources": sources}
+            )
+        )
+    return reranked
+
+
+class HybridRetriever:
+    """Keyword + semantic retrieval with an explicit rerank step.
+
+    Pipeline: both retrievers produce a candidate pool → the pools are
+    merged by guideline ID → :func:`rerank_fused` reranks by reciprocal-rank
+    fusion → the top-k are returned and cited exactly like the other
+    retrievers' results. ``last_stats`` records the pool sizes of the
+    most recent call so the trace can show merge → rerank honestly.
+    """
+
+    name = "hybrid"
+
+    def __init__(self, guidelines: list[dict[str, str]] | None = None) -> None:
+        self._keyword = KeywordRetriever(guidelines)
+        self._semantic = SemanticRetriever(guidelines, mode_label="hybrid")
+        self.last_stats: dict[str, int] = {}
+
+    @property
+    def vector_store(self) -> str:
+        """The store serving the semantic half (chroma | memory)."""
+        return self._semantic.vector_store
+
+    def retrieve(self, query: str, top_k: int = 3) -> list[RetrievedGuideline]:
+        pool = top_k * 2
+        keyword_results = self._keyword.retrieve(query, top_k=pool)
+        semantic_results = self._semantic.retrieve(query, top_k=pool)
+        self.last_stats = {
+            "keyword_pool": len(keyword_results),
+            "semantic_pool": len(semantic_results),
+        }
+        return rerank_fused(keyword_results, semantic_results, top_k=top_k)
+
+
+def get_retriever(name: str | None = None) -> Retriever:
+    """Select the retriever by name or the RETRIEVER env var (default: keyword).
+
+    Loads the repo-root ``.env`` first (real environment variables win), so
+    every surface — API, CLI, traced demo — selects the same way.
+    """
+    load_dotenv()
+    selected = (name or env_str("RETRIEVER") or "keyword").lower()
+    if selected == "keyword":
+        return KeywordRetriever()
+    if selected == "semantic":
+        return SemanticRetriever()
+    if selected == "hybrid":
+        return HybridRetriever()
+    raise ValueError(
+        f"Unknown RETRIEVER: {selected!r} (expected keyword | semantic | hybrid)"
+    )
