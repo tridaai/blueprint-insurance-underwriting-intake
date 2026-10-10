@@ -430,6 +430,35 @@ numbers on the submission and its loss records. Line aliases fold too
   recent-half approval rate over the group's decision order), so
   a party drifting toward rejections is visible before the flat
   rate moves.
+- **The queue has an SLA; the thresholds have a calibration.**
+  Queue items are built by one projection (`queue_item_for`) that
+  also stamps an SLA state: the budget for the item's risk tier
+  (`QUEUE_SLA_DAYS_*`, defaults elevated 2 / high 3 / moderate 5 /
+  low 7 days — the budget shrinks as the tier rises, because an
+  elevated case needs a senior underwriter soonest and ages
+  worst). Breaches are the queue's worklist, worst overrun first.
+  A breached case can draft an **underwriter status note**
+  (`service.draft_status_note`): composed in code from the record
+  and that same queue projection (so note and queue cannot
+  disagree), checked by `guardrails.validate_status_note` — the
+  broker letter's text families, status-only discipline — and
+  stored on the record only if it passes. It is an internal
+  draft; the system has no path that sends it. Bundle items
+  carry their `blocking_lines` with the wait per line (the
+  bundle's own queue age — a line has blocked since intake) and
+  the line's missing items, so a one-line strand reads
+  differently from a wholly unready submission. The
+  diff-trigger thresholds get the same evidence treatment in
+  `calibration.py`: stored renewal pairs are rebuilt with the
+  service's own per-line prior chain and the trigger computation
+  is replayed at candidate values, one knob at a time —
+  referrals and family counts per setting against what actually
+  fired and what underwriters decided. And the per-pair diffs
+  chain into an **insured loss-development timeline**
+  (`insights.insured_loss_timeline`): entries per submission
+  (per line) plus one event stream per claim — appeared,
+  developed, no longer listed. Both surfaces are read-only; the
+  timeline reports stored diffs and never recomputes them.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 
@@ -498,8 +527,9 @@ honest list:
   contract.
 - **Data governance for real submission PII.** Encryption at rest,
   retention schedules, redaction in logs and traces.
-- **A review queue product.** Assignment, SLAs, and bulk actions —
-  the console here is a demo surface.
+- **A review queue product.** Assignment and bulk actions — SLA
+  budgets and breach flags exist on this demo queue (§4), routing
+  a case to a named underwriter's queue does not.
 - **Audit export** of decisions, traces, and guardrail verdicts.
 - **Monitoring and alerting** on the emitted telemetry and JSON logs
   (provider latency, budget degradations, repair rates, reviewer

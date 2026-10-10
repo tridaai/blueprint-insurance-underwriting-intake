@@ -197,6 +197,20 @@ Bundles are re-triaged **per line** — the affected lines are
 named with their own movement, never flattened into one pass over
 the bundle payload.
 
+The queue itself now runs against an **SLA**: every awaiting item
+in `/queue` carries a budget by risk tier — elevated 2 days, high
+3, moderate 5, low 7 (`QUEUE_SLA_DAYS_<TIER>` to tune; the budget
+shrinks as the tier rises, because the harder cases need a senior
+underwriter soonest) — with a breach flag and overrun once it
+crosses. Bundle items name their **blocking lines** there too:
+which line holds the bundle back, that line's missing items, and
+how long the bundle has waited on it. For a breached case,
+**`POST /submissions/{id}/status-note`** drafts the underwriter
+status note — composed in code from the record, guardrail-checked
+with the broker letter's own text families before it is stored,
+and kept on the record as an internal draft. It is never sent;
+drafting it moves nothing else about the case.
+
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:
 requested limit and deductible, revenue, years in business, line and
@@ -222,6 +236,21 @@ referral trigger (`DIFF_DEVELOPMENT_MIN_INCREASE`, default
 $50,000 across matched claims), while favourable development
 (losses settling *down*) never triggers. Golden cases LD1/LD2 pin
 both directions.
+
+Two read models sit on top of the stored renewals. The
+**diff-trigger calibration** (`GET /guidelines/diff-trigger-calibration`)
+rebuilds every stored renewal pair and replays the trigger
+computation at candidate thresholds — one knob at a time — so how
+many referrals each setting *would have* produced, family by
+family, sits next to what actually fired at analysis time and what
+underwriters decided on those cases; threshold tuning becomes
+evidence instead of taste, and reading the report changes
+nothing. The **loss-development timeline**
+(`GET /insureds/{name}/loss-timeline`) chains an insured's stored
+diffs into one history: an entry per submission (per line) and
+one event stream per claim — appeared, developed, no longer
+listed — so the third renewal reads as an arc, not three separate
+comparisons.
 
 **Multi-line submissions** — a broker often submits the whole
 account at once, so intake accepts a bundle (`lines` on the
@@ -380,6 +409,7 @@ load-bearing ones:
 | `ACTION_WEBHOOK_URL` | approval dispatch endpoint | off |
 | `ACTION_WEBHOOK_SECRET` | HMAC key signing dispatches (`X-Trida-Signature`) | off (unsigned) |
 | `API_KEY` | optional `X-API-Key` gate for the API | off |
+| `QUEUE_SLA_DAYS_ELEVATED` / `_HIGH` / `_MODERATE` / `_LOW` | queue SLA budget in days by risk tier | 2 / 3 / 5 / 7 |
 | `DATABASE_URL` | PostgreSQL DSN — store, checkpoints, pgvector | unset → in-memory test doubles |
 | `S3_BUCKET` / `S3_ENDPOINT_URL` / `S3_REGION` | document object storage (S3-compatible) | unset → documents inline only |
 | `CHECKPOINTS` | gate checkpointing `on`/`off` | `on` |
