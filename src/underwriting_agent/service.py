@@ -34,9 +34,23 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from .autonomy import recommend_autonomy
+from .bundles import (
+    bundle_citations,
+    compose_bundle_drafts,
+    driving_line_index,
+    is_bundle,
+    line_slug,
+    rollup_facts,
+    rollup_triage,
+    split_bundle,
+)
 from .checkpoints import get_checkpointer
+from .clarify import build_information_request
 from .config import env_float, env_str, load_dotenv
 from .graph import resume_approval, run_submission
+from .guardrails import validate_drafts
+from .guidelines_data import GUIDELINES_VERSION
 from .insights import (
     all_scorecards,
     audit_rows,
@@ -51,8 +65,19 @@ from .model_backends import ModelBackend, get_backend
 from .object_store import get_object_store
 from .ports import Checkpointer, EventSink, ObjectStore
 from .retriever import Retriever, get_retriever
-from .schemas import AgentResult, DispatchAttempt, SubmissionInput
+from .reviewer import review_drafts
+from .schemas import (
+    AgentResult,
+    Diagnosis,
+    DispatchAttempt,
+    LineAnalysis,
+    RetrievedGuideline,
+    RunTelemetry,
+    SubmissionInput,
+    TraceStep,
+)
 from .store import ApprovalRecord, broker_summary, default_store, history_entry
+from .verify import verify_drafts
 
 __all__ = ["ApprovalRecord", "BatchItem", "SubmissionService", "Store"]
 
@@ -221,50 +246,89 @@ class SubmissionService:
         through the port here — the one place raw bytes enter.
         A failed fetch leaves the document text empty (the run
         proceeds; completeness scoring sees the gap), never raises.
+        Bundle line documents resolve the same way as top-level ones.
         """
         store = self._get_object_store()
         if store is None:
             return model
-        documents = []
-        changed = False
-        for doc in model.documents:
-            if doc.object_key and not doc.raw_text:
-                try:
-                    text = store.get(doc.object_key).decode(
-                        "utf-8", errors="replace"
-                    )
-                except Exception:
-                    text = ""
-                if text:
-                    doc = doc.model_copy(update={"raw_text": text})
-                    changed = True
-            documents.append(doc)
-        if not changed:
+
+        def resolve(documents):
+            resolved, changed = [], False
+            for doc in documents:
+                if doc.object_key and not doc.raw_text:
+                    try:
+                        text = store.get(doc.object_key).decode(
+                            "utf-8", errors="replace"
+                        )
+                    except Exception:
+                        text = ""
+                    if text:
+                        doc = doc.model_copy(update={"raw_text": text})
+                        changed = True
+                resolved.append(doc)
+            return resolved, changed
+
+        documents, changed = resolve(model.documents)
+        updates: dict = {}
+        if changed:
+            updates["documents"] = documents
+        lines = []
+        lines_changed = False
+        for line in model.lines:
+            line_documents, line_changed = resolve(line.documents)
+            if line_changed:
+                line = line.model_copy(update={"documents": line_documents})
+                lines_changed = True
+            lines.append(line)
+        if lines_changed:
+            updates["lines"] = lines
+        if not updates:
             return model
-        return model.model_copy(update={"documents": documents})
+        return model.model_copy(update=updates)
 
     def _archive_documents(self, model: SubmissionInput) -> dict:
         """Archive inline documents to the object store.
 
         Returns the submission payload to persist: the model's dump,
         with ``object_key`` filled in for every document that was
-        written. Archiving is bookkeeping, not analysis — a failed
-        put skips that document's key and never fails the run.
+        written — bundle-level documents under the submission's
+        prefix, line documents under their line's. Archiving is
+        bookkeeping, not analysis — a failed put skips that
+        document's key and never fails the run.
         """
         payload = model.model_dump(mode="json")
         store = self._get_object_store()
         if store is None:
             return payload
-        for index, doc in enumerate(model.documents):
-            if not doc.raw_text or doc.object_key:
-                continue
-            name = doc.document_id or f"doc-{index}"
-            key = f"submissions/{model.submission_id}/documents/{name}.txt"
-            try:
-                store.put(key, doc.raw_text.encode("utf-8"), "text/plain; charset=utf-8")
-            except Exception:
-                continue
-            payload["documents"][index]["object_key"] = key
+
+        def archive(documents, payload_documents, prefix) -> None:
+            for index, doc in enumerate(documents):
+                if not doc.raw_text or doc.object_key:
+                    continue
+                name = doc.document_id or f"doc-{index}"
+                key = f"{prefix}/{name}.txt"
+                try:
+                    store.put(
+                        key,
+                        doc.raw_text.encode("utf-8"),
+                        "text/plain; charset=utf-8",
+                    )
+                except Exception:
+                    continue
+                payload_documents[index]["object_key"] = key
+
+        archive(
+            model.documents,
+            payload["documents"],
+            f"submissions/{model.submission_id}/documents",
+        )
+        for line_index, line in enumerate(model.lines):
+            archive(
+                line.documents,
+                payload["lines"][line_index]["documents"],
+                f"submissions/{model.submission_id}/lines/"
+                f"{line_slug(line.line_of_business)}/documents",
+            )
         return payload
 
     def _resume_thread(self, submission_id: str, decision: dict) -> None:
@@ -309,6 +373,8 @@ class SubmissionService:
         event_sink: EventSink | None = None,
     ) -> AgentResult:
         model = self._resolve_document_texts(model)
+        if is_bundle(model):
+            return self._analyze_bundle(model, backend, retriever, event_sink)
         # Memory: what the store already knows about this insured and
         # this broker becomes diagnosis evidence for the new analysis.
         # The raw entries ride along too — the diagnosis tool loop
@@ -348,6 +414,232 @@ class SubmissionService:
             event_sink=event_sink,
             checkpointer=self._get_checkpointer(),
             thread_id=model.submission_id,
+        )
+        self._get_store().save(
+            ApprovalRecord(result=result, submission=self._archive_documents(model))
+        )
+        return result
+
+    def _analyze_bundle(
+        self,
+        model: SubmissionInput,
+        backend: ModelBackend,
+        retriever: Retriever,
+        event_sink: EventSink | None = None,
+    ) -> AgentResult:
+        """Analyse a multi-line bundle: one sub-analysis per line,
+        one combined result, one record, one gate.
+
+        Each line runs the ordinary pipeline (``run_submission``)
+        with the bundle's shared insured context — the same memory,
+        scorecards, and feedback — and a prior keyed to *that line*
+        (a prior bundle's matching line, or a prior single-line
+        submission of the same line), so renewal diffs stay per
+        line. The lines do not gate individually: no checkpointer is
+        attached to a sub-analysis, and the only record saved is the
+        bundle's, under the bundle id — approve/reject decide the
+        bundle, never a line.
+        """
+        subs = split_bundle(model)
+        prior_records = [
+            record
+            for record in self._get_store().all_records()
+            if record.result.submission_id != model.submission_id
+        ]
+        priors = [history_entry(record) for record in prior_records]
+        history = self._history_summary(model, priors)
+        cards = scorecards_for(
+            prior_records,
+            insured_name=model.insured_name,
+            broker_name=model.broker_name,
+        )
+        if cards:
+            history = {**(history or {}), "scorecards": cards}
+        feedback = self._feedback_for(model)
+        if feedback:
+            history = {**(history or {}), "feedback": feedback}
+
+        analyses: list[LineAnalysis] = []
+        for sub in subs:
+            line_result = run_submission(
+                sub,
+                backend=backend,
+                retriever=retriever,
+                history=history,
+                priors=priors,
+                prior_submission=self._prior_submission_for(sub, prior_records),
+                event_sink=event_sink,
+                checkpointer=None,
+            )
+            analyses.append(
+                LineAnalysis(
+                    line_of_business=sub.line_of_business,
+                    submission_id=sub.submission_id,
+                    result=line_result,
+                )
+            )
+
+        triage = rollup_triage(analyses)
+        facts = rollup_facts(analyses)
+        driving = analyses[driving_line_index(analyses)]
+        citations = bundle_citations(analyses)
+        drafts = compose_bundle_drafts(model, analyses)
+        guidelines: list[RetrievedGuideline] = []
+        seen_ids: set[str] = set()
+        for analysis in analyses:
+            for guideline in analysis.result.guidelines:
+                if guideline.guideline_id not in seen_ids:
+                    seen_ids.add(guideline.guideline_id)
+                    guidelines.append(guideline)
+        lines_text = " + ".join(a.line_of_business for a in analyses)
+        diagnosis = Diagnosis(
+            summary=(
+                f"Multi-line bundle for {model.insured_name} ({lines_text}): "
+                + "; ".join(
+                    f"{a.line_of_business} — {a.result.triage.outcome} / "
+                    f"{a.result.triage.risk_tier}, readiness "
+                    f"{a.result.facts.readiness}"
+                    for a in analyses
+                )
+                + f". The bundle follows its most severe line "
+                f"({driving.line_of_business}); the per-line diagnoses are "
+                "in the packet sections."
+            ),
+            risk_factors=[
+                f"[{a.line_of_business}] {factor}"
+                for a in analyses
+                for factor in a.result.diagnosis.risk_factors
+            ],
+            evidence=[
+                f"[{a.line_of_business}] {line}"
+                for a in analyses
+                for line in a.result.diagnosis.evidence
+            ],
+            source="template",
+            note="composed in code from the per-line diagnoses",
+        )
+        verification = verify_drafts(
+            submission=model,
+            triage=triage.model_dump(),
+            facts=facts.model_dump(),
+            drafts=drafts,
+            retrieved_ids=citations,
+            backend=backend,
+        )
+        review = review_drafts(
+            submission=model,
+            triage=triage.model_dump(),
+            facts=facts.model_dump(),
+            diagnosis=diagnosis,
+            options=driving.result.options,
+            drafts=drafts,
+            retrieved_ids=citations,
+            backend=backend,
+        )
+        reviewer_blocked = bool(review.enabled and review.verdict == "block")
+        validation = validate_drafts(model, drafts, citations)
+        autonomy = recommend_autonomy(
+            triage=triage,
+            facts=facts,
+            validation=validation,
+            repair_attempted=False,
+            cross_check=driving.result.cross_check,
+            review=review,
+            reviewer_blocked=reviewer_blocked,
+        )
+        extractions = [e for a in analyses for e in a.result.extractions]
+        display = model.model_copy(
+            update={"line_of_business": f"multi-line ({lines_text})"}
+        )
+        info = build_information_request(
+            submission=display,
+            triage_outcome=triage.outcome,
+            facts=facts,
+            extractions=extractions,
+            backend=backend,
+        )
+        trace = [
+            TraceStep(
+                name="bundle",
+                title="Multi-line bundle split",
+                details=[
+                    f"{len(analyses)} line(s) analysed under one bundle gate: "
+                    + "; ".join(
+                        f"{a.line_of_business} — {a.result.triage.outcome} / "
+                        f"{a.result.triage.risk_tier}"
+                        for a in analyses
+                    )
+                ],
+            )
+        ]
+        for sub, analysis in zip(subs, analyses):
+            slug = line_slug(sub.line_of_business).lower()
+            trace.extend(
+                TraceStep(
+                    name=f"{slug}:{step.name}",
+                    title=f"[{analysis.line_of_business}] {step.title}",
+                    details=step.details,
+                    duration_ms=step.duration_ms,
+                )
+                for step in analysis.result.trace
+            )
+
+        def _sum_optional(values: list) -> float | int | None:
+            if all(v is None for v in values):
+                return None
+            return sum(v or 0 for v in values)
+
+        telemetries = [a.result.telemetry for a in analyses]
+        first_telemetry = telemetries[0] if telemetries else None
+        telemetry = RunTelemetry(
+            backend=first_telemetry.backend if first_telemetry else "mock",
+            model=first_telemetry.model if first_telemetry else "",
+            model_calls=sum(t.model_calls for t in telemetries if t),
+            input_tokens=_sum_optional(
+                [t.input_tokens if t else None for t in telemetries]
+            ),
+            output_tokens=_sum_optional(
+                [t.output_tokens if t else None for t in telemetries]
+            ),
+            estimated_cost_usd=_sum_optional(
+                [t.estimated_cost_usd if t else None for t in telemetries]
+            ),
+            latency_seconds=round(
+                sum(t.latency_seconds for t in telemetries if t), 3
+            ),
+            budget=driving.result.telemetry.budget if driving.result.telemetry else None,
+        )
+        result = AgentResult(
+            submission_id=model.submission_id,
+            status="awaiting_underwriter",
+            insured_name=model.insured_name,
+            line_of_business=f"multi-line ({lines_text})",
+            guidelines_version=GUIDELINES_VERSION,
+            extractions=extractions,
+            facts=facts,
+            injection_flags=list(
+                dict.fromkeys(
+                    flag for a in analyses for flag in a.result.injection_flags
+                )
+            ),
+            triage=triage,
+            cross_check=driving.result.cross_check,
+            guidelines=guidelines,
+            vector_store=driving.result.vector_store,
+            diagnosis=diagnosis,
+            options=driving.result.options,
+            drafts=drafts,
+            verification=verification,
+            review=review,
+            reviewer_blocked=reviewer_blocked,
+            validation=validation,
+            autonomy=autonomy,
+            information_request=info,
+            needs_information=bool(info and info.needed),
+            telemetry=telemetry,
+            trace=trace,
+            multi_line=True,
+            line_analyses=analyses,
         )
         self._get_store().save(
             ApprovalRecord(result=result, submission=self._archive_documents(model))
@@ -411,29 +703,62 @@ class SubmissionService:
     def _prior_submission_for(
         self, model: SubmissionInput, prior_records: list[ApprovalRecord]
     ) -> dict | None:
-        """The insured's most recent prior stored submission, as the
-        bundle renewal diffing consumes: the stored payload plus the
-        prior run's computed facts and triage (``diffing.py``).
+        """The insured's most recent prior stored submission **for
+        this line**, as the renewal diffing consumes it: the stored
+        payload plus the prior run's computed facts and triage
+        (``diffing.py``).
 
-        ``prior_records`` is store-ordered (oldest first) and already
-        excludes this submission id, so the last insured match is
-        the most recent prior. None when this insured has never
-        submitted — a first submission has nothing to diff against.
+        The match is keyed by line — a property renewal diffs against
+        the last property submission, never against the account's
+        cyber history. A prior *bundle* contributes its matching
+        line (payload rebuilt by the same split that produced it,
+        facts from that line's stored sub-analysis); a prior
+        single-line submission contributes itself when its line
+        matches. ``prior_records`` is store-ordered (oldest first)
+        and already excludes this submission id, so the last match
+        is the most recent prior. None when this insured has never
+        submitted this line — a first submission has nothing to
+        diff against.
         """
+        from .facts import normalize_line
+
         if not model.insured_name:
             return None
+        target = normalize_line(model.line_of_business)
         for record in reversed(prior_records):
             insured = record.result.insured_name or record.submission.get(
                 "insured_name", ""
             )
             if insured != model.insured_name or not record.submission:
                 continue
+            payload = record.submission
+            if payload.get("lines"):
+                try:
+                    prior_model = SubmissionInput.model_validate(payload)
+                except Exception:
+                    continue
+                for sub, analysis in zip(
+                    split_bundle(prior_model), record.result.line_analyses
+                ):
+                    if normalize_line(sub.line_of_business) != target:
+                        continue
+                    return {
+                        "submission_id": analysis.submission_id or sub.submission_id,
+                        "submitted_at": sub.submitted_at,
+                        "outcome": analysis.result.triage.outcome,
+                        "risk_tier": analysis.result.triage.risk_tier,
+                        "submission": sub.model_dump(mode="json"),
+                        "facts": analysis.result.facts.model_dump(mode="json"),
+                    }
+                continue
+            if normalize_line(payload.get("line_of_business", "")) != target:
+                continue
             return {
                 "submission_id": record.result.submission_id,
-                "submitted_at": record.submission.get("submitted_at", ""),
+                "submitted_at": payload.get("submitted_at", ""),
                 "outcome": record.result.triage.outcome,
                 "risk_tier": record.result.triage.risk_tier,
-                "submission": record.submission,
+                "submission": payload,
                 "facts": record.result.facts.model_dump(mode="json"),
             }
         return None

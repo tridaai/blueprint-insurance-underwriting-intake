@@ -553,5 +553,99 @@
     "submission_id": "SUB-1013",
     "submitted_at": "2026-10-09",
     "years_in_business": 12
+  },
+  {
+    "broker_email_text": "Please find the bundled submission for Willow Creek Hospitality Group \u2014 property for the three hotels and cyber for the group's payment systems. Multi-factor authentication is enforced across the group, including remote access. Loss runs for each line are attached.",
+    "broker_name": "Meridian Wholesale Brokers",
+    "class_of_business": "",
+    "documents": [
+      {
+        "doc_type": "application",
+        "document_id": "sub1014-app",
+        "fields": {
+          "insured_name": "Willow Creek Hospitality Group"
+        },
+        "raw_text": "ACORD application: Willow Creek Hospitality Group, multi-line account submission covering property and cyber lines."
+      }
+    ],
+    "effective_date_requested": "2026-12-01",
+    "insured_name": "Willow Creek Hospitality Group",
+    "line_of_business": "",
+    "lines": [
+      {
+        "class_of_business": "hotels and lodging",
+        "documents": [
+          {
+            "doc_type": "statement of values",
+            "document_id": "sub1014-prop-sov",
+            "fields": {
+              "insured_name": "Willow Creek Hospitality Group"
+            },
+            "raw_text": "Statement of values: Hotel 1 $2,300,000; Hotel 2 $1,250,000; Hotel 3 $950,000. Construction: masonry, built in 1998, sprinklered throughout."
+          },
+          {
+            "doc_type": "loss runs",
+            "document_id": "sub1014-prop-lr",
+            "fields": {
+              "loss_history_present": "yes"
+            },
+            "raw_text": "Carrier loss runs, 2023-2026: no losses, no claims reported in the period."
+          }
+        ],
+        "effective_date_requested": "",
+        "line_of_business": "property",
+        "losses": [],
+        "prior_carrier": "",
+        "requested_deductible": "25000",
+        "requested_limit": "4500000",
+        "revenue": null,
+        "years_in_business": null
+      },
+      {
+        "class_of_business": "hotels and lodging \u2014 payment card systems",
+        "documents": [
+          {
+            "doc_type": "loss runs",
+            "document_id": "sub1014-cyb-lr",
+            "fields": {
+              "loss_history_present": "yes"
+            },
+            "raw_text": "Loss runs 2023-2026: two cyber claims \u2014 a ransomware incident in May 2025 ($275,000 incurred, closed) and a business email compromise in January 2026 ($18,000, recovered in full)."
+          }
+        ],
+        "effective_date_requested": "",
+        "line_of_business": "cyber",
+        "losses": [
+          {
+            "amount_incurred": 275000,
+            "claim_id": "WC-2025-041",
+            "date": "2025-05-20",
+            "description": "Ransomware incident \u2014 reservation system encrypted, forensic response and restoration",
+            "status": "closed"
+          },
+          {
+            "amount_incurred": 18000,
+            "claim_id": "WC-2026-003",
+            "date": "2026-01-12",
+            "description": "Business email compromise \u2014 fraudulent vendor payment, recovered in full",
+            "status": "closed"
+          }
+        ],
+        "prior_carrier": "",
+        "requested_deductible": "50000",
+        "requested_limit": "3000000",
+        "revenue": null,
+        "years_in_business": null
+      }
+    ],
+    "losses": [],
+    "notes": "Three hotels, masonry construction, built in 1998, sprinklered throughout; roofs updated 2023. Cyber covers the central reservation and payment systems.",
+    "prior_carrier": "Sentinel Mutual",
+    "requested_deductible": "",
+    "requested_limit": "",
+    "revenue": 42000000,
+    "submission_id": "SUB-1014",
+    "submitted_at": "2026-10-08",
+    "years_in_business": 14
   }
 ]

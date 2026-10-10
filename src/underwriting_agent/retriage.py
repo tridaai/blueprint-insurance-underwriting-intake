@@ -58,6 +58,14 @@ def guideline_change_impact(
         result = record.result
         if result.status != "awaiting_underwriter":
             continue  # decided work is history; the queue is the scope
+        if (record.submission or {}).get("lines"):
+            # A multi-line bundle triages per line and gates as a
+            # bundle; a single rules pass over the bundle payload
+            # would compare fiction against the roll-up. Per-line
+            # change impact is a report of its own — until it
+            # exists, bundles are counted as skipped, never misread.
+            skipped += 1
+            continue
         try:
             sub = SubmissionInput.model_validate(record.submission)
         except Exception:

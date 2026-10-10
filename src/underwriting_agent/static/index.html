@@ -239,6 +239,23 @@ function render(result) {
     ${t.referral_triggers.length ? `<dt>Referral triggers</dt><dd>${t.referral_triggers.map(esc).join('; ')}</dd>` : ''}
     ${result.cross_check ? `<dt>Cross-check</dt><dd>rules=${esc(result.cross_check.rule_outcome)} vs llm=${esc(result.cross_check.llm_outcome ?? 'unavailable')} → <strong>${esc(result.cross_check.resolution)}</strong> — ${esc(result.cross_check.note)}</dd>` : ''}
   </dl>`;
+  if (result.multi_line && result.line_analyses && result.line_analyses.length) {
+    html += `<h3>Lines in this bundle</h3><table><thead><tr><th>Line</th><th>Triage</th><th>Readiness</th><th>Completeness</th><th>Since last submission</th></tr></thead><tbody>
+    ${result.line_analyses.map(a => { const lr = a.result, d = lr.submission_diff;
+      let diffText = 'first submission of this line';
+      if (d) {
+        const parts = [`vs ${esc(d.prior_submission_id)}: ${d.changes.length} field change(s)`];
+        const dev = d.loss_development;
+        if (dev) {
+          if (dev.appeared.length) parts.push(`${dev.appeared.length} claim(s) appeared`);
+          if (dev.disappeared.length) parts.push(`${dev.disappeared.length} no longer listed`);
+          if (dev.developed.length) parts.push(`${dev.developed.length} developed`);
+        }
+        diffText = parts.join(' · ');
+      }
+      return `<tr><td>${esc(a.line_of_business)} <span class="note">(${esc(a.submission_id)})</span></td><td>${esc(lr.triage.outcome)} / ${esc(lr.triage.risk_tier)}</td><td>${esc(lr.facts.readiness)}</td><td>${esc(lr.facts.completeness_score)}</td><td>${diffText}</td></tr>`; }).join('')}
+    </tbody></table><p class="note">One gate decides the bundle — the lines are sections of the packet below, not separate decisions.</p>`;
+  }
   html += `<h3>Computed facts (code, never the model)</h3><dl class="kv">
     <dt>Completeness</dt><dd>${esc(f.completeness_score)} ${f.missing_elements.length ? '· missing: ' + f.missing_elements.map(esc).join(', ') : ''}</dd>
     ${f.gap_sources && f.gap_sources.length ? `<dt>Readiness gaps</dt><dd>${f.gap_sources.map(esc).join('; ')}</dd>` : ''}

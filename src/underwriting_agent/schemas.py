@@ -116,6 +116,43 @@ class LossRecord(BaseModel):
         return float(v or 0)
 
 
+def _coerce_optional_number(v: Any) -> Any:
+    if isinstance(v, str):
+        v = v.replace(",", "").replace("$", "").strip()
+        if v == "":
+            return None
+        return float(v)
+    return v
+
+
+class LineInput(BaseModel):
+    """One line of business inside a multi-line (bundled) submission.
+
+    Real broker submissions bundle lines — property + cyber on one
+    account. The bundle carries the shared context (insured, broker,
+    email, notes, submitted date); each line carries what is
+    line-specific: its own limit/deductible asks, its own documents,
+    its own loss run. Fields left empty fall back to the bundle-level
+    values when the service splits the bundle (see ``bundles.py``).
+    """
+
+    line_of_business: str
+    class_of_business: str = ""
+    requested_limit: str = ""
+    requested_deductible: str = ""
+    effective_date_requested: str = ""
+    revenue: Optional[float] = None
+    years_in_business: Optional[float] = None
+    prior_carrier: str = ""
+    documents: list[DocumentInput] = Field(default_factory=list)
+    losses: list[LossRecord] = Field(default_factory=list)
+
+    @field_validator("revenue", "years_in_business", mode="before")
+    @classmethod
+    def _num_opt(cls, v: Any) -> Any:
+        return _coerce_optional_number(v)
+
+
 class SubmissionInput(BaseModel):
     submission_id: str
     insured_name: str = ""
@@ -133,16 +170,18 @@ class SubmissionInput(BaseModel):
     requested_deductible: str = ""
     documents: list[DocumentInput] = Field(default_factory=list)
     losses: list[LossRecord] = Field(default_factory=list)
+    # Multi-line bundles: when non-empty, this submission is a
+    # bundle and ``lines`` is the intake of record — the service
+    # splits it into one sub-analysis per line (sharing the insured
+    # context above) and rolls the lines into one combined packet
+    # with one underwriter gate. The bundle-level line/limit/loss
+    # fields then act as fallbacks for lines that leave them empty.
+    lines: list[LineInput] = Field(default_factory=list)
 
     @field_validator("revenue", "years_in_business", mode="before")
     @classmethod
     def _num_opt(cls, v: Any) -> Any:
-        if isinstance(v, str):
-            v = v.replace(",", "").replace("$", "").strip()
-            if v == "":
-                return None
-            return float(v)
-        return v
+        return _coerce_optional_number(v)
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +500,30 @@ class AgentResult(BaseModel):
     dispatch_attempts: list[DispatchAttempt] = Field(default_factory=list)
     external_action_taken: bool = False
     error: Optional[str] = None
+    # Multi-line bundles: the per-line sub-analyses this result rolls
+    # up (empty for a single-line submission). The bundle's own
+    # triage/facts/drafts are the roll-up — worst line drives the
+    # outcome — and there is exactly one gate, on the bundle.
+    multi_line: bool = False
+    line_analyses: list["LineAnalysis"] = Field(default_factory=list)
+
+
+class LineAnalysis(BaseModel):
+    """One line's sub-analysis inside a multi-line bundle result.
+
+    The full per-line result rides along — its own triage, facts
+    (readiness), renewal diff (keyed to this line's prior), drafts,
+    and checks — so the underwriter reads the bundle as one packet
+    with per-line sections, and a later renewal can diff against
+    this line specifically.
+    """
+
+    line_of_business: str = ""
+    submission_id: str = ""  # the sub-analysis id, e.g. SUB-1014-PROPERTY
+    result: AgentResult
+
+
+AgentResult.model_rebuild()
 
 
 class AnalyzeRequest(BaseModel):

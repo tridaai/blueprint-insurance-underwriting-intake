@@ -7,6 +7,12 @@ risk-tier accuracy. All cases are synthetic. Run from the repo root:
     python evals/run_evals.py
 
 Exit code is 0 when outcome accuracy >= 95%, 1 otherwise (the gate).
+
+Multi-line bundle cases (a submission carrying ``lines``) run through
+the service layer — the bundle split lives there — and may pin
+per-line expectations via ``expected_lines``; a bundle case's
+``prior_submission`` is analysed into the same throwaway store first,
+so per-line renewal diffs are scored too.
 """
 
 from __future__ import annotations
@@ -21,6 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from underwriting_agent.graph import run_submission  # noqa: E402
 from underwriting_agent.schemas import SubmissionInput  # noqa: E402
+from underwriting_agent.service import SubmissionService  # noqa: E402
+from underwriting_agent.store import InMemoryStore  # noqa: E402
 
 GOLDEN = Path(__file__).resolve().parent / "golden.jsonl"
 THRESHOLD = 0.95
@@ -75,7 +83,9 @@ def evaluate(cases: list[dict]) -> dict:
     guardrail check name to the pass/fail the run's validation must
     show (e.g. a broker pressuring for forward motion must end with
     ``no_forward_motion_in_letter: false``). Those are scored too
-    and reported alongside the triage accuracy.
+    and reported alongside the triage accuracy. Bundle cases may
+    carry ``expected_lines`` — per-line outcome/tier expectations,
+    scored through the same checks accounting.
     """
     outcome_correct = 0
     tier_correct = 0
@@ -86,8 +96,15 @@ def evaluate(cases: list[dict]) -> dict:
     failures: list[str] = []
 
     for case in cases:
-        submission = SubmissionInput.model_validate(case["submission"])
-        result = run_submission(submission, prior_submission=_prior_bundle(case))
+        if (case["submission"] or {}).get("lines"):
+            # Bundle case: the split + roll-up live in the service.
+            service = SubmissionService(store=InMemoryStore(), checkpointer=False)
+            if case.get("prior_submission"):
+                service.analyze(case["prior_submission"])
+            result = service.analyze(case["submission"])
+        else:
+            submission = SubmissionInput.model_validate(case["submission"])
+            result = run_submission(submission, prior_submission=_prior_bundle(case))
         expected_outcome = case["expected_outcome"]
         per_outcome_total[expected_outcome] += 1
         if result.triage.outcome == expected_outcome:
@@ -120,6 +137,33 @@ def evaluate(cases: list[dict]) -> dict:
                         f"{'pass' if expected else 'fail'}, got "
                         f"{actual.get(name)}"
                     )
+        expected_lines = case.get("expected_lines") or {}
+        if expected_lines:
+            actual_lines = {
+                a.line_of_business: a.result for a in result.line_analyses
+            }
+            for line, expectation in expected_lines.items():
+                line_result = actual_lines.get(line)
+                for key, field in (
+                    ("outcome", "outcome"),
+                    ("tier", "risk_tier"),
+                ):
+                    want = expectation.get(key)
+                    if want is None:
+                        continue
+                    checks_total += 1
+                    got = (
+                        getattr(line_result.triage, field)
+                        if line_result is not None
+                        else None
+                    )
+                    if got == want:
+                        checks_correct += 1
+                    else:
+                        failures.append(
+                            f"{case['case_id']}: line {line} expected "
+                            f"{key} {want}, got {got}"
+                        )
 
     total = len(cases)
     return {

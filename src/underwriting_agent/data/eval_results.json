@@ -1,18 +1,18 @@
 {
   "dataset": "golden.jsonl (synthetic)",
-  "generated_at": "2026-10-10T13:46:02+00:00",
-  "total": 39,
-  "outcome_match": "39/39",
-  "tier_match": "39/39",
-  "checks_match": "5/5",
-  "outcome_correct": 39,
+  "generated_at": "2026-10-10T13:51:07+00:00",
+  "total": 41,
+  "outcome_match": "41/41",
+  "tier_match": "41/41",
+  "checks_match": "13/13",
+  "outcome_correct": 41,
   "outcome_accuracy": 1.0,
-  "tier_correct": 39,
+  "tier_correct": 41,
   "tier_accuracy": 1.0,
   "per_outcome": {
     "borderline": {
-      "correct": 15,
-      "total": 15,
+      "correct": 17,
+      "total": 17,
       "accuracy": 1.0
     },
     "in_appetite": {
