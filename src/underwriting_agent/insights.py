@@ -970,8 +970,28 @@ _FOLLOW_STATE_RANK = {
 }
 
 
+#: Follow-through states in which a note's loop is still open —
+#: the states an aged note escalates from. (``answered`` is a
+#: closed loop; ``not_recorded`` is a bookkeeping gap, not a loop
+#: anyone is waiting on.)
+_FOLLOW_OPEN_STATES = ("still_outstanding", "partially_answered", "awaiting_resubmission")
+
+#: Days a status note's loop may stay open before the digest
+#: escalates it (FOLLOW_THROUGH_ESCALATION_DAYS overrides).
+DEFAULT_FOLLOW_THROUGH_ESCALATION_DAYS = 14
+
+
+def follow_through_escalation_days() -> int:
+    return max(
+        0, env_int("FOLLOW_THROUGH_ESCALATION_DAYS", DEFAULT_FOLLOW_THROUGH_ESCALATION_DAYS)
+    )
+
+
 def follow_through_digest(
-    records: list[ApprovalRecord], now: datetime | None = None
+    records: list[ApprovalRecord],
+    now: datetime | None = None,
+    *,
+    escalation_days: int | None = None,
 ) -> dict:
     """Every drafted status note, digested by follow-through state.
 
@@ -987,8 +1007,19 @@ def follow_through_digest(
     so the loop that has been open longest is the one the
     underwriter sees first. Pure projection — nothing is written,
     and a note's text is never touched.
+
+    An open loop also **ages**: an entry whose note has been
+    waiting at least ``FOLLOW_THROUGH_ESCALATION_DAYS`` (default
+    14) is flagged ``escalated`` and listed again in the digest's
+    ``escalated`` subset. Escalation is the note's own flag, not
+    an SLA breach — the underlying case may be long decided
+    while its note rots — and it is what the ops digest (see
+    :func:`ops_digest`) works from, so an unanswered note is
+    worked, not just visible.
     """
     now = now or datetime.now(timezone.utc)
+    if escalation_days is None:
+        escalation_days = follow_through_escalation_days()
     entries: list[dict] = []
     for record in records:
         note = record.status_note
@@ -1019,16 +1050,22 @@ def follow_through_digest(
             still = _outstanding_entries(note)
             by_submission_id = ""
             checked_at = ""
+        note_age_days = (
+            max(0, (now.date() - drafted.date()).days)
+            if drafted is not None
+            else None
+        )
         entries.append(
             {
                 "submission_id": result.submission_id,
                 "insured_name": party["insured_name"],
                 "broker_name": party["broker_name"],
                 "drafted_at": drafted_raw,
-                "note_age_days": (
-                    max(0, (now.date() - drafted.date()).days)
-                    if drafted is not None
-                    else None
+                "note_age_days": note_age_days,
+                "escalated": bool(
+                    state in _FOLLOW_OPEN_STATES
+                    and note_age_days is not None
+                    and note_age_days >= escalation_days
                 ),
                 "state": state,
                 "outstanding_at_drafting": len(_outstanding_entries(note)),
@@ -1048,11 +1085,15 @@ def follow_through_digest(
     counts: dict[str, int] = {}
     for entry in entries:
         counts[entry["state"]] = counts.get(entry["state"], 0) + 1
+    escalated = [e for e in entries if e["escalated"]]
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "total_notes": len(entries),
         "counts": counts,
         "entries": entries,
+        "escalation_days": escalation_days,
+        "escalated_count": len(escalated),
+        "escalated": escalated,
     }
 
 
