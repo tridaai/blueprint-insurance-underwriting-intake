@@ -75,18 +75,24 @@
       <h2>Inbox &amp; scorecards</h2>
       <div id="inbox" class="empty">Loading…</div>
       <div id="quality" style="margin-top:10px"></div>
+      <div id="timeline" style="margin-top:10px"></div>
       <div class="row" style="margin-top:10px"><button id="refresh-inbox">Refresh</button>
       <span class="note">From the store of record — analyze submissions to populate.</span></div>
     </section>
     <section>
-      <h2>Queue aging</h2>
+      <h2>Queue aging &amp; SLA</h2>
       <div id="queue" class="empty">Loading…</div>
+      <div id="queue-note" style="margin-top:10px"></div>
     </section>
     <section>
       <h2>Dispatch ops</h2>
       <div id="dispatch" class="empty">Loading…</div>
       <div class="row" style="margin-top:10px"><button id="retry-due">Retry all due</button>
       <span class="note" id="dispatch-status"></span></div>
+    </section>
+    <section>
+      <h2>Diff-trigger calibration</h2>
+      <div id="calibration" class="empty">Loading…</div>
     </section>
     <section>
       <h2>How it works</h2>
@@ -180,9 +186,12 @@ async function loadInbox() {
       if (t.direction === 'flat') return ' <span title="Approval-rate trend: recent decisions vs earlier decisions">→ flat</span>';
       return '';
     };
-    const groupTable = (groups, kind) => groups.length ? `<table><thead><tr><th>${kind === 'broker' ? 'Broker' : 'Insured'}</th><th>#</th><th>Latest</th><th>Approval rate</th><th>Avg completeness</th>${kind === 'broker' ? '<th></th>' : ''}</tr></thead><tbody>
+    const groupTable = (groups, kind) => groups.length ? `<table><thead><tr><th>${kind === 'broker' ? 'Broker' : 'Insured'}</th><th>#</th><th>Latest</th><th>Approval rate</th><th>Avg completeness</th><th></th></tr></thead><tbody>
       ${groups.map(g => { const c = cardByName[kind + ':' + g.name];
-        const main = `<tr><td><button data-expand title="Show this group's submissions">▸</button> ${esc(g.name)}</td><td>${esc(g.submission_count)}</td><td>${esc(g.latest_outcome)} / ${esc(g.latest_risk_tier)} · ${esc(g.latest_readiness)}</td><td>${c && c.approval_rate !== null && c.approval_rate !== undefined ? esc(c.approval_rate) + trendMark(c.approval_trend) : '—'}</td><td>${c ? esc(c.avg_completeness) : '—'}</td>${kind === 'broker' ? `<td><button data-quality="${esc(g.name)}">Quality draft</button></td>` : ''}</tr>`;
+        const action = kind === 'broker'
+          ? `<td><button data-quality="${esc(g.name)}">Quality draft</button></td>`
+          : `<td><button data-timeline="${esc(g.name)}">Loss timeline</button></td>`;
+        const main = `<tr><td><button data-expand title="Show this group's submissions">▸</button> ${esc(g.name)}</td><td>${esc(g.submission_count)}</td><td>${esc(g.latest_outcome)} / ${esc(g.latest_risk_tier)} · ${esc(g.latest_readiness)}</td><td>${c && c.approval_rate !== null && c.approval_rate !== undefined ? esc(c.approval_rate) + trendMark(c.approval_trend) : '—'}</td><td>${c ? esc(c.avg_completeness) : '—'}</td>${action}</tr>`;
         const subs = (g.submissions || []).map(s => `${esc(s.submission_id)} — ${esc(s.outcome)} / ${esc(s.risk_tier)} · ${esc(s.status)}${s.submitted_at ? ' · ' + esc(s.submitted_at) : ''}`).join('<br>');
         return main + `<tr class="detail" style="display:none"><td colspan="6">${subs || 'No submissions.'}</td></tr>`; }).join('')}
       </tbody></table>` : '<p class="empty">none yet</p>';
@@ -193,6 +202,8 @@ async function loadInbox() {
        <h3>Insureds</h3>${groupTable(inbox.insureds || [], 'insured')}`;
     document.querySelectorAll('[data-quality]').forEach(btn =>
       btn.addEventListener('click', () => showQuality(btn.getAttribute('data-quality'))));
+    document.querySelectorAll('[data-timeline]').forEach(btn =>
+      btn.addEventListener('click', () => showTimeline(btn.getAttribute('data-timeline'))));
     document.querySelectorAll('[data-expand]').forEach(btn =>
       btn.addEventListener('click', () => {
         const detail = btn.closest('tr').nextElementSibling;
@@ -219,6 +230,31 @@ async function showQuality(broker) {
   }
 }
 
+async function showTimeline(insured) {
+  const box = $('timeline');
+  box.innerHTML = '<span class="empty">Chaining the renewal diffs…</span>';
+  try {
+    const res = await fetch('/insureds/' + encodeURIComponent(insured) + '/loss-timeline', {headers: headers()});
+    if (!res.ok) throw new Error('none');
+    const t = await res.json();
+    const money = v => v === null || v === undefined ? '—' : (v > 0 ? '+' : '') + esc(v);
+    const entryLine = e => {
+      const ev = [];
+      if (e.events.appeared) ev.push(esc(e.events.appeared) + ' appeared');
+      if (e.events.developed) ev.push(esc(e.events.developed) + ' developed');
+      if (e.events.no_longer_listed) ev.push(esc(e.events.no_longer_listed) + ' no longer listed');
+      return `<li>${esc(e.submission_id)} (${esc(e.line_of_business)})${e.submitted_at ? ' · ' + esc(e.submitted_at) : ''} — ${esc(e.loss_summary.claim_count)} claim(s), incurred ${esc(e.loss_summary.total_incurred)}${e.prior_submission_id ? ` · vs ${esc(e.prior_submission_id)}: net ${money(e.net_incurred_change)}${ev.length ? ' (' + ev.join(', ') + ')' : ''}` : ' · first submission of this line'}</li>`;
+    };
+    const claimLine = c => `<li>${esc(c.date || 'date not stated')} — ${esc(c.description || 'no description')} · first seen ${esc(c.first_seen_submission_id)} · ${esc(c.state === 'no_longer_listed' ? 'no longer listed' : 'on latest run')}, latest incurred ${esc(c.latest_incurred)} (${esc(c.latest_status || 'status not stated')})<br><span class="note">${c.events.map(e => esc(e.type) + ' @ ' + esc(e.submission_id) + (e.type === 'developed' ? `: ${esc(e.prior_incurred)} → ${esc(e.incurred)}` : `: ${esc(e.incurred)}`)).join(' · ')}</span></li>`;
+    box.innerHTML = `<h3>Loss-development timeline — ${esc(t.insured)}</h3>
+      <p class="note">${esc(t.submissions)} submission(s) · ${esc(t.totals.renewals)} renewal diff(s) chained · ${esc(t.totals.claims_tracked)} claim(s) tracked · cumulative net incurred movement ${money(t.totals.cumulative_net_incurred_change)}. Chained from the stored diffs — reported, never recomputed.</p>
+      <ul>${t.entries.map(entryLine).join('')}</ul>
+      ${t.claims.length ? `<h3>Claims</h3><ul>${t.claims.map(claimLine).join('')}</ul>` : '<p class="empty">No claim movement yet — claims enter the timeline when a renewal diff moves them.</p>'}`;
+  } catch (e) {
+    box.innerHTML = '<span class="empty">Loss timeline unavailable.</span>';
+  }
+}
+
 async function loadQueue() {
   try {
     const res = await fetch('/queue', {headers: headers()});
@@ -228,14 +264,61 @@ async function loadQueue() {
       $('queue').innerHTML = '<span class="empty">Nothing awaiting an underwriter.</span>';
       return;
     }
+    const budgets = q.sla_budgets || {};
+    const budgetText = Object.keys(budgets).map(t => `${t} ${budgets[t]}d`).join(' · ');
+    const blockedItems = (q.buckets || []).flatMap(b => b.submissions || []).filter(i => i.blocking_lines && i.blocking_lines.length);
     $('queue').innerHTML =
       `<table><thead><tr><th>Age</th><th>Awaiting</th></tr></thead><tbody>
        ${q.buckets.map(b => `<tr><td>${esc(b.bucket)}</td><td>${esc(b.count)}</td></tr>`).join('')}
        </tbody></table>
        ${q.oldest ? `<p class="note">Oldest: ${esc(q.oldest.submission_id)} — ${esc(q.oldest.insured_name)}, ${esc(q.oldest.age_days)} day(s), ${esc(q.oldest.outcome)} / ${esc(q.oldest.risk_tier)}.</p>` : ''}
+       <p class="note">SLA budgets by risk tier: ${esc(budgetText)} — ${q.breach_count ? `<span class="flag">${esc(q.breach_count)} breached</span>` : 'no breaches'}${q.blocked_bundles ? ` · ${esc(q.blocked_bundles)} bundle(s) blocked on a line` : ''}.</p>
+       ${q.breaches && q.breaches.length ? `<table><thead><tr><th>Breached</th><th>Tier</th><th>Age / budget</th><th></th></tr></thead><tbody>
+       ${q.breaches.map(i => `<tr><td>${esc(i.submission_id)}<br><span class="note">${esc(i.insured_name)}</span></td><td>${esc(i.risk_tier)}</td><td>${esc(i.age_days)}d / ${esc(i.sla_budget_days)}d (${esc(i.sla_days_over)}d over)</td><td><button data-note="${esc(i.submission_id)}">Draft status note</button></td></tr>`).join('')}
+       </tbody></table>` : ''}
+       ${blockedItems.length ? `<p class="note">Blocked on lines:<br>${blockedItems.map(i => `${esc(i.submission_id)} — ` + i.blocking_lines.map(b => `${esc(b.line_of_business)} (${esc(b.age_days)}d waiting; missing: ${b.missing_items.map(esc).join(', ') || '—'})`).join('<br>')).join('<br>')}</p>` : ''}
        ${q.unknown_age && q.unknown_age.length ? `<p class="note">Unparseable submitted date: ${q.unknown_age.map(esc).join(', ')}</p>` : ''}`;
+    document.querySelectorAll('[data-note]').forEach(btn =>
+      btn.addEventListener('click', () => draftNote(btn.getAttribute('data-note'))));
   } catch (e) {
     $('queue').innerHTML = '<span class="empty">Queue unavailable.</span>';
+  }
+}
+
+async function draftNote(submissionId) {
+  const box = $('queue-note');
+  box.innerHTML = '<span class="empty">Drafting the status note…</span>';
+  try {
+    const res = await fetch(`/submissions/${submissionId}/status-note`, {method: 'POST', headers: headers()});
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || ('Error ' + res.status));
+    box.innerHTML = `<h3>Status note — ${esc(body.submission_id)} (internal draft, not sent)</h3>
+      <p class="note">SLA at drafting: ${esc(body.sla.age_days)} day(s) in queue against a ${esc(body.sla.budget_days)}-day ${esc(body.sla.risk_tier)} budget · guardrails ${body.validation && body.validation.passed ? '<span class="check-pass">PASS</span>' : '<span class="check-fail">FAIL</span>'} · stored on the record.</p>
+      <pre>${esc(body.text)}</pre>`;
+  } catch (e) {
+    box.innerHTML = '<span class="empty">Status note unavailable: ' + esc(e.message || e) + '</span>';
+  }
+}
+
+async function loadCalibration() {
+  try {
+    const res = await fetch('/guidelines/diff-trigger-calibration', {headers: headers()});
+    if (!res.ok) throw new Error('none');
+    const c = await res.json();
+    if (!c.renewals) {
+      $('calibration').innerHTML = '<span class="empty">No stored renewals yet — analyze an insured twice to calibrate against.</span>';
+      return;
+    }
+    const fams = fc => Object.keys(fc || {}).map(k => `${k} ×${fc[k]}`).join(', ') || 'none';
+    const dimName = d => ({limit_jump_pct: 'Limit jump %', new_claim_min_incurred: 'New-claim floor $', development_min_increase: 'Development floor $'})[d] || d;
+    $('calibration').innerHTML =
+      `<p class="note">${esc(c.renewals)} stored renewal(s) replayed. At the configured thresholds (${esc(c.current_thresholds.limit_jump_pct)}% / $${esc(c.current_thresholds.new_claim_min_incurred)} / $${esc(c.current_thresholds.development_min_increase)}): <strong>${esc(c.at_current.referrals)} referral(s)</strong> (${esc(fams(c.at_current.family_counts))}). Recorded at analysis time: ${esc(c.recorded_at_analysis.referrals)} (${esc(fams(c.recorded_at_analysis.family_counts))}).</p>
+       ${c.sweeps.map(s => `<h3>${esc(dimName(s.dimension))}</h3><table><thead><tr><th>Setting</th><th>Referrals</th><th>vs current</th><th>Families</th></tr></thead><tbody>
+       ${s.rows.map(r => `<tr><td>${esc(r.value)}${r.is_current ? ' (current)' : ''}</td><td>${esc(r.referrals)}</td><td>${r.delta_vs_current > 0 ? '+' + esc(r.delta_vs_current) : esc(r.delta_vs_current)}</td><td>${esc(fams(r.family_counts))}</td></tr>`).join('')}
+       </tbody></table>`).join('')}
+       <p class="note">Read-only what-if — one knob at a time, the others at the configured values. Reading this changes no threshold and no record.</p>`;
+  } catch (e) {
+    $('calibration').innerHTML = '<span class="empty">Calibration unavailable.</span>';
   }
 }
 
@@ -386,6 +469,7 @@ async function analyze() {
   loadInbox();
   loadQueue();
   loadDispatch();
+  loadCalibration();
 }
 
 async function decide(path) {
@@ -402,19 +486,21 @@ async function decide(path) {
   loadInbox();
   loadQueue();
   loadDispatch();
+  loadCalibration();
   $('gate-section').style.display = 'none';
 }
 
 $('analyze').addEventListener('click', analyze);
 $('approve').addEventListener('click', () => decide('approve'));
 $('reject').addEventListener('click', () => decide('reject'));
-$('refresh-inbox').addEventListener('click', () => { loadInbox(); loadQueue(); loadDispatch(); });
+$('refresh-inbox').addEventListener('click', () => { loadInbox(); loadQueue(); loadDispatch(); loadCalibration(); });
 $('retry-due').addEventListener('click', retryDue);
 loadSamples();
 loadEvals();
 loadInbox();
 loadQueue();
 loadDispatch();
+loadCalibration();
 </script>
 </body>
 </html>
