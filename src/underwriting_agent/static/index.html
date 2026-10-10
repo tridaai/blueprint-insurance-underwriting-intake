@@ -83,7 +83,7 @@
     <section>
       <h2>Queue aging &amp; SLA</h2>
       <div id="queue" class="empty">Loading…</div>
-      <div class="row" style="margin-top:10px"><button id="notify-breaches">Notify SLA breaches</button>
+      <div class="row" style="margin-top:10px"><button id="notify-breaches">Run notification sweep</button>
       <span class="note" id="sla-notify-status"></span></div>
       <div id="queue-note" style="margin-top:10px"></div>
     </section>
@@ -324,16 +324,25 @@ async function loadQueue() {
 }
 
 async function notifyBreaches() {
-  $('sla-notify-status').textContent = 'Checking the queue for breaches…';
+  $('sla-notify-status').textContent = 'Running the notification sweep — breaches, then escalations…';
   const res = await fetch('/queue/sla-notifications', {method: 'POST', headers: headers()});
   const body = await res.json().catch(() => ({}));
   if (!res.ok) { $('sla-notify-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
   const fired = (body.fired || []).map(f => `${f.submission_id} → ${f.dispatch_status}`).join(', ');
-  $('sla-notify-status').textContent =
+  let text =
     `${body.breaches} breached · fired ${body.fired.length}${fired ? ' (' + fired + ')' : ''}` +
     (body.already_notified && body.already_notified.length ? ` · already notified: ${body.already_notified.join(', ')}` : '') +
     (body.unannounced_no_webhook && body.unannounced_no_webhook.length ? ` · not announced (no ACTION_WEBHOOK_URL): ${body.unannounced_no_webhook.join(', ')}` : '');
+  const escReport = body.escalations;
+  if (escReport) {
+    const escFired = (escReport.fired || []).map(f => `${f.submission_id} → ${f.dispatch_status}`).join(', ');
+    text += ` · escalations: ${escReport.escalations} past the second rung · fired ${escReport.fired.length}${escFired ? ' (' + escFired + ')' : ''}` +
+      (escReport.already_notified && escReport.already_notified.length ? ` · already notified: ${escReport.already_notified.join(', ')}` : '') +
+      (escReport.unannounced_no_webhook && escReport.unannounced_no_webhook.length ? ` · not announced (no ACTION_WEBHOOK_URL): ${escReport.unannounced_no_webhook.join(', ')}` : '');
+  }
+  $('sla-notify-status').textContent = text;
   loadQueue();
+  loadDispatch();
 }
 
 async function retryBreach(submissionId) {
@@ -423,7 +432,8 @@ async function loadSlaCalibration() {
     html += readyRows.length
       ? `<p class="note">Proposal-ready rows — candidate budgets whose moved cases are one-sided decided evidence. Drafting from a row stores a proposal carrying that row's evidence; the scan's best row is no longer the only door:</p><table><thead><tr><th>Tier</th><th>Row</th><th>Evidence</th><th></th></tr></thead><tbody>${readyRows.map(r => `<tr><td>${esc(r.tier)}</td><td>${esc(r.value)}d</td><td>${esc(r.moved)} decided case(s) would move (${esc(r.direction)} the budget)</td><td><button data-row-draft="${esc(r.tier)}:${esc(r.value)}">Draft proposal from this row</button></td></tr>`).join('')}</tbody></table>`
       : '<p class="note">No proposal-ready rows right now — no candidate budget carries a one-sided decided moved set.</p>';
-    html += `<div class="row" style="margin-top:8px"><button id="snapshot-calibration">Snapshot this calibration report</button><input id="calibration-label" type="text" placeholder="Label (optional) — e.g. post-budget-change" style="flex:1"><span class="note" id="calibration-snapshot-status">A kept report is dated and under your name, so a budget debate can cite the evidence as of a date. A label is the handle the debate cites — it rides the list and the diff.</span></div>`;
+    html += `<div class="row" style="margin-top:8px"><button id="snapshot-calibration">Snapshot this calibration report</button><input id="calibration-label" type="text" placeholder="Label (optional) — e.g. post-budget-change" style="flex:1"><span class="note" id="calibration-snapshot-status">A kept report is dated and under your name, so a budget debate can cite the evidence as of a date. A label is the handle the debate cites — it rides the list and the diff, and it is an address: one report per label, so a label already in use is refused with the labels in use named.</span></div>`;
+    html += `<div class="row" style="margin-top:6px"><input id="calibration-from-label" type="text" placeholder="From label — e.g. pre-change" style="flex:1"><input id="calibration-to-label" type="text" placeholder="To label — e.g. post-change" style="flex:1"><button id="diff-calibration-labels">Diff by label</button><span class="note" id="calibration-diff-status">Follow a citation: name the two kept reports by their labels; an unnamed side defaults to its positional partner, and the pair walks in keep order.</span></div><div id="calibration-label-diff" style="margin-top:6px"></div>`;
     html += `<div class="row" style="margin-top:6px"><label class="note">Keep newest <input id="calibration-keep" type="number" min="1" value="12" style="width:56px"> reports</label><button id="preview-prune-calibration">Preview prune</button><button id="prune-calibration">Prune kept reports</button><span class="note" id="calibration-prune-status">Same discipline as the digest snapshots: a prune is recorded on the document — who, when, what left, what survived. Preview shows exactly that, first, and writes nothing.</span></div>`;
     if (snaps.length) {
       html += `<p class="note">Kept reports:<br>${snaps.map(s => `${esc(s.snapshot_id)}${s.label ? ' — “' + esc(s.label) + '”' : ''} by ${esc(s.taken_by)} at ${esc(String(s.taken_at).slice(0, 10))} — proposal-ready rows: ${(s.tiers || []).map(t => `${esc(t.tier)} [${(t.proposal_ready_rows || []).join(', ') || '—'}]`).join(' · ')}`).join('<br>')}</p>`;
@@ -441,7 +451,9 @@ async function loadSlaCalibration() {
         if (t.proposal_ready_cleared && t.proposal_ready_cleared.length) moves.push(`${tier} rows no longer ready: ${t.proposal_ready_cleared.join(', ')}`);
         if (t.budget_in_force && t.budget_in_force.changed) moves.push(`${tier} budget ${t.budget_in_force.from}d → ${t.budget_in_force.to}d`);
       });
-      html += `<p class="note">Diff ${esc(d.from_snapshot)}${d.from_label ? ' (“' + esc(d.from_label) + '”)' : ''} → ${esc(d.to_snapshot)}${d.to_label ? ' (“' + esc(d.to_label) + '”)' : ''}: ${moves.length ? moves.join(' · ') : 'no proposal-ready movement'}.</p>`;
+      html += d.movement
+        ? `<p class="note">${esc(d.movement)}</p>`
+        : `<p class="note">Diff ${esc(d.from_snapshot)}${d.from_label ? ' (“' + esc(d.from_label) + '”)' : ''} → ${esc(d.to_snapshot)}${d.to_label ? ' (“' + esc(d.to_label) + '”)' : ''}: ${moves.length ? moves.join(' · ') : 'no proposal-ready movement'}.</p>`;
     }
     box.innerHTML = html;
     document.querySelectorAll('[data-row-draft]').forEach(btn =>
@@ -452,6 +464,8 @@ async function loadSlaCalibration() {
     if (pb) pb.addEventListener('click', pruneCalibrationSnapshots);
     const pvb = $('preview-prune-calibration');
     if (pvb) pvb.addEventListener('click', previewPruneCalibrationSnapshots);
+    const dbl = $('diff-calibration-labels');
+    if (dbl) dbl.addEventListener('click', diffCalibrationByLabel);
   } catch (e) {
     box.innerHTML = '<span class="empty">SLA calibration unavailable.</span>';
   }
@@ -499,6 +513,22 @@ async function draftFromRow(spec) {
   $('calibration-snapshot-status').textContent = `Drafted ${body.proposal_id} from the ${parts[0]} row at ${parts[1]}d — decide it in the proposals list above.`;
   loadProposals();
   loadSlaCalibration();
+}
+
+async function diffCalibrationByLabel() {
+  const from = $('calibration-from-label') ? $('calibration-from-label').value.trim() : '';
+  const to = $('calibration-to-label') ? $('calibration-to-label').value.trim() : '';
+  const box = $('calibration-label-diff');
+  const params = new URLSearchParams();
+  if (from) params.set('from_label', from);
+  if (to) params.set('to_label', to);
+  const res = await fetch('/queue/sla/calibration/snapshots/diff?' + params.toString(), {headers: headers()});
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('calibration-diff-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  if (!body.diff) { box.innerHTML = '<p class="note">No diff there — the named side is the only side there is.</p>'; return; }
+  const d = body.diff;
+  $('calibration-diff-status').textContent = `Diff ${d.from_snapshot}${d.from_label ? ' (“' + d.from_label + '”)' : ''} → ${d.to_snapshot}${d.to_label ? ' (“' + d.to_label + '”)' : ''}.`;
+  box.innerHTML = d.movement ? `<p class="note">${esc(d.movement)}</p>` : '';
 }
 
 async function snapshotCalibration() {
@@ -756,7 +786,7 @@ async function loadOpsDigest() {
        <tr><td>Exhausted breach notices</td><td>${c.exhausted_breach_notices ? `<span class="flag">${esc(c.exhausted_breach_notices)}</span>` : '0'}</td><td><span class="note">${(d.exhausted_breach_notices || []).map(i => `${esc(i.submission_id)} (breach ${esc(i.notice_age_days)}d ago, ${esc(i.attempts)} attempt(s))`).join(', ') || '—'}${(d.acknowledged_breach_notices && d.acknowledged_breach_notices.length) ? `<br>acknowledged — a human called: ${d.acknowledged_breach_notices.map(i => esc(i.submission_id)).join(', ')}` : ''}</span></td></tr>
        <tr><td>Acknowledged, still waiting</td><td>${c.acknowledged_still_waiting ? `<span class="flag">${esc(c.acknowledged_still_waiting)}</span>` : '0'}${c.acknowledged_escalated ? ` · <span class="flag">${esc(c.acknowledged_escalated)} escalated</span>` : ''}</td><td><span class="note">${(d.acknowledged_still_waiting || []).map(i => `${esc(i.submission_id)} (acknowledged ${esc(i.acknowledged_age_days)}d ago by ${esc((i.acknowledgement || {}).acknowledged_by || '—')} — the call happened; the file has not moved${i.escalated ? ' · ESCALATED — past the second window, on the queue with the first call on the record' : ''})`).join(', ') || '—'}</span></td></tr>
        <tr><td>Breached queue cases</td><td>${c.breached_queue ? `<span class="flag">${esc(c.breached_queue)}</span>` : '0'}</td><td><span class="note">${(d.breached_queue || []).map(i => `${esc(i.submission_id)} (${esc(i.sla_days_over)}d over)`).join(', ') || '—'}</span></td></tr>
-       <tr><td>Follow-through outstanding</td><td>${esc(c.follow_through_outstanding || 0)}${c.follow_through_escalated ? ` · <span class="flag">${esc(c.follow_through_escalated)} escalated</span>` : ''}</td><td><span class="note">${names(d.follow_through_escalated, 'submission_id') ? 'escalated: ' + names(d.follow_through_escalated, 'submission_id') : '—'}${(d.follow_through_worked && d.follow_through_worked.length) ? `<br>worked — a named operator acted: ${d.follow_through_worked.map(i => `${esc(i.submission_id)} by ${esc((i.worked || {}).worked_by || '—')}${i.quieted_by_work ? ' (quieting)' : ''}`).join(', ')}` : ''}</span></td></tr>
+       <tr><td>Follow-through outstanding</td><td>${esc(c.follow_through_outstanding || 0)}${c.follow_through_escalated ? ` · <span class="flag">${esc(c.follow_through_escalated)} escalated</span>` : ''}${c.follow_through_worked ? ` · ${esc(c.follow_through_worked)} worked` : ''}${c.follow_through_quieted ? ` · ${esc(c.follow_through_quieted)} quieted by work` : ''}</td><td><span class="note">${names(d.follow_through_escalated, 'submission_id') ? 'escalated: ' + names(d.follow_through_escalated, 'submission_id') : '—'}${(d.follow_through_worked && d.follow_through_worked.length) ? `<br>worked — a named operator acted: ${d.follow_through_worked.map(i => `${esc(i.submission_id)} by ${esc((i.worked || {}).worked_by || '—')}${i.quieted_by_work ? ' (quieting)' : ''}`).join(', ')}` : ''}</span></td></tr>
        <tr><td>Letter advisories</td><td>${esc(c.advisory_runs_with || 0)} run(s)${c.advisory_repaired_runs ? ` · ${esc(c.advisory_repaired_runs)} repaired` : ''}</td><td><span class="note">${(d.letter_advisories && Object.keys(d.letter_advisories.by_family || {}).length) ? Object.keys(d.letter_advisories.by_family).map(f => `${esc(f)} × ${esc(d.letter_advisories.by_family[f])}`).join(', ') + ' — the counts ride the digest snapshots, so the kept history trends drafting quality' : 'no advisories drafted'}</span></td></tr>
        <tr><td>Proposals</td><td>${esc(c.proposals_expired || 0)} expired${c.proposals_expiring_soon ? ` · ${esc(c.proposals_expiring_soon)} nearing expiry` : ''}</td><td><span class="note">${(d.proposals_expired || []).map(p => esc(p.proposal_id)).join(', ') || '—'}</span></td></tr>
        </tbody></table>
