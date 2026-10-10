@@ -243,3 +243,64 @@ def test_adversarial_sample_a_trips_bind_guardrail_end_to_end():
     assert result.repair_attempted and not result.repaired
     assert result.original_validation is not None
     assert not result.original_validation.passed
+
+
+# ---------------------------------------------------------------------------
+# Review commitments + soft time commitments (judge pack re-run)
+# ---------------------------------------------------------------------------
+
+
+def test_review_commitment_will_proceed_to_review_fails_the_letter():
+    # Judge re-run flag: "will proceed to underwriter review" reads
+    # as a promise — it commits the file to a step.
+    result = validate(
+        letter=CLEAN_LETTER + "\nYour submission will proceed to underwriter review this week."
+    )
+    hit = check(result, "no_forward_motion_in_letter")
+    assert not hit.passed
+    assert "review commitment" in hit.detail
+
+
+def test_review_commitment_now_under_senior_review_fails_the_letter():
+    # Judge re-run flag: routing presented as already decided.
+    result = validate(
+        letter=CLEAN_LETTER + "\nThe file is now under senior underwriter review."
+    )
+    hit = check(result, "no_forward_motion_in_letter")
+    assert not hit.passed
+    assert "review commitment" in hit.detail
+
+
+def test_soft_time_commitment_in_touch_shortly_fails_the_letter():
+    # Judge re-run flag (a fair catch): a soft timeline is still a
+    # timeline.
+    result = validate(letter=CLEAN_LETTER + "\nWe will be in touch shortly.")
+    hit = check(result, "no_forward_motion_in_letter")
+    assert not hit.passed
+    assert "soft time commitment" in hit.detail
+
+
+def test_soft_time_commitment_variants_fail_the_letter():
+    for phrase in (
+        "We will get back to you soon.",
+        "You will hear from us shortly.",
+        "Our team will respond shortly.",
+    ):
+        result = validate(letter=CLEAN_LETTER + "\n" + phrase)
+        assert not check(result, "no_forward_motion_in_letter").passed, phrase
+
+
+def test_template_status_forms_stay_outside_the_new_patterns():
+    # The approved template's own status language must keep passing:
+    # present-tense referral status and the no-timeline update line.
+    result = validate(
+        letter=(
+            "Dear B team,\n\nThank you for submission SUB-T3. Next step: the "
+            "submission is being referred to a senior underwriter with the "
+            "full packet; we will update you when that review reaches its "
+            "next step. This letter acknowledges receipt and records the "
+            "triage for underwriter review. Reference guidelines: [UW-CYB-01]"
+        )
+    )
+    assert check(result, "no_forward_motion_in_letter").passed
+    assert result.passed

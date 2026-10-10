@@ -18,10 +18,13 @@ One check is scoped differently from the rest:
 letter reports status — the submission is under review and the
 underwriter decides what happens next — so first-person
 forward-motion commitments ("we will proceed", "we will move this
-submission forward") and internal authority vocabulary (standard
-authority, authority thresholds and figures) fail there, while the
-internal underwriter packet keeps those same facts, because the
-packet is where they belong.
+submission forward"), review commitments ("will proceed to
+underwriter review", "is now under senior underwriter review"),
+soft time commitments ("we will be in touch shortly"), and
+internal authority vocabulary (standard authority, authority
+thresholds and figures) fail there, while the internal underwriter
+packet keeps those same facts, because the packet is where they
+belong.
 """
 
 from __future__ import annotations
@@ -96,6 +99,34 @@ _FORWARD_MOTION_PATTERNS = [
     r"\bwe (will|'ll) move\b",
     r"\bmoving (this|the|your) submission forward\b",
     r"\bwill (proceed|advance) to quote\b",
+]
+
+# Review commitments — broker letter only (same check). "Will
+# proceed to underwriter review" commits the file to a step exactly
+# as "will proceed to quote" does, and "is now under senior
+# underwriter review" presents a routing decision as already made;
+# the judge pack's second run flagged both as promises. The letter
+# may say the submission was received and the underwriter will
+# decide — the template's own status forms ("being referred to a
+# senior underwriter", "records the triage for underwriter review")
+# stay outside these patterns on purpose.
+_REVIEW_COMMITMENT_PATTERNS = [
+    r"\bwill (proceed|go|move) to (senior )?underwriter review\b",
+    r"\b(proceeds|goes) to (senior )?underwriter review\b",
+    r"\bunder (senior )?underwriter review\b",
+]
+
+# Soft time commitments — broker letter only (same check). No
+# duration is named, but "we will be in touch shortly" promises a
+# response time just the same; the judge pack flagged it as a fair
+# catch next to the hard time commitments above. The letter gives
+# no timeline at all — "we will update you when the review reaches
+# its next step" is the strongest timing language it may use.
+_SOFT_TIME_PATTERNS = [
+    r"\bin touch (with you )?(shortly|soon)\b",
+    r"\bhear from us (shortly|soon)\b",
+    r"\bget back to you (shortly|soon)\b",
+    r"\b(respond|reply|contact you|reach out) (to you )?(shortly|soon)\b",
 ]
 
 # Internal authority vocabulary — broker letter only. Authority
@@ -206,11 +237,20 @@ def validate_drafts(
         )
     )
 
-    # Letter-scoped: forward-motion commitments and internal
-    # authority references. The packet is deliberately NOT scanned
-    # — it keeps the facts, authority figures included.
+    # Letter-scoped: forward-motion commitments, review
+    # commitments, soft time commitments, and internal authority
+    # references. The packet is deliberately NOT scanned — it keeps
+    # the facts, authority figures included.
     motion_hit = next(
         (hit for hit in (_affirmative(p, letter) for p in _FORWARD_MOTION_PATTERNS) if hit),
+        None,
+    )
+    review_hit = next(
+        (hit for hit in (_affirmative(p, letter) for p in _REVIEW_COMMITMENT_PATTERNS) if hit),
+        None,
+    )
+    soft_time_hit = next(
+        (hit for hit in (_affirmative(p, letter) for p in _SOFT_TIME_PATTERNS) if hit),
         None,
     )
     authority_hit = next(
@@ -223,6 +263,16 @@ def validate_drafts(
             f"forward-motion commitment: '{motion_hit}' — the letter reports "
             "status; the underwriter decides the next step"
         )
+    if review_hit:
+        letter_problems.append(
+            f"review commitment: '{review_hit}' — the letter never commits "
+            "the file to a review step or presents routing as decided"
+        )
+    if soft_time_hit:
+        letter_problems.append(
+            f"soft time commitment: '{soft_time_hit}' — the letter gives no "
+            "response timeline, soft or otherwise"
+        )
     if authority_hit:
         letter_problems.append(
             f"internal authority reference: '{authority_hit}' — authority "
@@ -234,7 +284,8 @@ def validate_drafts(
             passed=not letter_problems,
             detail=(
                 "the broker letter reports status only — no forward-motion "
-                "commitments, no internal authority references"
+                "or review commitments, no soft time commitments, no "
+                "internal authority references"
                 if not letter_problems
                 else "; ".join(letter_problems)
             ),

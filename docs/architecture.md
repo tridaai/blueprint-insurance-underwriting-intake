@@ -200,7 +200,14 @@ implemented as deterministic tests over the draft text:
   status only; the internal packet is not scanned, because those
   facts belong there. This began as prompt discipline after an
   LLM-judge pack flagged forward-motion phrasing in provider-mode
-  letters; it is code now, with golden eval cases pinning it.
+  letters; it is code now, with golden eval cases pinning it. The
+  pack's second run extended the family twice more — review
+  commitments ("will proceed to underwriter review", "is now under
+  senior underwriter review") and soft time commitments ("we will
+  be in touch shortly") — each now a pattern family in the same
+  check, with its own golden cases (RC1/ST1/RC2). The discipline is
+  one-directional: the drafts get policed; the judge never gets
+  tuned to pass.
 - `no_pii_in_draft` — SSN, Luhn-valid card numbers, passport
   patterns.
 - Structural: the drafts must reference the submission id, cite at
