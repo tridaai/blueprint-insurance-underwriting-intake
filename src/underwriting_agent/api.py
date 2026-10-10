@@ -501,7 +501,11 @@ def queue_aging_view() -> dict:
     """Queue aging: the submissions still awaiting an underwriter,
     bucketed by days since they were submitted (with the outcome
     mix and the single oldest case) — a stranded queue is visible
-    here before a broker complains."""
+    here before a broker complains. When a digest snapshot has
+    been kept, the breach list is trend-aware: breached items are
+    flagged new or continuing against the latest snapshot, and
+    ``breach_movement`` names the new, continuing, and cleared
+    breaches since it."""
     return service.queue()
 
 

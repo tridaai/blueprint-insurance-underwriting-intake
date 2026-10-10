@@ -1415,10 +1415,16 @@ class SubmissionService:
         undecided submissions have been sitting, and which one has
         been waiting longest. SLA states are measured against the
         budgets in force (the settings record an accepted SLA
-        proposal wrote, over the environment)."""
+        proposal wrote, over the environment). When a digest
+        snapshot has been kept, the breach list is trend-aware:
+        each breached item is flagged new or continuing against
+        the latest snapshot's breached ids, and the view carries
+        the movement (new / continuing / cleared) — the worklist
+        itself distinguishes a new fire from an old one."""
         view = queue_aging(
             self._get_store().all_records(),
             sla_budgets_map=self.effective_sla_budgets(),
+            digest_snapshots=self.ops_digest_snapshots(),
         )
         view["sla_budgets_source"] = self.sla_budget_settings()["source"]
         return view

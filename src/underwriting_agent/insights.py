@@ -596,6 +596,11 @@ def queue_item_for(
     # rotting on this insured may live on an older, decided record.
     # None here — the single-item builder cannot know.
     item["escalated_note"] = None
+    # Likewise the breach's new/continuing flag against the
+    # latest digest snapshot: a single item cannot know what the
+    # snapshot held. None here — :func:`queue_aging` attaches it
+    # when snapshots are passed.
+    item["breach_since_snapshot"] = None
     return item
 
 
@@ -643,6 +648,7 @@ def queue_aging(
     *,
     sla_budgets_map: dict[str, int] | None = None,
     follow_escalation_days: int | None = None,
+    digest_snapshots: list[dict] | None = None,
 ) -> dict:
     """The awaiting queue by age — the stranded-queue early warning.
 
@@ -668,6 +674,20 @@ def queue_aging(
     ``escalated_notes``, each with the awaiting submissions its
     insured currently has in this queue (possibly none — the case
     the note was drafted on may be decided while the loop rots).
+
+    With ``digest_snapshots`` — the kept ops-digest snapshots —
+    the breach list is also read **against the latest snapshot**:
+    every breached item is flagged ``breach_since_snapshot`` as
+    ``"new"`` (not among the snapshot's breached ids — a fire
+    that started since the last kept picture) or ``"continuing"``
+    (already breached when it was taken — an old fire), and the
+    view carries ``breach_movement``: the new, continuing, and
+    cleared id sets (cleared = breached at the snapshot, no
+    longer in this queue's breaches — decided, most often).
+    "New" is measured against the snapshot's own budgets and
+    moment, the same caveat the digest's movement block carries.
+    Without snapshots the block is None and the flags stay None —
+    direction is absent, never invented.
     """
     now = now or datetime.now(timezone.utc)
     budgets = sla_budgets_map if sla_budgets_map is not None else sla_budgets()
@@ -703,6 +723,33 @@ def queue_aging(
         if oldest is None or age > oldest["age_days"]:
             oldest = item
     breaches.sort(key=lambda i: (-(i["sla_days_over"] or 0), -i["age_days"], i["submission_id"]))
+    # Breach movement against the latest digest snapshot: which
+    # of today's fires are new since the last kept picture, which
+    # were already burning, and which of the snapshot's fires are
+    # no longer in this list at all.
+    breach_movement: dict | None = None
+    if digest_snapshots:
+        snapshot = digest_snapshots[-1]
+        snapshot_breached = set(
+            (snapshot.get("sections") or {}).get("breached_queue") or []
+        )
+        current_breached = {item["submission_id"] for item in breaches}
+        for item in breaches:
+            item["breach_since_snapshot"] = (
+                "continuing"
+                if item["submission_id"] in snapshot_breached
+                else "new"
+            )
+        breach_movement = {
+            "since_snapshot": snapshot.get("snapshot_id", ""),
+            "snapshot_taken_at": snapshot.get("taken_at", ""),
+            "snapshot_taken_by": snapshot.get("taken_by", ""),
+            "new_breaches": sorted(current_breached - snapshot_breached),
+            "continuing_breaches": sorted(
+                current_breached & snapshot_breached
+            ),
+            "cleared_breaches": sorted(snapshot_breached - current_breached),
+        }
     # Escalated follow-through, matched by insured: the note lives
     # on its own record (often an older, decided submission), while
     # the flag belongs on the work the underwriter is looking at
@@ -764,6 +811,7 @@ def queue_aging(
         "sla_budgets": budgets,
         "breach_count": len(breaches),
         "breaches": breaches,
+        "breach_movement": breach_movement,
         "blocked_bundles": blocked_bundles,
         "escalated_notes": escalated_notes,
         "items_with_escalated_notes": flagged,
