@@ -1534,6 +1534,24 @@ class SubmissionService:
         )
         return annotate_proposal(proposal)
 
+    def revert_diff_threshold_settings(self, actor: str) -> dict:
+        """Revert the threshold settings record's latest accepted
+        change (``proposals.revert_threshold_settings``): the
+        prior value returns as a new audited history entry naming
+        the proposal it undoes — history is never rewritten."""
+        from .proposals import revert_threshold_settings
+
+        revert_threshold_settings(self._get_store(), actor)
+        return self.diff_threshold_settings()
+
+    def revert_sla_budget_settings(self, actor: str) -> dict:
+        """Revert the SLA-budget settings record's latest accepted
+        change, the same append-only way."""
+        from .proposals import revert_sla_budget_settings
+
+        revert_sla_budget_settings(self._get_store(), actor)
+        return self.sla_budget_settings()
+
     def decide_calibration_proposal(
         self,
         proposal_id: str,

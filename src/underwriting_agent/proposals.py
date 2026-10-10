@@ -293,6 +293,86 @@ def _apply_settings_change(
     return after
 
 
+def _revert_settings_change(
+    store: Store,
+    *,
+    key: str,
+    label: str,
+    current_values: dict,
+    actor: str,
+    now: datetime | None,
+) -> dict:
+    """Undo a settings record's most recent change.
+
+    The prior value is restored as a **new** history entry — the
+    record is append-only, so a revert never rewrites the history
+    it undoes. The entry names the proposal whose change it
+    reverses (``revert: True``); reverting a revert re-applies
+    the change it undid, which is the same rule one level down
+    and needs no special case. Returns the updated document.
+    """
+    document = store.get_document(key)
+    history = list((document or {}).get("history") or [])
+    if not document or not history:
+        raise ValueError(
+            f"Nothing to revert — the {label} settings record has no "
+            "accepted change in its history"
+        )
+    last = history[-1]
+    dimension = last["dimension"]
+    at = _fmt(_now_dt(now))
+    restored = {**current_values, dimension: last["from"]}
+    entry = {
+        "proposal_id": last["proposal_id"],
+        "dimension": dimension,
+        "from": current_values[dimension],
+        "to": last["from"],
+        "actor": actor,
+        "at": at,
+        "revert": True,
+    }
+    updated = {
+        label: restored,
+        "updated_by": actor,
+        "updated_at": at,
+        "proposal_id": last["proposal_id"],
+        "history": [*history, entry],
+    }
+    store.save_document(key, updated)
+    return updated
+
+
+def revert_threshold_settings(
+    store: Store, actor: str, now: datetime | None = None
+) -> dict:
+    """Revert the threshold settings record's latest accepted
+    change — the recorded way back when a threshold change
+    misbehaves in production, instead of editing the database."""
+    return _revert_settings_change(
+        store,
+        key=SETTINGS_KEY,
+        label="thresholds",
+        current_values=effective_thresholds(store),
+        actor=actor,
+        now=now,
+    )
+
+
+def revert_sla_budget_settings(
+    store: Store, actor: str, now: datetime | None = None
+) -> dict:
+    """Revert the SLA-budget settings record's latest accepted
+    change, the same append-only way."""
+    return _revert_settings_change(
+        store,
+        key=SLA_SETTINGS_KEY,
+        label="budgets",
+        current_values=effective_sla_budgets(store),
+        actor=actor,
+        now=now,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Drafting proposals from the replay
 # ---------------------------------------------------------------------------

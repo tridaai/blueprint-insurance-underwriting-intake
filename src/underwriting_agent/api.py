@@ -264,6 +264,28 @@ def calibration_settings() -> dict:
     return service.diff_threshold_settings()
 
 
+@app.post("/calibration/settings/revert", dependencies=_AUTH)
+def revert_threshold_settings(request: DecisionRequest) -> dict:
+    """Revert the threshold settings record's latest accepted
+    change: the prior value is restored as a new audited history
+    entry naming the proposal it undoes. Nothing is deleted —
+    the way back is itself on the record."""
+    try:
+        return service.revert_diff_threshold_settings(_decision_actor(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/queue/sla/settings/revert", dependencies=_AUTH)
+def revert_sla_budget_settings(request: DecisionRequest) -> dict:
+    """Revert the SLA-budget settings record's latest accepted
+    change, the same append-only way."""
+    try:
+        return service.revert_sla_budget_settings(_decision_actor(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.get("/calibration/proposals", dependencies=_AUTH)
 def calibration_proposals() -> dict:
     """Every stored calibration proposal with the thresholds in
