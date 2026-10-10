@@ -1237,6 +1237,22 @@ def follow_through_digest(
     while its note rots — and it is what the ops digest (see
     :func:`ops_digest`) works from, so an unanswered note is
     worked, not just visible.
+
+    An escalated note can also be **worked**: an underwriter who
+    acted on it records the touch on the note itself (see
+    ``service.mark_escalated_note_worked`` — the note's
+    ``escalation_touches``). The latest touch **quiets** the
+    escalation for one escalation window from the touch: the
+    entry stops counting as escalated — in this digest, in the
+    ops digest's counts, and on the queue, which reads this same
+    computation — and rides in the digest's ``worked`` subset
+    with the touch attached, so the worked ones stay auditable
+    from the same read. Quieting is a window, not a pardon: if
+    the loop is still open when a full window has passed since
+    the touch, the note escalates again — a worked state must
+    not become a quieter place to rot — and a further touch can
+    be recorded then. The note's text and its follow-through
+    marking are never touched by any of this.
     """
     now = now or datetime.now(timezone.utc)
     if escalation_days is None:
@@ -1276,6 +1292,26 @@ def follow_through_digest(
             if drafted is not None
             else None
         )
+        touches = note.get("escalation_touches") or []
+        latest_touch = touches[-1] if touches else None
+        worked_at = _parse_timestamp(
+            (latest_touch or {}).get("worked_at") or ""
+        )
+        worked_age_days = (
+            max(0, (now.date() - worked_at.date()).days)
+            if worked_at is not None
+            else None
+        )
+        # The latest touch quiets the escalation for one window
+        # from the touch; past that window a still-open loop
+        # escalates again, touch or no touch (see the docstring).
+        quieted_by_work = bool(
+            state in _FOLLOW_OPEN_STATES
+            and note_age_days is not None
+            and note_age_days >= escalation_days
+            and worked_age_days is not None
+            and worked_age_days < escalation_days
+        )
         entries.append(
             {
                 "submission_id": result.submission_id,
@@ -1287,7 +1323,12 @@ def follow_through_digest(
                     state in _FOLLOW_OPEN_STATES
                     and note_age_days is not None
                     and note_age_days >= escalation_days
+                    and not quieted_by_work
                 ),
+                "worked": latest_touch,
+                "worked_touches": len(touches),
+                "worked_age_days": worked_age_days,
+                "quieted_by_work": quieted_by_work,
                 "state": state,
                 "outstanding_at_drafting": len(_outstanding_entries(note)),
                 "answered_items": answered,
@@ -1307,6 +1348,9 @@ def follow_through_digest(
     for entry in entries:
         counts[entry["state"]] = counts.get(entry["state"], 0) + 1
     escalated = [e for e in entries if e["escalated"]]
+    worked = [
+        e for e in entries if e["worked"] is not None and not e["escalated"]
+    ]
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "total_notes": len(entries),
@@ -1315,6 +1359,8 @@ def follow_through_digest(
         "escalation_days": escalation_days,
         "escalated_count": len(escalated),
         "escalated": escalated,
+        "worked_count": len(worked),
+        "worked": worked,
     }
 
 

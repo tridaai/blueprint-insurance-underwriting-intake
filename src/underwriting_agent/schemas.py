@@ -626,6 +626,24 @@ class BreachAcknowledgementRequest(BaseModel):
         return self.actor or self.approver or self.reviewer
 
 
+class FollowThroughWorkedRequest(BaseModel):
+    """An underwriter's worked touch on an escalated
+    follow-through note (see
+    ``service.mark_escalated_note_worked``): who acted on the
+    note, and an optional note — what they chased, what the
+    broker said. The touch is kept on the note itself; it
+    attests to work done outside the system, it does not answer
+    the note's outstanding items."""
+
+    actor: Optional[str] = None
+    approver: Optional[str] = None
+    reviewer: Optional[str] = None
+    note: Optional[str] = None
+
+    def actor_name(self) -> Optional[str]:
+        return self.actor or self.approver or self.reviewer
+
+
 class SlaCalibrationDraftRequest(BaseModel):
     """An operator's draft-from-a-calibration-row request (see
     ``proposals.draft_sla_proposal_from_row``): who is drafting,

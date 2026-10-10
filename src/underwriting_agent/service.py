@@ -32,7 +32,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .autonomy import recommend_autonomy
 from .bundles import (
@@ -1348,6 +1348,95 @@ class SubmissionService:
             "acknowledgement": acknowledgement,
             "notice": record.sla_breach_notice,
             "attempts": record.sla_breach_attempts,
+        }
+
+    def mark_escalated_note_worked(
+        self,
+        submission_id: str,
+        actor: str,
+        note: str = "",
+        now: datetime | None = None,
+    ) -> dict:
+        """Record that an escalated follow-through note was worked.
+
+        The follow-through escalation's whole point is the human
+        touch (see ``insights.follow_through_digest``): a status
+        note's loop has been open past the escalation window and
+        somebody has to chase what it is waiting on. This records
+        that somebody did — who, when, and their note — on the
+        note itself, as the latest of its ``escalation_touches``.
+        The touch **quiets** the escalation for one escalation
+        window from the touch: the note leaves the digest's
+        escalated subset and count, the ops digest's
+        follow-through count, and the queue's escalated-note
+        flags — every surface reads the one computation — and
+        rides in the digest's ``worked`` subset with the touch
+        attached. It changes nothing else: the note's text, its
+        outstanding snapshot, and its follow-through marking are
+        untouched, the underlying case is untouched, and nothing
+        is sent.
+
+        Only a note that is escalated *now* can be marked worked
+        — the same computation the digest reads, so what can be
+        worked is exactly what the surfaces flag. A note whose
+        escalation an earlier touch is still quieting cannot be
+        touched again until it re-escalates: while the window
+        runs, the latest touch is the record of the work, and a
+        second stamp would blur whose touch quieted it. When the
+        window lapses with the loop still open, the note
+        escalates again and a further touch can be recorded —
+        the worked state must not become a quieter place to rot.
+        """
+        store = self._get_store()
+        record = store.get(submission_id)
+        if record is None:
+            raise KeyError(
+                f"Unknown submission_id: {submission_id} (analyze it first)"
+            )
+        if not record.status_note:
+            raise ValueError(
+                f"No status note has been drafted for {submission_id} "
+                "— there is no follow-through loop to work"
+            )
+        now = now or datetime.now(timezone.utc)
+        digest = follow_through_digest([record], now)
+        entry = digest["entries"][0] if digest["entries"] else None
+        if entry is None or not entry["escalated"]:
+            if entry is not None and entry["quieted_by_work"]:
+                touch = entry["worked"] or {}
+                raise ValueError(
+                    f"The follow-through note for {submission_id} was "
+                    f"already worked by {touch.get('worked_by')} at "
+                    f"{touch.get('worked_at')} — that touch quiets "
+                    "the escalation for one window; a further touch "
+                    "can be recorded once the note re-escalates"
+                )
+            state = entry["state"] if entry else "unknown"
+            raise ValueError(
+                f"The follow-through note for {submission_id} is not "
+                f"escalated (state: {state}) — a worked touch is "
+                "recorded against an escalated note, and this "
+                "note's loop is either answered or still inside "
+                "its escalation window"
+            )
+        touch = {
+            "worked_by": actor,
+            "worked_at": now.isoformat(timespec="seconds"),
+            "note": note,
+        }
+        touches = list(record.status_note.get("escalation_touches") or [])
+        touches.append(touch)
+        record.status_note["escalation_touches"] = touches
+        store.save(record)
+        return {
+            "submission_id": submission_id,
+            "touch": touch,
+            "touches": touches,
+            "quiets_until": (
+                now.date() + timedelta(days=digest["escalation_days"])
+            ).isoformat(),
+            "state": entry["state"],
+            "note_age_days": entry["note_age_days"],
         }
 
     def sla_breach(self, submission_id: str) -> dict | None:

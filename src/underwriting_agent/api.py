@@ -40,6 +40,7 @@ from .samples import load_sample_submissions
 from .schemas import (
     AgentResult,
     BreachAcknowledgementRequest,
+    FollowThroughWorkedRequest,
     DecisionRequest,
     ProposalDecisionRequest,
     SettingsRestoreRequest,
@@ -933,6 +934,34 @@ def draft_status_note(submission_id: str) -> dict:
     budget — notes are for breaches."""
     try:
         return service.draft_status_note(submission_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post(
+    "/submissions/{submission_id}/status-note/worked", dependencies=_AUTH
+)
+def mark_escalated_note_worked(
+    submission_id: str, request: FollowThroughWorkedRequest
+) -> dict:
+    """Mark an escalated follow-through note as worked: an
+    underwriter attests — under their name, with an optional
+    note — that they acted on a status note whose follow-through
+    loop has been open past the escalation window. The touch is
+    kept on the note itself and quiets the escalation for one
+    window: the note leaves the digest's escalated count and the
+    queue's flags while the window runs, and escalates again if
+    the loop is still open when it lapses. Only a currently
+    escalated note can be marked, and not again while a touch
+    is still quieting it."""
+    try:
+        return service.mark_escalated_note_worked(
+            submission_id,
+            _decision_actor(request),
+            note=request.note or "",
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

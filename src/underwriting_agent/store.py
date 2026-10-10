@@ -49,8 +49,13 @@ class ApprovalRecord:
     # snapshots what the case was waiting on; a later resubmission
     # from the same insured adds a ``follow_through`` marking to the
     # note (see service._record_note_follow_through) without ever
-    # rewriting the note itself. An internal draft — it is stored on
-    # the record and never sent. Older payloads predate it.
+    # rewriting the note itself. When the note's loop escalates, an
+    # underwriter's worked touch is appended to the note as an
+    # ``escalation_touches`` entry (see
+    # service.mark_escalated_note_worked): {worked_by, worked_at,
+    # note} — the latest touch quiets the escalation for one
+    # window. An internal draft — it is stored on the record and
+    # never sent. Older payloads predate it.
     status_note: dict | None = None
     # The SLA-breach webhook notice (see service.notify_sla_breaches):
     # set the first time the queue projection observes this record
