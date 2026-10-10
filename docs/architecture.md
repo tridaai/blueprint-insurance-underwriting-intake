@@ -384,7 +384,37 @@ numbers on the submission and its loss records. Line aliases fold too
   referral triggers on the rule triage before the cross-check
   (`diff_referral_triggers` / `apply_diff_triggers`), so the
   cross-check and everything downstream see the referral the change
-  earned.
+  earned. The diff also develops the loss run **per claim**
+  (`match_loss_development`): claims are matched across the two
+  loss runs by claim id, else date + description (one-to-one,
+  conservative — an ambiguous match reports as appeared +
+  disappeared rather than a wrong pairing), and adverse
+  development across matched claims past a floor is its own
+  trigger. New-claim detection reads the appeared set, so a claim
+  swapped for another is a new claim even at equal counts. The
+  prior lookup is keyed **per line**: a renewal diffs against the
+  insured's most recent stored submission *of the same line* — for
+  a multi-line bundle, that is the matching line of the most recent
+  prior bundle (or an earlier single-line submission of that line).
+- **Bundles split at the service, not the graph.** A submission
+  carrying `lines` is split by `bundles.split_bundle` into one
+  ordinary `SubmissionInput` per line (line fields win; bundle
+  documents and context are shared) and each runs the unmodified
+  graph with no checkpointer. The bundle result is composed in
+  code: triage follows the most severe line (outcome, then tier),
+  facts take the worst readiness and the per-line gap sources,
+  drafts are one packet with per-line sections plus one letter,
+  and the combined drafts pass the same verification, review, and
+  guardrails as a single-line draft. One record, one gate: the
+  store never holds a sub-analysis as a decidable item.
+- **Dispatch and trend are projections too.** The dispatch
+  operations view (`insights.dispatch_overview`) reads every
+  record's delivery ledger as one surface — failures oldest first,
+  each with the next backoff from the recorded schedule and
+  whether its retry is due — and scorecards carry an
+  `approval_trend` (earlier-half vs recent-half approval rate over
+  the group's decision order), so a party drifting toward
+  rejections is visible before the flat rate moves.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 
@@ -400,7 +430,10 @@ numbers on the submission and its loss records. Line aliases fold too
    rules-only triage over the awaiting queue to report which
    outcomes the change would move. The report mutates nothing —
    whether a moved submission is re-run or left to its underwriter
-   with the note is a human call.
+   with the note is a human call. Multi-line bundles are counted
+   as skipped, never re-triaged as a unit: their triage is
+   per-line, and one rules pass over the bundle payload would be
+   fiction.
 3. **Your intake adapter** — map your inbox/portal feed to
    `SubmissionInput`.
 4. **Your output route** — point `ACTION_WEBHOOK_URL` at your work

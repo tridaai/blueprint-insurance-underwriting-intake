@@ -146,10 +146,13 @@ extract → ingest → screen → classify → retrieve ∥ discrepancies ∥ hi
 
 **Operations** — the store of record is also the reporting surface,
 all computed in code: the **inbox** groups the queue by insured and
-by broker (counts, latest outcome / tier / readiness), **scorecards**
-aggregate each party's track record (outcome mix, approval rate,
-average completeness, top referral reasons — and a new submission's
-packet cites its parties' scorecards as evidence),
+by broker (counts, latest outcome / tier / readiness — and each
+group drills down into the submissions behind its counts, with
+their statuses), **scorecards** aggregate each party's track
+record (outcome mix, approval rate, average completeness, top
+referral reasons, and the approval-rate *trend* over the party's
+own decision order — the direction the flat rate hides; a new
+submission's packet cites its parties' scorecards as evidence),
 **`/reports/brokers/{name}/quality`** composes a per-broker
 submission-quality report from the same records — completeness
 trend, extraction discrepancy rate, top missing elements — with a
@@ -170,6 +173,11 @@ retry schedule assigned it — and a failed dispatch can be retried
 (`POST /submissions/{id}/dispatch/retry`) instead of being a dead
 status string; the ledger is readable at
 `GET /submissions/{id}/dispatch` and counted in the audit export.
+The ledgers also read as one operations surface: **`GET /dispatch`**
+summarises every record's attempts, lists the failures oldest
+first with the retry each is due under the recorded schedule, and
+**`POST /dispatch/retry-failed`** works the whole failure list in
+one call (the console renders this as the Dispatch ops panel).
 And because guidelines change, the corpus is versioned
 (`GUIDELINES_VERSION`, stamped on every result) and
 **`GET /guidelines/change-impact`** re-runs rules-only triage over
@@ -192,7 +200,30 @@ $50,000), a requested-limit jump beyond `DIFF_LIMIT_JUMP_PCT`
 trigger on the rule triage before the cross-check, so a worsening
 renewal is referred on the change itself. Benign movement (SUB-1013's
 small claim, its exactly-+50% limit) deliberately does not trigger;
-golden cases D1–D4 pin both sides of that line.
+golden cases D1–D4 pin both sides of that line. The loss run is
+developed **claim by claim**: matched per claim (claim id, else
+date + description), the diff shows which claims appeared, which
+are no longer listed, and how each matched claim's incurred and
+status moved — and material adverse development is itself a
+referral trigger (`DIFF_DEVELOPMENT_MIN_INCREASE`, default
+$50,000 across matched claims), while favourable development
+(losses settling *down*) never triggers. Golden cases LD1/LD2 pin
+both directions.
+
+**Multi-line submissions** — a broker often submits the whole
+account at once, so intake accepts a bundle (`lines` on the
+submission): it splits into one ordinary sub-analysis per line —
+shared insured context, the line's own documents, limits, and
+loss run — each with its own triage and readiness, then rolls up
+to the most severe line in one combined packet with a section per
+line and **one underwriter gate for the bundle** (decisions are
+recorded per bundle, never per line). Renewal diffs key per line:
+a bundle's property line diffs against the account's last property
+submission wherever it lives — inside a prior bundle or on its
+own. Sample **SUB-1014** bundles a clean property line with a
+cyber line carrying a ransomware severity claim — divergent lines,
+one decision; golden cases B1/B2 pin the split and the per-line
+diffs.
 
 Two samples show the safety story end to end:
 
@@ -286,12 +317,12 @@ uv sync --extra dev            # or: pip install -e ".[dev]" -c constraints.txt
 cp .env.example .env           # set MODEL_BACKEND + your key
 
 uv run underwriting-agent-demo          # traced demo, one sample
-uv run underwriting-agent --all         # batch CLI over all 13 samples
+uv run underwriting-agent --all         # batch CLI over all 14 samples
 uv run underwriting-agent --all --concurrency 4
 uv run uvicorn underwriting_agent.api:app --port 8000   # console + API
 
 make test    # pytest suite
-make evals   # golden-dataset gate (28 cases)
+make evals   # golden-dataset gate (41 cases)
 ```
 
 Without any key configured, everything above still runs — on the
@@ -389,11 +420,11 @@ gate, the eval design, and the production-hardening list.
 
 ## Eval results
 
-Deterministic golden gate (28 synthetic cases, full pipeline):
+Deterministic golden gate (41 synthetic cases, full pipeline):
 
-- **Triage outcome accuracy: 37/37**
-- **Risk-tier accuracy: 37/37**
-- **Guardrail expectations: 5/5**
+- **Triage outcome accuracy: 41/41**
+- **Risk-tier accuracy: 41/41**
+- **Guardrail + per-line expectations: 13/13**
 
 These are regression gates over a synthetic set, not real-world
 accuracy claims. The opt-in provider pack (`make llm-evals`) reports
