@@ -62,6 +62,11 @@ def test_the_preview_names_what_would_leave_and_what_would_survive():
         "would_change": True,
         "would_prune_count": 3,
         "would_prune_ids": ["snap-0001", "snap-0002", "snap-0003"],
+        # Round 23 shape growth, deliberate: the plan also
+        # names the renames that would leave the kept reports
+        # (empty here — these snapshots were never renamed),
+        # so the prune's kept-whole record is previewed too.
+        "would_prune_renames": [],
         "surviving_count": 2,
         "surviving_first": "snap-0004",
         "surviving_last": "snap-0005",

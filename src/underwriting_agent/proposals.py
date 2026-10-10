@@ -2125,8 +2125,11 @@ def calibration_snapshot_by_label(
     return None
 
 
-def calibration_rename_log(snapshots: list[dict]) -> list[dict]:
-    """Every label rename across the kept reports, in one read.
+def calibration_rename_log(
+    snapshots: list[dict], prunes: list[dict] | None = None
+) -> list[dict]:
+    """Every label rename across the calibration reports, in
+    one read.
 
     Renames are recorded per snapshot (``label_history`` — see
     ``service.rename_sla_calibration_snapshot_label``), which
@@ -2140,10 +2143,20 @@ def calibration_rename_log(snapshots: list[dict]) -> list[dict]:
     moment. Entries walk in the order the renames happened —
     by their recorded moment, ties (and unparseable moments)
     falling back to the order the snapshots were kept and the
-    history was written, so the read is deterministic. A
-    pruned report's renames leave with it: the log reads the
-    kept reports as they stand, and the prune that removed one
-    is recorded on the document beside them.
+    history was written, so the read is deterministic.
+
+    The log reads **two strata**, each entry marked by its
+    ``pruned`` flag. The kept reports' own histories come
+    first (``pruned`` False). Behind them, the renames a prune
+    carried into its own record (``pruned_renames`` — see
+    ``insights.snapshot_prune_entry``) read back marked
+    ``pruned`` True, with the prune that removed their report
+    named (``pruned_at`` / ``pruned_by``) and ``current_label``
+    reading the label the report wore when it left: the
+    addressing history survives the report, as a named stratum
+    — never blended silently into the kept reports' own
+    record, because a rename whose report is gone answers a
+    citation differently from one whose report still stands.
     """
     entries: list[dict] = []
     for snapshot in snapshots:
@@ -2156,6 +2169,23 @@ def calibration_rename_log(snapshots: list[dict]) -> list[dict]:
                     "to": move.get("to", ""),
                     "renamed_by": move.get("renamed_by", ""),
                     "renamed_at": move.get("renamed_at", ""),
+                    "pruned": False,
+                    "_order": len(entries),
+                }
+            )
+    for entry in prunes or []:
+        for move in entry.get("pruned_renames") or []:
+            entries.append(
+                {
+                    "snapshot_id": move.get("snapshot_id", ""),
+                    "current_label": move.get("label_at_prune", ""),
+                    "from": move.get("from", ""),
+                    "to": move.get("to", ""),
+                    "renamed_by": move.get("renamed_by", ""),
+                    "renamed_at": move.get("renamed_at", ""),
+                    "pruned": True,
+                    "pruned_at": entry.get("pruned_at", ""),
+                    "pruned_by": entry.get("pruned_by", ""),
                     "_order": len(entries),
                 }
             )

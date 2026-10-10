@@ -2384,8 +2384,8 @@ class SubmissionService:
         )
 
     def sla_calibration_rename_log(self) -> dict:
-        """Every label rename across the kept calibration
-        reports, in the order the renames happened
+        """Every label rename across the calibration reports,
+        in the order the renames happened
         (``proposals.calibration_rename_log``): one entry per
         move — the report it moved on (snapshot id, the label
         it wears now), from, to, who, when. The per-snapshot
@@ -2393,12 +2393,16 @@ class SubmissionService:
         audited; this is the document-level read, so a debate
         reconstructing which names it has cited — and when each
         stopped naming anything — makes one call, not one per
-        report. Read-only: the log is a projection of the kept
-        snapshots, never a second record."""
+        report. Read-only: the log is a projection, never a
+        second record — of the kept snapshots' histories, and
+        behind them, marked ``pruned``, the renames the
+        document's prune records kept whole when their reports
+        left, so the addressing history survives the report."""
         from .proposals import calibration_rename_log
 
         renames = calibration_rename_log(
-            self.sla_calibration_snapshots()
+            self.sla_calibration_snapshots(),
+            self.sla_calibration_snapshot_prunes(),
         )
         return {"renames": renames, "count": len(renames)}
 

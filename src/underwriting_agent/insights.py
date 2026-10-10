@@ -3622,6 +3622,39 @@ def prune_snapshot_list(
     return list(snapshots[-keep:]), list(snapshots[:-keep])
 
 
+def _pruned_rename_entries(pruned: list[dict]) -> list[dict]:
+    """The rename history a prune removes from the kept
+    reports, flattened move by move: the report it moved on,
+    the label that report wore when it left, and the move
+    itself, exactly as the report's ``label_history`` recorded
+    it.
+
+    A pruned calibration report takes its addressing history
+    with it — unless the prune's own record keeps it, the way
+    the proposals prune keeps pruned rejections whole (see
+    ``proposals.proposal_prune_entry``): a rejection is the
+    piece of decided history the scans act on, and a rename is
+    the piece of addressing history the citations act on.
+    Digest snapshots carry no label history, so on that
+    document this reads empty — the shared builder stays
+    honest on both.
+    """
+    entries: list[dict] = []
+    for snapshot in pruned:
+        for move in snapshot.get("label_history") or []:
+            entries.append(
+                {
+                    "snapshot_id": snapshot.get("snapshot_id", ""),
+                    "label_at_prune": snapshot.get("label", ""),
+                    "from": move.get("from", ""),
+                    "to": move.get("to", ""),
+                    "renamed_by": move.get("renamed_by", ""),
+                    "renamed_at": move.get("renamed_at", ""),
+                }
+            )
+    return entries
+
+
 def snapshot_prune_preview(snapshots: list[dict], keep: int) -> dict:
     """A prune, dry-run: what a keep-last-N prune *would* do.
 
@@ -3633,7 +3666,11 @@ def snapshot_prune_preview(snapshots: list[dict], keep: int) -> dict:
     refused here too) and reports the ids that would leave and
     the range that would survive, writing nothing: the preview
     and the prune that follows it on the same document cannot
-    disagree, because both read the one computation.
+    disagree, because both read the one computation. The plan
+    also names the renames that would leave the kept reports
+    (``would_prune_renames`` — see :func:`_pruned_rename_entries`),
+    so the addressing history a prune carries into its own
+    record is visible before the act, not only after it.
     """
     kept, pruned = prune_snapshot_list(snapshots, keep)
     return {
@@ -3642,6 +3679,7 @@ def snapshot_prune_preview(snapshots: list[dict], keep: int) -> dict:
         "would_change": bool(pruned),
         "would_prune_count": len(pruned),
         "would_prune_ids": [s.get("snapshot_id", "") for s in pruned],
+        "would_prune_renames": _pruned_rename_entries(pruned),
         "surviving_count": len(kept),
         "surviving_first": kept[0].get("snapshot_id", "") if kept else "",
         "surviving_last": kept[-1].get("snapshot_id", "") if kept else "",
@@ -3659,13 +3697,23 @@ def snapshot_prune_entry(
     """The prune's own record, kept on the document it pruned:
     who pruned, when, what they asked to keep, which snapshots
     left, and the surviving range — so a gap in a trend is
-    explained by the document itself, not by archaeology."""
+    explained by the document itself, not by archaeology.
+
+    The record also carries the pruned reports' **renames**
+    whole (``pruned_renames`` — see
+    :func:`_pruned_rename_entries`): a calibration report's
+    label history is the addressing archaeology a citation
+    repair reads, and a prune that erased it would leave an
+    old label's fate unanswerable. The rename log reads this
+    stratum back, marked as pruned, beside the kept reports'
+    own histories."""
     return {
         "pruned_at": pruned_at,
         "pruned_by": actor,
         "requested_keep": keep,
         "pruned_count": len(pruned),
         "pruned_ids": [s.get("snapshot_id", "") for s in pruned],
+        "pruned_renames": _pruned_rename_entries(pruned),
         "surviving_first": kept[0].get("snapshot_id", "") if kept else "",
         "surviving_last": kept[-1].get("snapshot_id", "") if kept else "",
     }

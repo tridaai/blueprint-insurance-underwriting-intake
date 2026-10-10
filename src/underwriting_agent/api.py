@@ -680,13 +680,17 @@ def sla_calibration_snapshots(label: str | None = None) -> dict:
     dependencies=_AUTH,
 )
 def sla_calibration_rename_log() -> dict:
-    """Every label rename across the kept calibration reports,
-    in the order the renames happened: the report each move
+    """Every label rename across the calibration reports, in
+    the order the renames happened: the report each move
     landed on (snapshot id, the label it wears now), from, to,
     who, when. The per-snapshot label history audits one
     report's addressing; this log is the document-level read —
     a debate reconstructing which names it has cited, and when
-    each stopped naming anything, in one call."""
+    each stopped naming anything, in one call. Renames whose
+    report a prune has since removed read back behind the kept
+    reports' own, marked ``pruned`` with the prune named — the
+    prune kept them whole in its own record, so the history
+    survives the report."""
     return service.sla_calibration_rename_log()
 
 
