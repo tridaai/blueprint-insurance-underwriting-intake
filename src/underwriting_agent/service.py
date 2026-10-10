@@ -1889,10 +1889,16 @@ class SubmissionService:
         quality, aggregated from the runs' recorded advisories),
         the drafting-repair family (status-note repairs and
         refusals, with the broker quality report's nested as
-        their own source), model usage, cost, and latency."""
+        their own source), the proposal re-ask family (drafts
+        carrying a pruned earlier decision, counted from the
+        proposals document, and how the second decision went),
+        model usage, cost, and latency."""
+        from .proposals import load_proposals
+
         return compute_metrics(
             self._get_store().all_records(),
             broker_drafting_events=self.broker_quality_drafting_events(),
+            proposals=load_proposals(self._get_store()),
         )
 
     def queue(self) -> dict:

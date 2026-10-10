@@ -609,9 +609,64 @@ def _broker_quality_repair_aggregate(events: list[dict]) -> dict:
     }
 
 
+def _proposal_reask_aggregate(proposals: list[dict]) -> dict:
+    """The re-ask aggregate over the proposals document.
+
+    Round 21 put the pruned decision on the re-asked draft's
+    face (``previously_decided`` — see
+    ``proposals._previously_decided_marker``); this aggregate
+    reads those drafts back as a population, because the
+    governance question the marker raises is not about one
+    draft: is a re-asked direction decided differently the
+    second time, and does the prune-then-re-ask loop converge
+    or circle? The counts: re-asks drafted, still open, and
+    decided — and of the decided, how the second decision went.
+    The first decision a marker carries is always a rejection
+    (a direction still remembered as rejected is never drafted
+    at all), so a second rejection **repeats** it and a second
+    acceptance **reverses** it; a withdrawal is neither — the
+    question was pulled, not answered. ``by_kind`` splits the
+    re-asks by the scan that drafted them (threshold vs SLA
+    budget), since the two loops forget on different evidence.
+    A re-ask whose record is later pruned leaves this
+    population with it — the aggregate reads the document as
+    it stands, and the prune that removed a decided re-ask is
+    itself recorded on the document.
+    """
+    reasks = [p for p in proposals if p.get("previously_decided")]
+    open_count = 0
+    accepted = 0
+    rejected = 0
+    withdrawn = 0
+    by_kind: Counter = Counter()
+    for proposal in reasks:
+        by_kind[proposal.get("kind", "")] += 1
+        status = proposal.get("status", "")
+        if status == "draft":
+            open_count += 1
+        elif status == "accepted":
+            accepted += 1
+        elif status == "rejected":
+            rejected += 1
+        elif status == "withdrawn":
+            withdrawn += 1
+    return {
+        "reasks": len(reasks),
+        "open": open_count,
+        "decided": accepted + rejected + withdrawn,
+        "accepted": accepted,
+        "rejected": rejected,
+        "withdrawn": withdrawn,
+        "repeated_first_decision": rejected,
+        "reversed_first_decision": accepted,
+        "by_kind": dict(sorted(by_kind.items())),
+    }
+
+
 def compute_metrics(
     records: list[ApprovalRecord],
     broker_drafting_events: list[dict] | None = None,
+    proposals: list[dict] | None = None,
 ) -> dict:
     """Operational aggregates over the whole store.
 
@@ -622,7 +677,10 @@ def compute_metrics(
     :func:`_status_note_repair_aggregate` — with the broker
     quality report's repairs and refusals nested in the same
     family as its own named source, counted from the drafting
-    events the caller passes), and —
+    events the caller passes), the **proposal re-ask family**
+    (drafts carrying a pruned earlier decision, and how the
+    second decision went — see :func:`_proposal_reask_aggregate`,
+    counted from the proposals the caller passes), and —
     from each run's recorded telemetry — model calls, tokens,
     estimated cost, and latency. Token/cost figures only include
     runs whose backend reported them (the offline fallback reports
@@ -711,6 +769,7 @@ def compute_metrics(
                 broker_drafting_events or []
             ),
         },
+        "proposal_reasks": _proposal_reask_aggregate(proposals or []),
         "model_calls": model_calls,
         "token_runs": token_runs,
         "input_tokens": input_tokens,
