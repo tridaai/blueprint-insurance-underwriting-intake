@@ -563,13 +563,17 @@ class DecisionRequest(BaseModel):
 
 class SettingsRestoreRequest(BaseModel):
     """A human's point-in-history restore of a settings record
-    (see ``proposals.py``): who is restoring, and the index of
-    the history entry whose state the record returns to."""
+    (see ``proposals.py``): who is restoring, the index of the
+    history entry whose state the record returns to, and an
+    optional decision note — the "why" kept on the restore entry
+    the way a proposal decision keeps its note. On a preview the
+    note is only drafted: echoed back, stored nowhere."""
 
     actor: Optional[str] = None
     approver: Optional[str] = None
     reviewer: Optional[str] = None
     history_index: int
+    note: Optional[str] = None
 
     def actor_name(self) -> Optional[str]:
         return self.actor or self.approver or self.reviewer

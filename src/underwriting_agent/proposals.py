@@ -480,6 +480,7 @@ def _restore_settings_to_entry(
     actor: str,
     now: datetime | None,
     cast,
+    note: str = "",
 ) -> dict:
     """Restore a settings record to a chosen history entry's state.
 
@@ -490,10 +491,14 @@ def _restore_settings_to_entry(
     restore is appended as **one** new history entry naming the
     entry it restores to — its index, and the proposal that entry
     carried — with every dimension it moves listed in ``changes``
-    (from the value in force to the restored value). History is
-    never rewritten: the mis-tuned afternoon stays on the record,
-    and the restore itself can be reverted like any other entry.
-    Returns the updated document.
+    (from the value in force to the restored value). The entry
+    also carries the restorer's ``decision_note`` when they gave
+    one: the record already answers what moved, who moved it,
+    and when — the note is where *why* lives, so "we reverted
+    after the mis-tuned afternoon" stops being archaeology.
+    History is never rewritten: the mis-tuned afternoon stays on
+    the record, and the restore itself can be reverted like any
+    other entry. Returns the updated document.
     """
     plan = _restore_plan(
         store,
@@ -521,6 +526,7 @@ def _restore_settings_to_entry(
         "changes": changes,
         "actor": actor,
         "at": at,
+        "decision_note": note,
     }
     updated = {
         label: target,
@@ -542,12 +548,17 @@ def _preview_restore(
     current_values: dict,
     history_index: int,
     cast,
+    note: str = "",
 ) -> dict:
     """A restore preview: the shared plan (see
     :func:`_restore_plan`) with the internal replay state left
     out — what an operator reads before committing to a restore.
     Nothing is written, and nothing is appended: previewing a
-    restore is not itself a change on the record."""
+    restore is not itself a change on the record. The preview is
+    also where a restore's decision note is drafted: a ``note``
+    passed here is echoed back as ``decision_note`` so the
+    operator can word the "why" against the exact moves it will
+    be stored with — the preview itself still stores nothing."""
     plan = _restore_plan(
         store,
         key=key,
@@ -557,7 +568,7 @@ def _preview_restore(
         history_index=history_index,
         cast=cast,
     )
-    return {
+    preview = {
         field: plan[field]
         for field in (
             "label",
@@ -569,14 +580,17 @@ def _preview_restore(
             "would_change",
         )
     }
+    preview["decision_note"] = note
+    return preview
 
 
 def preview_restore_threshold_settings(
-    store: Store, history_index: int
+    store: Store, history_index: int, note: str = ""
 ) -> dict:
     """Preview restoring the threshold settings record to a
     chosen history entry's state: which dimensions would move,
-    from what to what — before anything is written."""
+    from what to what — before anything is written. A drafted
+    decision note is echoed back, stored nowhere."""
     return _preview_restore(
         store,
         key=SETTINGS_KEY,
@@ -585,11 +599,12 @@ def preview_restore_threshold_settings(
         current_values=effective_thresholds(store),
         history_index=history_index,
         cast=float,
+        note=note,
     )
 
 
 def preview_restore_sla_budget_settings(
-    store: Store, history_index: int
+    store: Store, history_index: int, note: str = ""
 ) -> dict:
     """Preview restoring the SLA-budget settings record to a
     chosen history entry's state, the same dry-run way."""
@@ -601,6 +616,7 @@ def preview_restore_sla_budget_settings(
         current_values=effective_sla_budgets(store),
         history_index=history_index,
         cast=lambda v: max(0, int(v)),
+        note=note,
     )
 
 
@@ -609,10 +625,13 @@ def restore_threshold_settings(
     history_index: int,
     actor: str,
     now: datetime | None = None,
+    note: str = "",
 ) -> dict:
     """Restore the threshold settings record to the state in force
     after its history entry ``history_index`` — one audited change
-    naming the entry restored to, however many dimensions move."""
+    naming the entry restored to, however many dimensions move.
+    The restorer's optional ``note`` is kept on the restore entry
+    as its ``decision_note``."""
     return _restore_settings_to_entry(
         store,
         key=SETTINGS_KEY,
@@ -623,6 +642,7 @@ def restore_threshold_settings(
         actor=actor,
         now=now,
         cast=float,
+        note=note,
     )
 
 
@@ -631,9 +651,11 @@ def restore_sla_budget_settings(
     history_index: int,
     actor: str,
     now: datetime | None = None,
+    note: str = "",
 ) -> dict:
     """Restore the SLA-budget settings record to a chosen history
-    entry's state, the same append-only way."""
+    entry's state, the same append-only way, with the same
+    optional decision note on the restore entry."""
     return _restore_settings_to_entry(
         store,
         key=SLA_SETTINGS_KEY,
@@ -644,6 +666,7 @@ def restore_sla_budget_settings(
         actor=actor,
         now=now,
         cast=lambda v: max(0, int(v)),
+        note=note,
     )
 
 

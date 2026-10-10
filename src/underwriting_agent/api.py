@@ -293,10 +293,13 @@ def restore_threshold_settings(request: SettingsRestoreRequest) -> dict:
     entry's state — not just the latest change's prior value, as
     revert does. The restore is one new audited history entry
     naming the entry it restores to; the entries it passes over
-    stay on the record."""
+    stay on the record. An optional ``note`` in the request is
+    kept on the entry as its decision note."""
     try:
         return service.restore_diff_threshold_settings(
-            _decision_actor(request), request.history_index
+            _decision_actor(request),
+            request.history_index,
+            note=request.note or "",
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -305,10 +308,13 @@ def restore_threshold_settings(request: SettingsRestoreRequest) -> dict:
 @app.post("/queue/sla/settings/restore", dependencies=_AUTH)
 def restore_sla_budget_settings(request: SettingsRestoreRequest) -> dict:
     """Restore the SLA-budget settings record to a chosen history
-    entry's state, the same append-only way."""
+    entry's state, the same append-only way, with the same
+    optional decision note on the restore entry."""
     try:
         return service.restore_sla_budget_settings(
-            _decision_actor(request), request.history_index
+            _decision_actor(request),
+            request.history_index,
+            note=request.note or "",
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -323,10 +329,12 @@ def preview_restore_threshold_settings(
     which dimension values would change — a dry run. Nothing is
     written and nothing is appended to the record; a preview of
     a restore that would move nothing says so instead of
-    failing."""
+    failing. A ``note`` in the request is the draft decision
+    note: echoed back with the moves it would be stored with,
+    kept nowhere."""
     try:
         return service.preview_restore_diff_threshold_settings(
-            request.history_index
+            request.history_index, note=request.note or ""
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -338,10 +346,11 @@ def preview_restore_sla_budget_settings(
 ) -> dict:
     """Preview an SLA-budget settings restore, the same dry-run
     way: which tier budgets would change, from what to what,
-    before the operator commits."""
+    before the operator commits — and the drafted decision note
+    echoed back beside them."""
     try:
         return service.preview_restore_sla_budget_settings(
-            request.history_index
+            request.history_index, note=request.note or ""
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

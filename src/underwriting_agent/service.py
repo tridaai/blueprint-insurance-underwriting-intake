@@ -1661,52 +1661,60 @@ class SubmissionService:
         return self.sla_budget_settings()
 
     def restore_diff_threshold_settings(
-        self, actor: str, history_index: int
+        self, actor: str, history_index: int, note: str = ""
     ) -> dict:
         """Restore the threshold settings record to the state in
         force after its history entry ``history_index``
         (``proposals.restore_threshold_settings``): one new audited
         history entry naming the entry restored to, however many
         dimensions move. The way back from a bad sequence of
-        accepts is one decision, not one revert per change."""
+        accepts is one decision, not one revert per change. The
+        restorer's optional ``note`` is kept on the restore entry
+        as its decision note — the "why" beside the "what"."""
         from .proposals import restore_threshold_settings
 
-        restore_threshold_settings(self._get_store(), history_index, actor)
+        restore_threshold_settings(
+            self._get_store(), history_index, actor, note=note
+        )
         return self.diff_threshold_settings()
 
     def restore_sla_budget_settings(
-        self, actor: str, history_index: int
+        self, actor: str, history_index: int, note: str = ""
     ) -> dict:
         """Restore the SLA-budget settings record to a chosen
-        history entry's state, the same append-only way."""
+        history entry's state, the same append-only way, with the
+        same optional decision note on the restore entry."""
         from .proposals import restore_sla_budget_settings
 
-        restore_sla_budget_settings(self._get_store(), history_index, actor)
+        restore_sla_budget_settings(
+            self._get_store(), history_index, actor, note=note
+        )
         return self.sla_budget_settings()
 
     def preview_restore_diff_threshold_settings(
-        self, history_index: int
+        self, history_index: int, note: str = ""
     ) -> dict:
         """Preview a threshold-settings restore
         (``proposals.preview_restore_threshold_settings``): the
         values in force now, the values as of the chosen history
         entry, and exactly which dimensions would move — a dry
-        run that writes nothing and appends nothing."""
+        run that writes nothing and appends nothing. A drafted
+        decision ``note`` is echoed back, stored nowhere."""
         from .proposals import preview_restore_threshold_settings
 
         return preview_restore_threshold_settings(
-            self._get_store(), history_index
+            self._get_store(), history_index, note=note
         )
 
     def preview_restore_sla_budget_settings(
-        self, history_index: int
+        self, history_index: int, note: str = ""
     ) -> dict:
         """Preview an SLA-budget settings restore, the same
-        dry-run way."""
+        dry-run way, with the same drafted-note echo."""
         from .proposals import preview_restore_sla_budget_settings
 
         return preview_restore_sla_budget_settings(
-            self._get_store(), history_index
+            self._get_store(), history_index, note=note
         )
 
     def decide_calibration_proposal(
