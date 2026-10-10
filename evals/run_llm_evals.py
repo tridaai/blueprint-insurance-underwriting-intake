@@ -56,11 +56,30 @@ GOLDEN = Path(__file__).resolve().parent / "golden.jsonl"
 RESULTS = Path(__file__).resolve().parent / "llm_results.json"
 
 
-def judge_draft(backend, result, judge_model: str | None) -> dict:
+def judge_draft(backend, result, submission, judge_model: str | None) -> dict:
     """One LLM-judge verdict for a produced draft pair. Never raises: a
-    failed judge call is a ``judge_error`` verdict, which fails the pack."""
+    failed judge call is a ``judge_error`` verdict, which fails the pack.
+
+    The judge sees the FULL verified facts the drafter saw — the
+    submission's own figures and the cited guideline texts included —
+    so a figure the drafter legitimately used is not misread as an
+    invention (an earlier pack run flagged exactly those artifacts).
+    """
     recommended = next((o for o in result.options if o.recommended), None)
     user = JUDGE_USER_TEMPLATE.format(
+        submission_id=result.submission_id,
+        insured_name=result.insured_name,
+        broker_name=submission.broker_name,
+        line_of_business=result.line_of_business,
+        class_of_business=submission.class_of_business,
+        requested_limit=submission.requested_limit or "not stated",
+        requested_deductible=submission.requested_deductible or "not stated",
+        revenue=submission.revenue if submission.revenue is not None else "not stated",
+        years_in_business=(
+            submission.years_in_business
+            if submission.years_in_business is not None
+            else "not stated"
+        ),
         outcome=result.triage.outcome,
         risk_tier=result.triage.risk_tier,
         completeness=result.facts.completeness_score,
@@ -72,6 +91,13 @@ def judge_draft(backend, result, judge_model: str | None) -> dict:
             discrepancies=result.facts.discrepancies,
         ),
         missing=", ".join(result.facts.missing_elements) or "none",
+        discrepancies="; ".join(result.facts.discrepancies) or "none",
+        guidelines=(
+            "\n".join(
+                f"[{g.guideline_id}] {g.title}: {g.text}" for g in result.guidelines
+            )
+            or "none"
+        ),
         loss_summary=(
             f"{result.facts.loss_summary.claim_count} claim(s), total incurred "
             f"{result.facts.loss_summary.total_incurred}, largest "
@@ -162,7 +188,7 @@ def main() -> int:
             resolutions[result.cross_check.resolution] += 1
         outcome_ok = result.triage.outcome == case["expected_outcome"]
         outcome_hits += outcome_ok
-        verdict = judge_draft(backend, result, args.judge_model)
+        verdict = judge_draft(backend, result, submission, args.judge_model)
         judged += 1
         is_clean = (
             "judge_error" not in verdict

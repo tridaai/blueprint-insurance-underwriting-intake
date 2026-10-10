@@ -102,7 +102,7 @@ from .ports import ModelBackend  # noqa: E402,F401
 
 
 _NEXT_STEP = {
-    "proceed_to_quote_prep": "the submission proceeds to quote preparation at standard authority, and we will update you when the underwriting review reaches its next step.",
+    "proceed_to_quote_prep": "the packet is with the underwriter, who decides whether the submission proceeds to quote preparation; we will update you when that review reaches its next step.",
     "refer_to_senior_underwriter": "the submission is being referred to a senior underwriter with the full packet; we will update you when that review reaches its next step.",
     "request_information": "we still need the items listed in the underwriter packet before the submission can be assessed; the next step is receiving them.",
     "draft_decline_rationale": "a decline rationale is being drafted for underwriter review; no decision has been made, and we will update you when the review concludes.",
