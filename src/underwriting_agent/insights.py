@@ -591,6 +591,11 @@ def queue_item_for(
     # (service.notify_sla_breaches) — the queue shows whether a
     # breached case has been announced, not just that it breached.
     item["sla_breach_notice"] = record.sla_breach_notice
+    # The escalated follow-through flag is attached by
+    # :func:`queue_aging`, which can see every record: the note
+    # rotting on this insured may live on an older, decided record.
+    # None here — the single-item builder cannot know.
+    item["escalated_note"] = None
     return item
 
 
@@ -637,6 +642,7 @@ def queue_aging(
     now: datetime | None = None,
     *,
     sla_budgets_map: dict[str, int] | None = None,
+    follow_escalation_days: int | None = None,
 ) -> dict:
     """The awaiting queue by age — the stranded-queue early warning.
 
@@ -652,6 +658,16 @@ def queue_aging(
     again in ``breaches``, worst overrun first — that list is the
     queue's worklist, and it is what the drafted status note (see
     :func:`compose_status_note`) is for.
+
+    And every item carries its insured's **escalated-note flag**:
+    when any record for the same insured holds a status note whose
+    follow-through loop has aged past the escalation window (see
+    :func:`follow_through_digest`), the item names that note and
+    its age — the rotting loop shows where the work happens, not
+    only in the digest. All escalated notes are listed again in
+    ``escalated_notes``, each with the awaiting submissions its
+    insured currently has in this queue (possibly none — the case
+    the note was drafted on may be decided while the loop rots).
     """
     now = now or datetime.now(timezone.utc)
     budgets = sla_budgets_map if sla_budgets_map is not None else sla_budgets()
@@ -660,6 +676,7 @@ def queue_aging(
     by_outcome: Counter = Counter()
     oldest: dict | None = None
     breaches: list[dict] = []
+    all_items: list[dict] = []
     blocked_bundles = 0
     total = 0
     for record in records:
@@ -670,6 +687,7 @@ def queue_aging(
         by_outcome[result.triage.outcome] += 1
         item = queue_item_for(record, now, budgets)
         assert item is not None  # status checked above
+        all_items.append(item)
         if item["blocking_lines"]:
             blocked_bundles += 1
         if item["age_days"] is None:
@@ -685,6 +703,54 @@ def queue_aging(
         if oldest is None or age > oldest["age_days"]:
             oldest = item
     breaches.sort(key=lambda i: (-(i["sla_days_over"] or 0), -i["age_days"], i["submission_id"]))
+    # Escalated follow-through, matched by insured: the note lives
+    # on its own record (often an older, decided submission), while
+    # the flag belongs on the work the underwriter is looking at
+    # now. One flag per item — the insured's oldest rotting loop.
+    follow = follow_through_digest(
+        records, now, escalation_days=follow_escalation_days
+    )
+    escalated_by_insured: dict[str, dict] = {}
+    for entry in follow["escalated"]:
+        name = entry["insured_name"]
+        if not name:
+            continue
+        current = escalated_by_insured.get(name)
+        if current is None or (entry["note_age_days"] or 0) > (
+            current["note_age_days"] or 0
+        ):
+            escalated_by_insured[name] = entry
+    awaiting_by_insured: dict[str, list[str]] = {}
+    flagged = 0
+    for item in all_items:
+        note = escalated_by_insured.get(item["insured_name"])
+        if note is not None:
+            item["escalated_note"] = {
+                "submission_id": note["submission_id"],
+                "drafted_at": note["drafted_at"],
+                "note_age_days": note["note_age_days"],
+                "state": note["state"],
+            }
+            flagged += 1
+        if item["insured_name"]:
+            awaiting_by_insured.setdefault(item["insured_name"], []).append(
+                item["submission_id"]
+            )
+    escalated_notes = [
+        {
+            "submission_id": entry["submission_id"],
+            "insured_name": entry["insured_name"],
+            "broker_name": entry["broker_name"],
+            "drafted_at": entry["drafted_at"],
+            "note_age_days": entry["note_age_days"],
+            "state": entry["state"],
+            "still_outstanding_items": entry["still_outstanding_items"],
+            "awaiting_submission_ids": sorted(
+                awaiting_by_insured.get(entry["insured_name"], [])
+            ),
+        }
+        for entry in follow["escalated"]
+    ]
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "total_awaiting": total,
@@ -699,6 +765,8 @@ def queue_aging(
         "breach_count": len(breaches),
         "breaches": breaches,
         "blocked_bundles": blocked_bundles,
+        "escalated_notes": escalated_notes,
+        "items_with_escalated_notes": flagged,
     }
 
 
