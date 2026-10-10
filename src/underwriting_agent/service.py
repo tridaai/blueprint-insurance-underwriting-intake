@@ -1412,6 +1412,25 @@ class SubmissionService:
 
         return sla_budget_settings_view(self._get_store())
 
+    def sla_budget_calibration(self) -> dict:
+        """The SLA-budget calibration report
+        (``proposals.sla_budget_calibration``): per tier, the
+        decided cases' waits as a distribution and a sweep of
+        candidate budgets — breach counts, decision splits, and
+        the moved set against the budget in force, marked when it
+        is the one-sided evidence an SLA proposal would be drafted
+        from. The budgets are the ones in force (settings record
+        over environment), each tier's source named. Read-only —
+        reading it changes nothing."""
+        from .proposals import sla_budget_calibration, sla_budget_sources
+
+        store = self._get_store()
+        return sla_budget_calibration(
+            store.all_records(),
+            self.effective_sla_budgets(),
+            budget_sources=sla_budget_sources(store),
+        )
+
     def draft_sla_budget_proposals(self) -> dict:
         """Draft SLA-budget proposals from the decided cases' waits
         (``proposals.draft_sla_proposals``): candidate budgets

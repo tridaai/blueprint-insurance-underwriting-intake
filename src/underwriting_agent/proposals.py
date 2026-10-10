@@ -1053,6 +1053,201 @@ def draft_sla_proposals(
 
 
 # ---------------------------------------------------------------------------
+# SLA-budget calibration — the budgets' what-if, like the thresholds'
+# ---------------------------------------------------------------------------
+
+
+def sla_budget_sources(store: Store) -> dict[str, str]:
+    """Where each tier's budget in force came from: the settings
+    record (an accepted proposal wrote it) or the environment.
+
+    Per tier: the settings document stores the whole budgets map
+    once any change lands, so presence in the map proves nothing —
+    the provenance is the history. A tier's budget traces to the
+    record when some history entry moved it (an accept, a revert,
+    or a restore's ``changes``); a tier no entry ever touched
+    still reads the environment value. A record without history
+    (hand-written) falls back to comparing values against the
+    environment base.
+    """
+    settings = load_sla_settings(store)
+    if not settings:
+        return {tier: "environment" for tier in QUEUE_SLA_DEFAULTS}
+    history = settings.get("history") or []
+    if history:
+        moved: set[str] = set()
+        for entry in history:
+            if entry.get("changes"):
+                moved.update(c["dimension"] for c in entry["changes"])
+            elif entry.get("dimension"):
+                moved.add(entry["dimension"])
+        return {
+            tier: (
+                "accepted_proposal" if tier in moved else "environment"
+            )
+            for tier in QUEUE_SLA_DEFAULTS
+        }
+    base = sla_budgets()
+    current = settings.get("budgets") or {}
+    return {
+        tier: (
+            "accepted_proposal"
+            if tier in current and int(current[tier]) != base[tier]
+            else "environment"
+        )
+        for tier in QUEUE_SLA_DEFAULTS
+    }
+
+
+def _percentile(sorted_values: list[int], pct: int) -> int | None:
+    """Nearest-rank percentile of an ascending list (None when
+    empty): the smallest value at least ``pct`` percent of the
+    waits sit at or below."""
+    if not sorted_values:
+        return None
+    rank = max(1, (len(sorted_values) * pct + 99) // 100)
+    return sorted_values[rank - 1]
+
+
+def _sla_sweep_row(
+    tier_cases: list[dict], value: int, current_budget: int
+) -> dict:
+    """One candidate budget read against a tier's decided waits.
+
+    ``breached`` applies the queue's own rule (a case breached
+    when it waited longer than the budget). ``moved_vs_current``
+    is the proposal evidence: the decided cases whose breach
+    state flips between the budget in force and this candidate —
+    newly flagged when the candidate is tighter, un-flagged when
+    it is looser — with their decisions, and whether that moved
+    set is **one-sided** the way :func:`_best_sla_candidate`
+    requires before a proposal may be drafted from it.
+    """
+    breached = [c for c in tier_cases if c["wait_days"] > value]
+    within = [c for c in tier_cases if c["wait_days"] <= value]
+    if value < current_budget:
+        direction: str | None = "lower"
+        moved = [
+            c for c in tier_cases if value < c["wait_days"] <= current_budget
+        ]
+    elif value > current_budget:
+        direction = "raise"
+        moved = [
+            c for c in tier_cases if current_budget < c["wait_days"] <= value
+        ]
+    else:
+        direction = None
+        moved = []
+    moved_split = _decision_split(moved)
+    if not moved:
+        one_sided: bool | None = None
+    elif direction == "lower":
+        one_sided = moved_split["rejected"] == len(moved)
+    else:
+        one_sided = moved_split["approved"] == len(moved)
+    return {
+        "value": value,
+        "is_current": value == current_budget,
+        "direction": direction,
+        "breached": len(breached),
+        "breached_decisions": {
+            "approved": sum(1 for c in breached if c["status"] == "approved"),
+            "rejected": sum(1 for c in breached if c["status"] == "rejected"),
+        },
+        "within_decisions": {
+            "approved": sum(1 for c in within if c["status"] == "approved"),
+            "rejected": sum(1 for c in within if c["status"] == "rejected"),
+        },
+        "moved_vs_current": [
+            {
+                "submission_id": c["submission_id"],
+                "wait_days": c["wait_days"],
+                "decision": c["status"],
+            }
+            for c in sorted(moved, key=lambda c: c["submission_id"])
+        ],
+        "moved_decisions": {
+            "approved": moved_split["approved"],
+            "rejected": moved_split["rejected"],
+        },
+        "one_sided": one_sided,
+        "proposal_ready": bool(moved) and one_sided is True,
+    }
+
+
+def sla_budget_calibration(
+    records: list[ApprovalRecord],
+    budgets: dict[str, int],
+    *,
+    budget_sources: dict[str, str] | None = None,
+    candidates: list[int] | None = None,
+) -> dict:
+    """The SLA-budget calibration report over the whole store.
+
+    The queue's budgets get the what-if :func:`trigger_calibration`
+    gives the diff thresholds: per tier, the **decided** cases'
+    waits as a distribution (the same replay
+    :func:`decided_wait_cases` the SLA proposals are drafted from),
+    and a sweep of candidate budgets — each row's breach count and
+    decision splits, centred on the budget in force with its
+    source named (``budget_sources``: the service resolves it from
+    the settings record; direct callers get "environment"). Every
+    row also carries the moved set against the budget in force
+    and whether it is one-sided — the exact evidence
+    :func:`draft_sla_proposals` consumes, so a human can read why
+    a proposal exists (or why none does) without re-deriving it.
+
+    Read-only by construction: waits are recomputed from the
+    stored records and nothing is written. Cases still awaiting a
+    decision are not evidence and never appear.
+    """
+    cases = decided_wait_cases(records)
+    grid = candidates if candidates is not None else SLA_CANDIDATES
+    sources = budget_sources or {}
+    tiers: list[dict] = []
+    for tier in QUEUE_SLA_DEFAULTS:
+        budget = budgets[tier]
+        tier_cases = [c for c in cases if c["risk_tier"] == tier]
+        waits = sorted(c["wait_days"] for c in tier_cases)
+        values = sorted({int(v) for v in grid} | {budget})
+        rows = [_sla_sweep_row(tier_cases, v, budget) for v in values]
+        at_current = next(r for r in rows if r["is_current"])
+        tiers.append(
+            {
+                "tier": tier,
+                "budget_in_force": budget,
+                "budget_source": sources.get(tier, "environment"),
+                "decided_cases": len(tier_cases),
+                "waits": {
+                    "min": waits[0] if waits else None,
+                    "p50": _percentile(waits, 50),
+                    "p75": _percentile(waits, 75),
+                    "p90": _percentile(waits, 90),
+                    "max": waits[-1] if waits else None,
+                    "mean": (
+                        round(sum(waits) / len(waits), 1) if waits else None
+                    ),
+                },
+                "at_current": at_current,
+                "sweeps": rows,
+            }
+        )
+    return {
+        "budgets": dict(budgets),
+        "decided_cases_weighed": len(cases),
+        "tiers": tiers,
+        "note": (
+            "Read-only what-if: decided waits are recomputed from "
+            "the stored records at each candidate budget; no "
+            "record, queue state, or budget is changed by reading "
+            "this report. A row is proposal_ready when its moved "
+            "set is one-sided decided evidence — the same bar the "
+            "SLA proposal scan drafts from."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Deciding a proposal — the one consequential write
 # ---------------------------------------------------------------------------
 

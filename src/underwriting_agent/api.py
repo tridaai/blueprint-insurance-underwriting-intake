@@ -503,6 +503,18 @@ def sla_budget_settings() -> dict:
     return service.sla_budget_settings()
 
 
+@app.get("/queue/sla/calibration", dependencies=_AUTH)
+def sla_budget_calibration() -> dict:
+    """SLA-budget calibration: per risk tier, the decided cases'
+    waits as a distribution (percentiles against the budget in
+    force, its source named) and a sweep of candidate budgets —
+    breach counts and decision splits at each, with the cases
+    each candidate would move and whether that evidence is the
+    one-sided kind an SLA proposal is drafted from. Read-only;
+    nothing stored is changed by reading it."""
+    return service.sla_budget_calibration()
+
+
 @app.post("/queue/sla-proposals/draft", dependencies=_AUTH)
 def draft_sla_budget_proposals() -> dict:
     """Scan the decided cases' waits for proposal-worthy SLA
