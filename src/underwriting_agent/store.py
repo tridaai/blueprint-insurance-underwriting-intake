@@ -163,11 +163,20 @@ class InMemoryStore:
 
     def __init__(self) -> None:
         self._records: dict[str, ApprovalRecord] = {}
+        self._documents: dict[str, dict] = {}
         self._lock = threading.Lock()
 
     def save(self, record: ApprovalRecord) -> None:
         with self._lock:
             self._records[record.result.submission_id] = record
+
+    def get_document(self, key: str) -> dict | None:
+        with self._lock:
+            return self._documents.get(key)
+
+    def save_document(self, key: str, payload: dict) -> None:
+        with self._lock:
+            self._documents[key] = payload
 
     def get(self, submission_id: str) -> ApprovalRecord | None:
         with self._lock:
@@ -203,6 +212,10 @@ CREATE TABLE IF NOT EXISTS approvals (
     submission_id TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
     decided INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS documents (
+    key TEXT PRIMARY KEY,
+    payload TEXT NOT NULL
 );
 """
 
@@ -254,6 +267,26 @@ class PostgresStore:
                 (submission_id,),
             ).fetchone()
         return _record_from_dict(row[0]) if row else None
+
+    def get_document(self, key: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM service_documents WHERE key = %s",
+                (key,),
+            ).fetchone()
+        return row[0] if row else None
+
+    def save_document(self, key: str, payload: dict) -> None:
+        from psycopg.types.json import Jsonb
+
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO service_documents (key, payload) VALUES (%s, %s) "
+                "ON CONFLICT (key) DO UPDATE SET "
+                "payload = EXCLUDED.payload, updated_at = now()",
+                (key, Jsonb(payload)),
+            )
+            conn.commit()
 
     def _all_records(self) -> list[ApprovalRecord]:
         with self._connect() as conn:
@@ -319,6 +352,22 @@ class SQLiteStore:
                 (submission_id,),
             ).fetchone()
         return _load_record(row[0]) if row else None
+
+    def get_document(self, key: str) -> dict | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM documents WHERE key = ?", (key,)
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_document(self, key: str, payload: dict) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO documents (key, payload) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET payload=excluded.payload",
+                (key, json.dumps(payload)),
+            )
+            conn.commit()
 
     def _all_payloads(self) -> list[str]:
         with self._connect() as conn:

@@ -206,6 +206,7 @@ class AgentState(TypedDict, total=False):
     priors: list[dict[str, Any]]
     prior_submission: Optional[dict[str, Any]]
     prior_status_note: Optional[dict[str, Any]]
+    diff_thresholds: Optional[dict[str, Any]]
     submission_diff: Optional[dict[str, Any]]
     diagnosis: dict[str, Any]
     options: list[dict[str, Any]]
@@ -387,9 +388,18 @@ def _build_graph(backend, retriever, sink, checkpointer=None):
             diff = compute_submission_diff(sub, facts, prior)
             if diff is not None:
                 update["submission_diff"] = diff.model_dump()
-                rule = apply_diff_triggers(
-                    rule, diff_referral_triggers(sub, facts, prior)
+                # The thresholds in force ride in state when the
+                # service resolved them (settings record over
+                # environment — see proposals.effective_thresholds);
+                # without them the trigger computation reads the
+                # environment itself, as it always has.
+                thresholds = state.get("diff_thresholds")
+                triggers = (
+                    diff_referral_triggers(sub, facts, prior, **thresholds)
+                    if thresholds
+                    else diff_referral_triggers(sub, facts, prior)
                 )
+                rule = apply_diff_triggers(rule, triggers)
         update["rule_triage"] = rule.model_dump()
         classify_fn = getattr(backend, "classify_with_llm", None)
         if classify_fn is None:
@@ -930,6 +940,7 @@ def run_submission(
     priors: list[dict] | None = None,
     prior_submission: dict | None = None,
     prior_status_note: dict | None = None,
+    diff_thresholds: dict | None = None,
     event_sink=None,
     checkpointer: BaseCheckpointSaver | None = None,
     thread_id: str | None = None,
@@ -944,6 +955,10 @@ def run_submission(
     ``prior_status_note`` is the stored underwriter status note for
     an earlier case of this insured (its outstanding snapshot is
     followed through against this run's facts, into the packet);
+    ``diff_thresholds`` carries the diff-trigger thresholds in
+    force when the service resolved them from an accepted
+    calibration proposal's settings record (``None`` = read the
+    environment, the long-standing behaviour);
     ``event_sink`` receives structured run events; ``checkpointer``
     + ``thread_id`` pause the run at the gate for a later resume.
     """
@@ -964,6 +979,7 @@ def run_submission(
         "priors": priors or [],
         "prior_submission": prior_submission,
         "prior_status_note": prior_status_note,
+        "diff_thresholds": diff_thresholds,
     }
     sink.emit(
         RunEvent(

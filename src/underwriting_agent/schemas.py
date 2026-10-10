@@ -559,3 +559,18 @@ class DecisionRequest(BaseModel):
 
     def actor_name(self) -> Optional[str]:
         return self.actor or self.approver or self.reviewer
+
+
+class ProposalDecisionRequest(BaseModel):
+    """A human's decision on a calibration proposal (see
+    ``proposals.py``): who decided, whether they accepted, and an
+    optional note kept with the decision."""
+
+    actor: Optional[str] = None
+    approver: Optional[str] = None
+    reviewer: Optional[str] = None
+    accept: bool = False
+    note: Optional[str] = None
+
+    def actor_name(self) -> Optional[str]:
+        return self.actor or self.approver or self.reviewer

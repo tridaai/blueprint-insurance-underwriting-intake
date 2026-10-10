@@ -207,18 +207,21 @@ def trigger_calibration(
     records: list[ApprovalRecord],
     *,
     candidates: dict | None = None,
+    thresholds: dict | None = None,
 ) -> dict:
     """The calibration report over the whole store.
 
-    ``at_current`` replays the stored renewals at the configured
-    thresholds; ``recorded_at_analysis`` reports what actually
+    ``at_current`` replays the stored renewals at the thresholds in
+    force (``thresholds`` — the service passes the effective set,
+    settings record over environment; direct callers get the
+    environment's); ``recorded_at_analysis`` reports what actually
     fired when those renewals were analysed (and what underwriters
     decided on the moved cases). ``sweeps`` varies one threshold at
-    a time — the others held at the configured values — so each
+    a time — the others held at the in-force values — so each
     knob's effect reads on its own. Nothing is written.
     """
     pairs = renewal_pairs(records)
-    current = current_thresholds()
+    current = thresholds or current_thresholds()
     base_referrals, base_families = _evaluate(pairs, current)
 
     recorded = [p for p in pairs if p["recorded_triggers"]]

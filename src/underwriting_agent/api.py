@@ -37,7 +37,12 @@ from .events import CallbackSink, RunEvent
 from .guidelines_data import GUIDELINES
 from .insights import audit_csv
 from .samples import load_sample_submissions
-from .schemas import AgentResult, DecisionRequest, SubmissionInput
+from .schemas import (
+    AgentResult,
+    DecisionRequest,
+    ProposalDecisionRequest,
+    SubmissionInput,
+)
 from .wiring import build_service_from_env
 
 # Load the repo-root .env at startup (real environment variables win), so
@@ -244,8 +249,62 @@ def diff_trigger_calibration() -> dict:
     candidate referral-trigger thresholds and show how many
     referrals each setting would have produced, family by family —
     alongside what actually fired and what underwriters decided.
-    Read-only; nothing stored is changed by reading it."""
+    Read-only; nothing stored is changed by reading it. The replay
+    centres on the thresholds in force (``threshold_source`` says
+    whether they come from the environment or an accepted
+    proposal's settings record)."""
     return service.diff_trigger_calibration()
+
+
+@app.get("/calibration/settings", dependencies=_AUTH)
+def calibration_settings() -> dict:
+    """The diff-trigger thresholds in force and their provenance:
+    the values, the source (environment, or the settings record an
+    accepted proposal wrote), and the record's change history."""
+    return service.diff_threshold_settings()
+
+
+@app.get("/calibration/proposals", dependencies=_AUTH)
+def calibration_proposals() -> dict:
+    """Every stored calibration proposal with the thresholds in
+    force. A proposal is a drafted threshold change with its
+    evidence attached; it changes nothing until a human accepts
+    it."""
+    return {
+        "proposals": service.calibration_proposals(),
+        "settings": service.diff_threshold_settings(),
+    }
+
+
+@app.post("/calibration/proposals/draft", dependencies=_AUTH)
+def draft_calibration_proposals() -> dict:
+    """Scan the stored renewals for proposal-worthy threshold moves
+    and draft them (see proposals.py for the evidence bar: the
+    moved referrals must be entirely decided and one-sided).
+    Drafting writes only proposal documents — no threshold moves."""
+    return service.draft_calibration_proposals()
+
+
+@app.post("/calibration/proposals/{proposal_id}/decide", dependencies=_AUTH)
+def decide_calibration_proposal(
+    proposal_id: str, request: ProposalDecisionRequest
+) -> dict:
+    """Decide one calibration proposal. Accepting writes the
+    proposed threshold into the settings record the classifier
+    reads, with the change in the record's audit history;
+    rejecting leaves every threshold untouched. A proposal is
+    decided once."""
+    try:
+        return service.decide_calibration_proposal(
+            proposal_id,
+            _decision_actor(request),
+            accept=request.accept,
+            note=request.note or "",
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/samples", dependencies=_AUTH)

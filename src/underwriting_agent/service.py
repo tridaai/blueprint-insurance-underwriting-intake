@@ -490,6 +490,7 @@ class SubmissionService:
             priors=priors,
             prior_submission=self._prior_submission_for(model, prior_records),
             prior_status_note=note_record.status_note if note_record else None,
+            diff_thresholds=self.effective_diff_thresholds(),
             event_sink=event_sink,
             checkpointer=self._get_checkpointer(),
             thread_id=model.submission_id,
@@ -555,6 +556,7 @@ class SubmissionService:
                 priors=priors,
                 prior_submission=self._prior_submission_for(sub, prior_records),
                 prior_status_note=note_record.status_note if note_record else None,
+                diff_thresholds=self.effective_diff_thresholds(),
                 event_sink=event_sink,
                 checkpointer=None,
             )
@@ -1410,15 +1412,80 @@ class SubmissionService:
         record = self._get_store().get(submission_id)
         return record.status_note if record else None
 
+    def effective_diff_thresholds(self) -> dict:
+        """The diff-trigger thresholds in force: the environment
+        configuration, overridden per dimension by the settings
+        record an accepted calibration proposal wrote
+        (``proposals.effective_thresholds``). Every analysis this
+        service runs passes these into the pipeline explicitly, so
+        an accepted proposal changes the very next renewal's
+        triggers — no restart, no redeploy."""
+        from .proposals import effective_thresholds
+
+        return effective_thresholds(self._get_store())
+
+    def diff_threshold_settings(self) -> dict:
+        """The thresholds in force and their provenance: the values,
+        whether they come from the environment or an accepted
+        proposal, and the settings record's change history."""
+        from .proposals import threshold_settings_view
+
+        return threshold_settings_view(self._get_store())
+
     def diff_trigger_calibration(self) -> dict:
         """The diff-trigger calibration report: the stored renewals
         replayed at candidate trigger thresholds (read-only
         what-if), alongside what actually fired at analysis time
         and what underwriters decided on those cases
-        (``calibration.py``)."""
+        (``calibration.py``). The replay centres on the thresholds
+        in force — the settings record's, when a proposal has been
+        accepted — and says which source they came from."""
         from .calibration import trigger_calibration
 
-        return trigger_calibration(self._get_store().all_records())
+        report = trigger_calibration(
+            self._get_store().all_records(),
+            thresholds=self.effective_diff_thresholds(),
+        )
+        report["threshold_source"] = self.diff_threshold_settings()["source"]
+        return report
+
+    def draft_calibration_proposals(self) -> dict:
+        """Draft threshold-change proposals from the calibration
+        evidence (``proposals.draft_proposals``): candidate moves
+        whose gained/lost referrals carry one-sided decision
+        evidence become stored proposal documents. Drafting changes
+        no threshold and no record — a human still decides."""
+        from .proposals import draft_proposals
+
+        store = self._get_store()
+        return draft_proposals(store, store.all_records())
+
+    def calibration_proposals(self) -> list[dict]:
+        """Every stored calibration proposal, oldest first."""
+        from .proposals import load_proposals
+
+        return load_proposals(self._get_store())
+
+    def decide_calibration_proposal(
+        self,
+        proposal_id: str,
+        actor: str,
+        *,
+        accept: bool,
+        note: str = "",
+    ) -> dict:
+        """Record a human's decision on a calibration proposal.
+
+        Accepting writes the proposed threshold into the settings
+        record the classifier reads (with the change in the
+        record's audit history); rejecting leaves every threshold
+        exactly where it was. Either way the decision — who, when,
+        the note — is kept on the proposal itself."""
+        from .proposals import decide_proposal
+
+        return decide_proposal(
+            self._get_store(), proposal_id, actor, accept=accept, note=note
+        )
 
     def guideline_change_impact(self, classifier=None) -> dict:
         """Which awaiting submissions would re-triage differently

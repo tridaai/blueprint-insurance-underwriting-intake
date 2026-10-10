@@ -80,6 +80,15 @@ class Store(Protocol):
 
     def decision_feedback(self, exclude_submission_id: str | None = None) -> list[dict]: ...
 
+    def get_document(self, key: str) -> "dict | None":
+        """One service document by key (calibration proposals, the
+        accepted threshold settings — see ``proposals.py``), or None."""
+        ...
+
+    def save_document(self, key: str, payload: dict) -> None:
+        """Write one service document, replacing any prior value."""
+        ...
+
 
 class EventSink(Protocol):
     """The run-events seam: one ``emit`` per structured event."""

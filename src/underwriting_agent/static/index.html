@@ -95,6 +95,7 @@
     <section>
       <h2>Diff-trigger calibration</h2>
       <div id="calibration" class="empty">Loading…</div>
+      <div id="proposals" style="margin-top:10px"></div>
     </section>
     <section>
       <h2>How it works</h2>
@@ -328,6 +329,7 @@ async function draftNote(submissionId) {
 }
 
 async function loadCalibration() {
+  loadProposals();
   try {
     const res = await fetch('/guidelines/diff-trigger-calibration', {headers: headers()});
     if (!res.ok) throw new Error('none');
@@ -347,6 +349,59 @@ async function loadCalibration() {
   } catch (e) {
     $('calibration').innerHTML = '<span class="empty">Calibration unavailable.</span>';
   }
+}
+
+async function loadProposals() {
+  try {
+    const res = await fetch('/calibration/proposals', {headers: headers()});
+    if (!res.ok) throw new Error('none');
+    const body = await res.json();
+    const s = body.settings || {};
+    const t = s.thresholds || {};
+    const proposals = body.proposals || [];
+    const dimName = d => ({limit_jump_pct: 'Limit jump %', new_claim_min_incurred: 'New-claim floor $', development_min_increase: 'Development floor $'})[d] || d;
+    const statusPill = p => p.status === 'accepted' ? pill('accepted', 'good') : p.status === 'rejected' ? pill('rejected', 'bad') : pill('draft', 'warn');
+    $('proposals').innerHTML =
+      `<h3>Threshold proposals</h3>
+       <p class="note">In force: limit jump ${esc(t.limit_jump_pct)}% · new-claim floor $${esc(t.new_claim_min_incurred)} · development floor $${esc(t.development_min_increase)} — source: ${s.source === 'accepted_proposal' ? `accepted proposal (settings record${s.settings && s.settings.updated_by ? ', last set by ' + esc(s.settings.updated_by) : ''})` : 'environment configuration'}.</p>
+       ${proposals.length ? `<table><thead><tr><th>Proposal</th><th>Move</th><th>Evidence</th><th>Status</th><th></th></tr></thead><tbody>
+       ${proposals.map(p => `<tr><td>${esc(p.proposal_id)}<br><span class="note">${esc(dimName(p.dimension))}</span></td><td>${esc(p.current_value)} → ${esc(p.proposed_value)}</td><td><span class="note">${esc(p.rationale)}</span></td><td>${statusPill(p)}${p.decided_by ? `<br><span class="note">by ${esc(p.decided_by)}</span>` : ''}</td><td>${p.status === 'draft' ? `<button data-prop-accept="${esc(p.proposal_id)}">Accept</button> <button data-prop-reject="${esc(p.proposal_id)}">Reject</button>` : ''}</td></tr>`).join('')}
+       </tbody></table>` : '<p class="empty">No proposals drafted — draft from the stored renewals when their decisions carry a one-sided move.</p>'}
+       <div class="row" style="margin-top:8px"><button id="draft-proposals">Draft proposals from stored renewals</button>
+       <span class="note" id="proposal-status"></span></div>
+       <p class="note">Accepting writes the threshold into the settings record the classifier reads — the change, its evidence, and its decider stay on the record. Rejecting changes nothing but the proposal.</p>`;
+    document.querySelectorAll('[data-prop-accept]').forEach(btn =>
+      btn.addEventListener('click', () => decideProposal(btn.getAttribute('data-prop-accept'), true)));
+    document.querySelectorAll('[data-prop-reject]').forEach(btn =>
+      btn.addEventListener('click', () => decideProposal(btn.getAttribute('data-prop-reject'), false)));
+    $('draft-proposals').addEventListener('click', draftProposals);
+  } catch (e) {
+    $('proposals').innerHTML = '<span class="empty">Proposals unavailable.</span>';
+  }
+}
+
+async function draftProposals() {
+  $('proposal-status').textContent = 'Scanning the stored renewals…';
+  const res = await fetch('/calibration/proposals/draft', {method: 'POST', headers: headers()});
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('proposal-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('proposal-status').textContent = body.drafted && body.drafted.length
+    ? 'Drafted: ' + body.drafted.map(p => p.proposal_id).join(', ') + '.'
+    : 'No new proposals — no one-sided decided move in the stored renewals.';
+  loadProposals();
+}
+
+async function decideProposal(proposalId, accept) {
+  const actor = $('actor').value.trim();
+  if (!actor) { $('proposal-status').textContent = 'Enter the underwriter name in the gate panel first — a threshold change needs its decider.'; return; }
+  const res = await fetch(`/calibration/proposals/${proposalId}/decide`, {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({actor, accept})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('proposal-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('proposal-status').textContent = `${proposalId} ${body.status} by ${body.decided_by}` + (body.status === 'accepted' ? ' — the new threshold is in force for the next analysis.' : '.');
+  loadCalibration();
 }
 
 async function loadDispatch() {
