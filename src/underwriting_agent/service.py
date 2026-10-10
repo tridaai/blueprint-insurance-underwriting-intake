@@ -1593,6 +1593,34 @@ class SubmissionService:
         store = self._get_store()
         return refresh_expired_proposals(store, store.all_records(), actor)
 
+    def preview_refresh_calibration_proposal(
+        self, proposal_id: str
+    ) -> dict:
+        """Preview one expired draft's refresh
+        (``proposals.preview_refresh_proposal``): its evidence
+        scan runs and the outcome it would produce is reported —
+        renewed with a named fresh snapshot, or withdrawn with
+        its reason — while nothing is written."""
+        from .proposals import preview_refresh_proposal
+
+        store = self._get_store()
+        return preview_refresh_proposal(
+            store, store.all_records(), proposal_id
+        )
+
+    def preview_refresh_expired_calibration_proposals(self) -> dict:
+        """Preview the refresh-all sweep
+        (``proposals.preview_refresh_expired_proposals``): every
+        expired draft scanned individually and reported as
+        would-renew / would-withdraw, without a single write —
+        the shape of the drift before anyone commits to it."""
+        from .proposals import preview_refresh_expired_proposals
+
+        store = self._get_store()
+        return preview_refresh_expired_proposals(
+            store, store.all_records()
+        )
+
     def revert_diff_threshold_settings(self, actor: str) -> dict:
         """Revert the threshold settings record's latest accepted
         change (``proposals.revert_threshold_settings``): the

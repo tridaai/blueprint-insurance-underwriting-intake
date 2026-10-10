@@ -1135,6 +1135,54 @@ def decide_proposal(
 # Refreshing an expired proposal — re-run its evidence scan
 # ---------------------------------------------------------------------------
 
+#: Why a refresh withdraws a draft, recorded on the proposal when
+#: it happens and quoted by the refresh preview when it would.
+_REFRESH_WITHDRAWAL_REASON = (
+    "the evidence refresh found no one-sided decided move "
+    "for this setting — the snapshot it was drafted from no "
+    "longer holds"
+)
+
+
+def _refresh_scan(
+    store: Store,
+    records: list[ApprovalRecord],
+    proposals: list[dict],
+    proposal: dict,
+) -> dict | None:
+    """One draft's evidence scan, re-run against the store as it
+    stands: the fresh proposal fields when today's evidence still
+    carries a one-sided decided move for the draft's setting,
+    else None. The scan is the drafting scan, restricted to the
+    proposal's own setting and re-based on the values in force.
+    Shared by the refresh and its preview, so a previewed outcome
+    is the outcome the refresh itself produces. Reads only —
+    nothing here saves."""
+    kind = _proposal_kind(proposal)
+    rejected = _rejected_directions(proposals, kind)
+    if kind == _SLA_KIND:
+        budgets = effective_sla_budgets(store)
+        tier = proposal["dimension"]
+        cases = decided_wait_cases(records)
+        tier_cases = [c for c in cases if c["risk_tier"] == tier]
+        best = _best_sla_candidate(cases, tier, budgets[tier], rejected)
+        if best is not None:
+            return _sla_fields(tier, budgets[tier], best, tier_cases)
+        return None
+    current = effective_thresholds(store)
+    pairs = renewal_pairs(records)
+    decided_pairs = [
+        p for p in pairs if p["status"] in ("approved", "rejected")
+    ]
+    best = _best_threshold_candidate(
+        pairs, proposal["dimension"], current, rejected
+    )
+    if best is not None:
+        return _threshold_fields(
+            proposal["dimension"], current, best, pairs, decided_pairs
+        )
+    return None
+
 
 def refresh_proposal(
     store: Store,
@@ -1184,30 +1232,7 @@ def refresh_proposal(
             f"{proposal_expires_at(proposal)} — refresh applies once "
             "a draft has expired"
         )
-    kind = _proposal_kind(proposal)
-    rejected = _rejected_directions(proposals, kind)
-    fields: dict | None = None
-    if kind == _SLA_KIND:
-        budgets = effective_sla_budgets(store)
-        tier = proposal["dimension"]
-        cases = decided_wait_cases(records)
-        tier_cases = [c for c in cases if c["risk_tier"] == tier]
-        best = _best_sla_candidate(cases, tier, budgets[tier], rejected)
-        if best is not None:
-            fields = _sla_fields(tier, budgets[tier], best, tier_cases)
-    else:
-        current = effective_thresholds(store)
-        pairs = renewal_pairs(records)
-        decided_pairs = [
-            p for p in pairs if p["status"] in ("approved", "rejected")
-        ]
-        best = _best_threshold_candidate(
-            pairs, proposal["dimension"], current, rejected
-        )
-        if best is not None:
-            fields = _threshold_fields(
-                proposal["dimension"], current, best, pairs, decided_pairs
-            )
+    fields = _refresh_scan(store, records, proposals, proposal)
     entry = {
         "at": _fmt(now_dt),
         "by": actor,
@@ -1223,11 +1248,7 @@ def refresh_proposal(
         proposal["status"] = "withdrawn"
         proposal["withdrawn_at"] = _fmt(now_dt)
         proposal["withdrawn_by"] = actor
-        proposal["withdrawal_reason"] = (
-            "the evidence refresh found no one-sided decided move "
-            "for this setting — the snapshot it was drafted from no "
-            "longer holds"
-        )
+        proposal["withdrawal_reason"] = _REFRESH_WITHDRAWAL_REASON
         entry["outcome"] = "withdrawn"
     else:
         proposal.update(fields)
@@ -1285,5 +1306,130 @@ def refresh_expired_proposals(
             "swept": len(expired_ids),
             "renewed": len(renewed),
             "withdrawn": len(withdrawn),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Refresh preview — the sweep's shape, before anything is written
+# ---------------------------------------------------------------------------
+
+
+def _refresh_projection(
+    proposal: dict, fields: dict | None, now_dt: datetime
+) -> dict:
+    """What a refresh of this expired draft would do, projected:
+    the stale snapshot the draft holds now, and either the fresh
+    snapshot it would take (``would_renew``, with the expiry
+    window the renewal would open) or the reason it would leave
+    the live list (``would_withdraw``). A projection is computed
+    from the same scan the refresh runs — it is not stored, and
+    projecting changes no proposal."""
+    projection = {
+        "proposal_id": proposal["proposal_id"],
+        "kind": _proposal_kind(proposal),
+        "dimension": proposal.get("dimension", ""),
+        "current_value": proposal.get("current_value"),
+        "proposed_value": proposal.get("proposed_value"),
+        "direction": proposal.get("direction"),
+        "expires_at": proposal_expires_at(proposal),
+    }
+    if fields is None:
+        projection.update(
+            {
+                "outcome": "would_withdraw",
+                "refreshed": None,
+                "withdrawal_reason": _REFRESH_WITHDRAWAL_REASON,
+            }
+        )
+    else:
+        projection.update(
+            {
+                "outcome": "would_renew",
+                "refreshed": {
+                    "current_value": fields.get("current_value"),
+                    "proposed_value": fields.get("proposed_value"),
+                    "direction": fields.get("direction"),
+                    "rationale": fields.get("rationale"),
+                    "expires_at": _fmt(
+                        now_dt + timedelta(days=proposal_expiry_days())
+                    ),
+                },
+                "withdrawal_reason": None,
+            }
+        )
+    return projection
+
+
+def preview_refresh_proposal(
+    store: Store,
+    records: list[ApprovalRecord],
+    proposal_id: str,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """Preview one expired draft's refresh: run its evidence scan
+    and report the outcome it *would* produce — renewed with this
+    fresh snapshot, or withdrawn for this reason — without
+    writing anything. The refresh's own validations apply (an
+    unknown, decided, or still-live proposal fails here exactly
+    as it fails there), because the preview shares the refresh's
+    scan and its preconditions — it is the refresh with the save
+    left out."""
+    proposals = load_proposals(store)
+    proposal = next(
+        (p for p in proposals if p["proposal_id"] == proposal_id), None
+    )
+    if proposal is None:
+        raise KeyError(f"Unknown proposal_id: {proposal_id}")
+    if proposal["status"] != "draft":
+        raise ValueError(
+            f"Proposal {proposal_id} is {proposal['status']} — only a "
+            "live draft can be refreshed"
+        )
+    now_dt = _now_dt(now)
+    if not is_expired(proposal, now_dt):
+        raise ValueError(
+            f"Proposal {proposal_id} is still live until "
+            f"{proposal_expires_at(proposal)} — refresh applies once "
+            "a draft has expired"
+        )
+    fields = _refresh_scan(store, records, proposals, proposal)
+    return _refresh_projection(proposal, fields, now_dt)
+
+
+def preview_refresh_expired_proposals(
+    store: Store,
+    records: list[ApprovalRecord],
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """Preview the refresh-all sweep: every expired draft scanned
+    individually — the same per-draft scans the sweep runs — and
+    reported as would-renew / would-withdraw, side by side,
+    without a single write. An operator sees the shape of a
+    fortnight's drift before committing to it; the sweep that
+    follows produces exactly these outcomes on the same store
+    (a refresh never changes what another draft's scan reads —
+    the scans weigh records and the settings in force, neither
+    of which a refresh touches)."""
+    now_dt = _now_dt(now)
+    proposals = load_proposals(store)
+    expired = [p for p in proposals if is_expired(p, now_dt)]
+    would_renew: list[dict] = []
+    would_withdraw: list[dict] = []
+    for proposal in expired:
+        fields = _refresh_scan(store, records, proposals, proposal)
+        projection = _refresh_projection(proposal, fields, now_dt)
+        target = would_renew if fields is not None else would_withdraw
+        target.append(projection)
+    return {
+        "previewed_at": _fmt(now_dt),
+        "would_renew": would_renew,
+        "would_withdraw": would_withdraw,
+        "counts": {
+            "swept": len(expired),
+            "would_renew": len(would_renew),
+            "would_withdraw": len(would_withdraw),
         },
     }

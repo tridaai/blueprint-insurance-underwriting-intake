@@ -382,6 +382,16 @@ def refresh_expired_calibration_proposals(request: DecisionRequest) -> dict:
     )
 
 
+@app.get("/calibration/proposals/refresh-expired/preview", dependencies=_AUTH)
+def preview_refresh_expired_calibration_proposals() -> dict:
+    """Preview the refresh-all sweep: every expired draft's
+    evidence scan runs individually — the same scans the sweep
+    runs — and the report lists would-renew and would-withdraw
+    side by side, without writing anything. The sweep that
+    follows on the same store produces exactly these outcomes."""
+    return service.preview_refresh_expired_calibration_proposals()
+
+
 @app.post("/calibration/proposals/{proposal_id}/decide", dependencies=_AUTH)
 def decide_calibration_proposal(
     proposal_id: str, request: ProposalDecisionRequest
@@ -418,6 +428,24 @@ def refresh_calibration_proposal(
         return service.refresh_calibration_proposal(
             proposal_id, _decision_actor(request)
         )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get(
+    "/calibration/proposals/{proposal_id}/refresh/preview",
+    dependencies=_AUTH,
+)
+def preview_refresh_calibration_proposal(proposal_id: str) -> dict:
+    """Preview one expired proposal's refresh: its evidence scan
+    runs and the outcome it would produce is reported — would
+    renew, with the fresh snapshot it would take, or would
+    withdraw, with the reason — while nothing is written. The
+    refresh's own validations apply unchanged."""
+    try:
+        return service.preview_refresh_calibration_proposal(proposal_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
