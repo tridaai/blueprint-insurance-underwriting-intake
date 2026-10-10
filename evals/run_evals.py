@@ -43,6 +43,31 @@ def _write_results(payload: dict) -> None:
         target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def _prior_bundle(case: dict) -> dict | None:
+    """The service-style prior bundle for a renewal case.
+
+    A case may carry ``prior_submission`` — the insured's previous
+    submission. It is run through the pipeline first, and the
+    bundle (payload + computed facts + triage) is built exactly the
+    way the service builds it from a stored record, so renewal-diff
+    behaviour — including diff-driven referral triggers — is scored
+    by the same gate as everything else.
+    """
+    raw = case.get("prior_submission")
+    if not raw:
+        return None
+    prior = SubmissionInput.model_validate(raw)
+    prior_result = run_submission(prior)
+    return {
+        "submission_id": prior.submission_id,
+        "submitted_at": prior.submitted_at,
+        "outcome": prior_result.triage.outcome,
+        "risk_tier": prior_result.triage.risk_tier,
+        "submission": prior.model_dump(mode="json"),
+        "facts": prior_result.facts.model_dump(mode="json"),
+    }
+
+
 def evaluate(cases: list[dict]) -> dict:
     """Run the pipeline over the cases and score outcome + tier.
 
@@ -62,7 +87,7 @@ def evaluate(cases: list[dict]) -> dict:
 
     for case in cases:
         submission = SubmissionInput.model_validate(case["submission"])
-        result = run_submission(submission)
+        result = run_submission(submission, prior_submission=_prior_bundle(case))
         expected_outcome = case["expected_outcome"]
         per_outcome_total[expected_outcome] += 1
         if result.triage.outcome == expected_outcome:

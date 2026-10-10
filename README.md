@@ -175,6 +175,14 @@ evidence, and in a "Changes since last submission" section of the
 packet — underwriters price the change, not the snapshot. Sample
 **SUB-1013** is SUB-1001's renewal (limit up, revenue up, one new
 small claim) and shows the diff when the two are analysed in order.
+The diff also **moves triage**: a material adverse delta — new claims
+clearing a severity floor (`DIFF_NEW_CLAIM_MIN_INCURRED`, default
+$50,000), a requested-limit jump beyond `DIFF_LIMIT_JUMP_PCT`
+(default 50%), or a class-of-business change — becomes a referral
+trigger on the rule triage before the cross-check, so a worsening
+renewal is referred on the change itself. Benign movement (SUB-1013's
+small claim, its exactly-+50% limit) deliberately does not trigger;
+golden cases D1–D4 pin both sides of that line.
 
 Two samples show the safety story end to end:
 
@@ -307,6 +315,8 @@ load-bearing ones:
 | `GUARDRAIL_REPAIR` / `GUARDRAIL_REPAIR_MAX_ATTEMPTS` | `on`/`off` / 0–3 | `on` / `1` |
 | `RUN_TOKEN_BUDGET` | token cap per run (degrades to templates) | off |
 | `DIAGNOSIS_MAX_TOOL_CALLS` | 0–6 | `4` |
+| `DIFF_LIMIT_JUMP_PCT` | renewal limit jump (%) that becomes a referral trigger | `50` |
+| `DIFF_NEW_CLAIM_MIN_INCURRED` | renewal new-claims incurred floor for a referral trigger | `50000` |
 | `ACTION_WEBHOOK_URL` | approval dispatch endpoint | off |
 | `ACTION_WEBHOOK_SECRET` | HMAC key signing dispatches (`X-Trida-Signature`) | off (unsigned) |
 | `API_KEY` | optional `X-API-Key` gate for the API | off |

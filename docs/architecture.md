@@ -365,13 +365,19 @@ numbers on the submission and its loss records. Line aliases fold too
   scorecards, `/metrics`, and the audit export are deterministic
   projections of the same records the gate writes (`insights.py`) —
   no separate analytics pipeline to drift from the record.
-- **Renewals diff against the store.** The history branch also
-  computes the renewal diff (`diffing.py`): the insured's most
-  recent stored submission (payload + its computed facts) against
-  the new one, field by field. The result carries it
-  (`submission_diff`), the diagnosis cites it as evidence, and the
-  packet prints a "Changes since last submission" section. A first
-  submission has no diff — absence is not a change.
+- **Renewals diff against the store.** The classify node computes
+  the renewal diff (`diffing.py`): the insured's most recent stored
+  submission (payload + its computed facts) against the new one,
+  field by field. The result carries it (`submission_diff`), the
+  diagnosis cites it as evidence, and the packet prints a "Changes
+  since last submission" section. A first submission has no diff —
+  absence is not a change. The diff is also an input to triage, not
+  just a description: new claims clearing a severity floor, a limit
+  jump beyond a configured percentage, or a class change become
+  referral triggers on the rule triage before the cross-check
+  (`diff_referral_triggers` / `apply_diff_triggers`), so the
+  cross-check and everything downstream see the referral the change
+  earned.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 

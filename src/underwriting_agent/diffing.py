@@ -9,6 +9,11 @@ summary — deterministically, from the stored payload and both
 sides' computed facts. The diff rides on the result, joins the
 diagnosis evidence, and gets its own section in the packet.
 
+The diff also MOVES triage: material adverse deltas (new claims
+clearing a severity floor, a limit jump beyond a configured
+percentage, a class change) become referral triggers on the rule
+triage before the cross-check — see ``diff_referral_triggers``.
+
 Matching is by insured name (the same key the memory features use).
 Only the most recent prior counts: a renewal is priced against the
 last submission, not the whole history.
@@ -16,12 +21,14 @@ last submission, not the whole history.
 
 from __future__ import annotations
 
+from .config import env_float
 from .facts import normalize_line
 from .schemas import (
     DiffFieldChange,
     SubmissionDiff,
     SubmissionFacts,
     SubmissionInput,
+    Triage,
 )
 from .triage import _limit_value
 
@@ -230,6 +237,132 @@ def diff_evidence_lines(diff: SubmissionDiff) -> list[str]:
             line += f" ({change.note})"
         lines.append(line)
     return lines
+
+
+# ---------------------------------------------------------------------------
+# Diff-driven referral triggers — the diff moves triage, not just prose
+# ---------------------------------------------------------------------------
+
+# Thresholds for "materially adverse": deliberately conservative
+# defaults, both configurable — a deployment tunes them to its own
+# appetite without touching code.
+DEFAULT_LIMIT_JUMP_PCT = 50.0  # DIFF_LIMIT_JUMP_PCT
+DEFAULT_NEW_CLAIM_MIN_INCURRED = 50_000.0  # DIFF_NEW_CLAIM_MIN_INCURRED
+
+
+def diff_referral_triggers(
+    current: SubmissionInput,
+    current_facts: SubmissionFacts,
+    prior: dict,
+    *,
+    limit_jump_pct: float | None = None,
+    new_claim_min_incurred: float | None = None,
+) -> list[str]:
+    """Referral triggers computed from the renewal diff itself.
+
+    Three material adverse deltas, all computed in code from the
+    prior bundle (the same inputs :func:`compute_submission_diff`
+    reads): new claims whose incurred total clears a severity floor,
+    a requested-limit jump beyond a configured percentage, and a
+    class-of-business change. Benign movement — a small new claim, a
+    limit keeping pace with the book, an unchanged class — produces
+    no trigger: the diff describes many renewals and refers few.
+    """
+    payload = (prior or {}).get("submission") or {}
+    if not payload:
+        return []
+    try:
+        previous = SubmissionInput.model_validate(payload)
+    except Exception:
+        return []
+    try:
+        prior_facts = SubmissionFacts.model_validate((prior or {}).get("facts") or {})
+    except Exception:
+        prior_facts = SubmissionFacts()
+    if limit_jump_pct is None:
+        limit_jump_pct = env_float("DIFF_LIMIT_JUMP_PCT", DEFAULT_LIMIT_JUMP_PCT)
+    if new_claim_min_incurred is None:
+        new_claim_min_incurred = env_float(
+            "DIFF_NEW_CLAIM_MIN_INCURRED", DEFAULT_NEW_CLAIM_MIN_INCURRED
+        )
+
+    triggers: list[str] = []
+
+    old_loss, new_loss = prior_facts.loss_summary, current_facts.loss_summary
+    new_claims = new_loss.claim_count - old_loss.claim_count
+    new_incurred = new_loss.total_incurred - old_loss.total_incurred
+    if new_claims >= 1 and new_incurred >= new_claim_min_incurred:
+        triggers.append(
+            f"{new_claims} new claim(s) since the prior submission, "
+            f"{_money(new_incurred)} incurred "
+            "(referral trigger: renewal diff — new claims)"
+        )
+
+    old_limit = _limit_value(previous.requested_limit)
+    new_limit = _limit_value(current.requested_limit)
+    if old_limit > 0 and new_limit > old_limit:
+        pct = (new_limit - old_limit) / old_limit * 100
+        if pct > limit_jump_pct:
+            text = (
+                f"requested limit increased {pct:.0f}% "
+                f"({_money(old_limit)} -> {_money(new_limit)}) "
+                "since the prior submission"
+            )
+            if previous.revenue and current.revenue is not None:
+                rev_pct = (current.revenue - previous.revenue) / previous.revenue * 100
+                if rev_pct > 0:
+                    text += f", while revenue rose {rev_pct:.0f}%"
+                elif rev_pct < 0:
+                    text += f", while revenue fell {abs(rev_pct):.0f}%"
+                else:
+                    text += ", with revenue flat"
+            triggers.append(
+                text + " (referral trigger: renewal diff — limit jump)"
+            )
+
+    old_class = (previous.class_of_business or "").strip()
+    new_class = (current.class_of_business or "").strip()
+    if old_class and new_class and old_class.lower() != new_class.lower():
+        triggers.append(
+            f"class of business changed from '{old_class}' to '{new_class}' "
+            "since the prior submission "
+            "(referral trigger: renewal diff — class change)"
+        )
+
+    return triggers
+
+
+def apply_diff_triggers(triage: Triage, triggers: list[str]) -> Triage:
+    """Fold diff triggers into a rule triage.
+
+    Only an otherwise-clean or already-referred triage can move: an
+    ``in_appetite`` outcome escalates to ``borderline`` (tier floored
+    at moderate, confidence capped at the borderline rules' 0.88)
+    with the rationale saying the referral is on the change; a
+    ``borderline`` outcome just gains the triggers. ``incomplete``
+    and ``out_of_appetite`` are returned untouched — a submission
+    that cannot be assessed, or is outside appetite, is not made
+    more or less so by its history.
+    """
+    if not triggers or triage.outcome not in ("in_appetite", "borderline"):
+        return triage
+    adjusted = triage.model_copy(deep=True)
+    for trigger in triggers:
+        if trigger not in adjusted.referral_triggers:
+            adjusted.referral_triggers.append(trigger)
+    adjusted.signals.append(
+        "renewal diff: material adverse change since the prior submission"
+    )
+    if adjusted.outcome == "in_appetite":
+        adjusted.outcome = "borderline"
+        if adjusted.risk_tier == "low":
+            adjusted.risk_tier = "moderate"
+        adjusted.confidence = min(adjusted.confidence, 0.88)
+        adjusted.rationale += (
+            " Renewal diff referral: " + "; ".join(triggers)
+            + " — the change since the last submission is itself a referral reason."
+        )
+    return adjusted
 
 
 def diff_packet_lines(diff: SubmissionDiff) -> list[str]:

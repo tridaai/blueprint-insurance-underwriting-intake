@@ -144,3 +144,107 @@ def test_diff_survives_store_round_trip():
     stored = service.get("SUB-1013")
     assert stored is not None and stored.submission_diff is not None
     assert stored.submission_diff.prior_submission_id == "SUB-1001"
+
+
+# ---------------------------------------------------------------------------
+# Diff-driven referral triggers: the diff moves triage
+# ---------------------------------------------------------------------------
+
+from underwriting_agent.diffing import apply_diff_triggers, diff_referral_triggers
+from underwriting_agent.schemas import LossRecord
+from underwriting_agent.triage import classify_submission
+
+
+def _facts_for(model):
+    return compute_facts(model, extract_documents(model, MockModelBackend()))
+
+
+def test_new_claims_over_the_severity_floor_trigger():
+    prior_model = MODELS["SUB-1001"]  # no losses
+    current = prior_model.model_copy(
+        update={
+            "submission_id": "SUB-9001",
+            "losses": [
+                LossRecord(
+                    date="2026-08-15",
+                    amount_incurred=120000,
+                    description="Business email compromise — wire fraud, funds recovered in part",
+                    status="closed",
+                )
+            ],
+        }
+    )
+    triggers = diff_referral_triggers(
+        current, _facts_for(current), prior_bundle("SUB-1001")
+    )
+    assert len(triggers) == 1
+    assert "1 new claim(s)" in triggers[0] and "$120,000" in triggers[0]
+    assert "renewal diff" in triggers[0]
+
+
+def test_limit_jump_and_class_change_trigger():
+    prior_model = MODELS["SUB-1001"]  # limit $2,000,000, class "law firm"
+    current = prior_model.model_copy(
+        update={
+            "submission_id": "SUB-9002",
+            "requested_limit": "5000000",
+            "class_of_business": "legal technology services",
+        }
+    )
+    triggers = diff_referral_triggers(
+        current, _facts_for(current), prior_bundle("SUB-1001")
+    )
+    assert any("limit increased 150%" in t for t in triggers)
+    assert any("class of business changed" in t for t in triggers)
+
+
+def test_sample_renewal_pair_stays_under_the_thresholds():
+    # SUB-1013 vs SUB-1001: one new claim at $18,500 (under the
+    # severity floor) and a limit move of exactly +50% (not beyond
+    # it) — real movement, deliberately not a diff referral.
+    current = MODELS["SUB-1013"]
+    triggers = diff_referral_triggers(
+        current, _facts_for(current), prior_bundle("SUB-1001")
+    )
+    assert triggers == []
+
+
+def test_apply_diff_triggers_escalates_a_clean_triage():
+    sub = MODELS["SUB-1001"]
+    triage = classify_submission(sub, _facts_for(sub))
+    assert triage.outcome == "in_appetite"
+    adjusted = apply_diff_triggers(triage, ["synthetic diff trigger"])
+    assert adjusted.outcome == "borderline"
+    assert adjusted.risk_tier == "moderate"
+    assert "synthetic diff trigger" in adjusted.referral_triggers
+    assert "Renewal diff referral" in adjusted.rationale
+    assert triage.outcome == "in_appetite"  # the input is not mutated
+
+
+def test_apply_diff_triggers_leaves_incomplete_alone():
+    sub = MODELS["SUB-1003"]  # D&O, missing financials -> incomplete
+    triage = classify_submission(sub, _facts_for(sub))
+    assert triage.outcome == "incomplete"
+    assert apply_diff_triggers(triage, ["synthetic diff trigger"]) is triage
+
+
+def test_renewal_is_referred_on_the_change_end_to_end():
+    service = SubmissionService(store=InMemoryStore(), checkpointer=False)
+    service.analyze(SAMPLES["SUB-1001"])
+    renewal = dict(SAMPLES["SUB-1001"])
+    renewal["submission_id"] = "SUB-9003"
+    renewal["submitted_at"] = "2026-10-09"
+    renewal["losses"] = [
+        {
+            "date": "2026-08-15",
+            "amount_incurred": 120000,
+            "description": "Business email compromise — wire fraud, funds recovered in part",
+            "status": "closed",
+        }
+    ]
+    result = service.analyze(renewal)
+    # The static rules alone see one moderate claim and no trigger;
+    # the referral exists because the loss is NEW since the prior.
+    assert result.triage.outcome == "borderline"
+    assert any("renewal diff" in t for t in result.triage.referral_triggers)
+    assert result.submission_diff is not None

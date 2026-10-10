@@ -51,7 +51,13 @@ from .clarify import build_information_request
 from .config import env_int, env_str, load_dotenv
 from .crosscheck import resolve_triage
 from .diagnosis import build_diagnosis, format_loss_summary, memory_evidence_lines
-from .diffing import compute_submission_diff, diff_evidence_lines, diff_packet_lines
+from .diffing import (
+    apply_diff_triggers,
+    compute_submission_diff,
+    diff_evidence_lines,
+    diff_packet_lines,
+    diff_referral_triggers,
+)
 from .errors import ProviderError
 from .events import NullSink, RunEvent
 from .extractor import extract_documents, extraction_discrepancies
@@ -354,7 +360,22 @@ def _build_graph(backend, retriever, sink, checkpointer=None):
         sub = SubmissionInput.model_validate(state["submission"])
         facts = SubmissionFacts.model_validate(state["facts"])
         rule = classify_submission(sub, facts)
-        update: dict[str, Any] = {"rule_triage": rule.model_dump()}
+        update: dict[str, Any] = {}
+        # Renewal diffing starts here, not in the history branch:
+        # the diff needs only the submission, the computed facts, and
+        # the prior bundle — all present — and its material adverse
+        # deltas must land on the rule triage BEFORE the cross-check,
+        # so a worsening renewal is referred on the change itself.
+        # The history branch reuses this diff for its evidence lines.
+        prior = state.get("prior_submission")
+        if prior:
+            diff = compute_submission_diff(sub, facts, prior)
+            if diff is not None:
+                update["submission_diff"] = diff.model_dump()
+                rule = apply_diff_triggers(
+                    rule, diff_referral_triggers(sub, facts, prior)
+                )
+        update["rule_triage"] = rule.model_dump()
         classify_fn = getattr(backend, "classify_with_llm", None)
         if classify_fn is None:
             update["triage"] = rule.model_dump()
@@ -409,12 +430,13 @@ def _build_graph(backend, retriever, sink, checkpointer=None):
         update: dict[str, Any] = {
             "history_evidence": memory_evidence_lines(state.get("history"))
         }
-        # Renewal diffing rides this branch: when the service found a
-        # prior submission for this insured, diff it against the new
-        # one in code — the deltas join the diagnosis evidence and
-        # the packet, and land on the result.
+        # Renewal diffing: the classify node normally computed the
+        # diff already (it needs it early, for the referral triggers);
+        # this branch is the fallback for any path that reaches
+        # history without one. Either way the deltas join the
+        # diagnosis evidence and the packet, and land on the result.
         prior = state.get("prior_submission")
-        if prior:
+        if prior and not state.get("submission_diff"):
             sub = SubmissionInput.model_validate(state["submission"])
             facts = SubmissionFacts.model_validate(state["facts"])
             diff = compute_submission_diff(sub, facts, prior)
