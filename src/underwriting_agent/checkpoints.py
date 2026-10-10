@@ -1,12 +1,12 @@
-"""Checkpointed approval gate: LangGraph state persistence over SQLite.
+"""Checkpointed approval gate: LangGraph state persistence.
 
 The approval gate is a real pause in the graph, not a status flag:
 with a checkpointer attached, a run executes up to the gate and its
 graph state persists (thread_id = the submission record id); the
 service's approve/reject then *resumes* the thread with the decision,
 and the graph completes. A process restart loses nothing — a new
-service instance over the same database files sees the store record
-AND the paused thread.
+service instance over the same database sees the store record AND
+the paused thread.
 
 The split of responsibilities, kept deliberately:
 
@@ -15,21 +15,25 @@ The split of responsibilities, kept deliberately:
 - the **checkpointer** (this module) holds graph state — where the
   run paused and what it carried. It never decides anything.
 
-Implementation: the pinned LangGraph ships the checkpoint base +
-in-memory saver only (the SQLite saver is a separate package), so
-:class:`SqliteCheckpointSaver` implements that base over stdlib
-``sqlite3`` — one connection per call, opened and closed per call
-(thread-safe by construction, like ``SQLiteStore``), checkpoint blobs
-serialised with LangGraph's own serde, channel values in a side
-table exactly as the reference savers lay them out. The database
-runs in WAL mode with ``synchronous=NORMAL``: checkpoint writes are
-small and frequent (one per node), and the default journal mode
-makes each of them an fsync — the first cut of this saver slowed a
-batch run by an order of magnitude before WAL.
+Which saver runs is a deployment decision, made in
+:func:`get_checkpointer`:
+
+- ``DATABASE_URL`` set → the **official LangGraph Postgres saver**
+  (``langgraph-checkpoint-postgres``) over a psycopg 3 connection
+  pool, in the same PostgreSQL as the store. This is the production
+  configuration; its tables are created by the saver's own
+  ``setup()``.
+- No ``DATABASE_URL`` → LangGraph's in-memory saver. A test double:
+  the gate still pauses and resumes within the process, nothing
+  persists. File-backed local state is deliberately not a runtime
+  option any more.
+- :class:`SqliteCheckpointSaver` below — a stdlib-SQLite
+  implementation of the same saver interface — is retained for the
+  test suite (it exercises the checkpoint contract, including
+  pause/resume across saver instances, without a database server).
 
 ``CHECKPOINTS=off`` disables the whole thing: no checkpointer is
-attached and the gate flow is the pre-existing service-state flow,
-byte for byte.
+attached and the gate flow is the service-state flow, byte for byte.
 """
 
 from __future__ import annotations
@@ -398,6 +402,9 @@ class SqliteCheckpointSaver(BaseCheckpointSaver):
 # Selection from configuration
 # ---------------------------------------------------------------------------
 
+_POSTGRES_SAVERS: dict[str, object] = {}
+
+
 def checkpoints_enabled() -> bool:
     """``CHECKPOINTS`` env (read at call time): on unless explicitly off."""
     load_dotenv()
@@ -405,19 +412,54 @@ def checkpoints_enabled() -> bool:
     return raw not in {"off", "0", "false", "no"}
 
 
-def default_checkpoint_path() -> Path:
-    return Path(__file__).resolve().parents[2] / ".data" / "checkpoints.db"
+def _postgres_checkpointer(url: str):
+    """The official LangGraph Postgres saver over a shared pool.
+
+    One saver (and pool) per database URL per process: surfaces that
+    rebuild their service share the pool instead of leaking a new one
+    per construction. The pool carries the settings the saver
+    requires (autocommit, no prepared statements, dict rows); the
+    saver's ``setup()`` creates its checkpoint tables on first use.
+    """
+    if url in _POSTGRES_SAVERS:
+        return _POSTGRES_SAVERS[url]
+    from langgraph.checkpoint.postgres import PostgresSaver
+    from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
+
+    from .db import ensure_migrated
+
+    ensure_migrated(url)
+    pool = ConnectionPool(
+        url,
+        min_size=1,
+        max_size=8,
+        kwargs={
+            "autocommit": True,
+            "prepare_threshold": 0,
+            "row_factory": dict_row,
+        },
+    )
+    saver = PostgresSaver(pool)
+    saver.setup()
+    _POSTGRES_SAVERS[url] = saver
+    return saver
 
 
-def get_checkpointer() -> SqliteCheckpointSaver | None:
+def get_checkpointer():
     """The configured checkpointer, or None when CHECKPOINTS=off.
 
-    ``CHECKPOINT_DB_PATH`` overrides the database location (the
-    default is the git-ignored ``.data/`` directory, next to the
-    approval store's database).
+    ``DATABASE_URL`` set → the official Postgres saver (production).
+    Unset → LangGraph's in-memory saver (test double; the gate works,
+    nothing persists). See the module docstring for the split.
     """
     if not checkpoints_enabled():
         return None
-    load_dotenv()
-    configured = env_str("CHECKPOINT_DB_PATH")
-    return SqliteCheckpointSaver(configured if configured else default_checkpoint_path())
+    from .db import database_url
+
+    url = database_url()
+    if url:
+        return _postgres_checkpointer(url)
+    from langgraph.checkpoint.memory import MemorySaver
+
+    return MemorySaver()

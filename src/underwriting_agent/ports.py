@@ -10,16 +10,19 @@ having the methods, not by inheriting):
   ``model_backends.py``.
 - :class:`Retriever` — guideline retrieval (keyword / semantic / hybrid).
   Implementations live in ``retriever.py``.
-- :class:`Store` — where analysis records and human decisions live
-  (SQLite by default, in-memory as a test double). Implementations
-  live in ``store.py`` (SQLite default, in-memory for tests).
+- :class:`Store` — where analysis records and human decisions live.
+  Implementations live in ``store.py``: PostgreSQL (the system of
+  record, selected by ``DATABASE_URL``), plus SQLite and in-memory
+  test doubles the suite injects explicitly.
 - :class:`EventSink` — where structured run events go (streaming,
   tracing). Implementations live in ``events.py``.
 - :class:`Checkpointer` — LangGraph graph-state persistence behind
   the human-approval gate: the saver interface (the checkpoint
-  library's ``BaseCheckpointSaver`` surface), implemented over stdlib
-  SQLite in ``checkpoints.py``. The checkpointer holds *graph state*;
-  the :class:`Store` remains the record of *decisions*.
+  library's ``BaseCheckpointSaver`` surface). Production runs use
+  the official LangGraph Postgres saver; ``checkpoints.py`` selects
+  it and also holds a stdlib-SQLite implementation the tests use.
+  The checkpointer holds *graph state*; the :class:`Store` remains
+  the record of *decisions*.
 
 ``wiring.py`` is the composition root that builds the concrete
 collaborators from configuration; the rest of the codebase programs

@@ -8,9 +8,10 @@ approved packet is POSTed to that endpoint — the customer's system
 of choice — and the outcome is recorded on the result (see
 ``dispatch_approval_webhook``).
 
-Records live in an approval store (``store.py``): SQLite on disk by
-default, so analyses and decisions survive restarts; the in-memory
-store remains available as a test double.
+Records live in an approval store (``store.py``): PostgreSQL when
+``DATABASE_URL`` is set (the production system of record, shared
+across replicas), so analyses and decisions survive restarts; the
+in-memory store is the test double when it is not.
 
 The underwriter gate is checkpointed (``checkpoints.py``, on unless
 ``CHECKPOINTS=off``): an analysis pauses its graph at the gate with

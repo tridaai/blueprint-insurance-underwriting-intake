@@ -13,9 +13,9 @@ SAMPLES = {s["submission_id"]: s for s in load_sample_submissions()}
 
 @pytest.fixture()
 def client(monkeypatch):
-    monkeypatch.setenv("STATE_DB_PATH", ":memory:")
     monkeypatch.setenv("CHECKPOINTS", "off")
-    # Rebuild the module-level service against the in-memory store.
+    # Rebuild the module-level service against the in-memory doubles
+    # (no DATABASE_URL in the suite environment → nothing persists).
     import underwriting_agent.api as api_module
     from underwriting_agent.wiring import build_service_from_env
 

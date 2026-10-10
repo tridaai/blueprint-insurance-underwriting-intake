@@ -27,6 +27,7 @@ import pytest
 
 # Exact variable names whose ambient values must never leak into a test.
 _SCRUB_EXACT = {
+    "DATABASE_URL",
     "MODEL_BACKEND",
     "RETRIEVER",
     "RUN_TOKEN_BUDGET",
@@ -44,7 +45,7 @@ _SCRUB_EXACT = {
 }
 
 # Variable families scrubbed by prefix / suffix.
-_SCRUB_PREFIXES = ("OPENAI_", "ANTHROPIC_", "OLLAMA_", "LLM_", "REVIEWER", "CHROMA_")
+_SCRUB_PREFIXES = ("OPENAI_", "ANTHROPIC_", "OLLAMA_", "LLM_", "REVIEWER", "CHROMA_", "S3_")
 _SCRUB_SUFFIXES = ("_API_KEY", "_MODEL", "_BASE_URL")
 
 

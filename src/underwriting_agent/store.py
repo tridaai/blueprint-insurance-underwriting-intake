@@ -1,10 +1,14 @@
 """Approval store: where analyses and underwriter decisions live.
 
-SQLite on disk by default (``STATE_DB_PATH``, defaulting to a
-git-ignored ``.data/`` file next to the repo), so an underwriter's
-decision — and the diagnosis memory built from earlier submissions —
-survives a restart. ``InMemoryStore`` remains for tests and ephemeral
-runs. Both implement the same ``Store`` protocol (``ports.py``).
+PostgreSQL is the system of record: with ``DATABASE_URL`` set, records
+live in the ``approvals`` table (migration ``0002``) via
+:class:`PostgresStore`, so an underwriter's decision — and the
+diagnosis memory built from earlier submissions — survives restarts
+and is shared across service replicas. The SQLite and in-memory
+implementations below remain as **test doubles only**: the hermetic
+test suite injects them explicitly, and a run without ``DATABASE_URL``
+falls back to the in-memory double (nothing persists — that mode is
+for tests and offline smoke runs, not a runtime story).
 
 The store is also the memory source: ``prior_submissions`` feeds the
 diagnosis evidence (same insured, same broker) and the feedback loop
@@ -19,7 +23,6 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import load_dotenv, env_str
 from .schemas import AgentResult
 
 
@@ -88,23 +91,24 @@ def format_outcome_counts(counts: dict[str, int]) -> str:
     return ", ".join(f"{n} {outcome}" for outcome, n in sorted(counts.items())) or "none"
 
 
+def _record_to_dict(record: ApprovalRecord) -> dict:
+    return {
+        "result": record.result.model_dump(mode="json"),
+        "submission": record.submission,
+        "approved": record.approved,
+        "approver": record.approver,
+        "approve_reason": record.approve_reason,
+        "rejected_by": record.rejected_by,
+        "reject_reason": record.reject_reason,
+        "dispatch_status": record.dispatch_status,
+    }
+
+
 def _dump_record(record: ApprovalRecord) -> str:
-    return json.dumps(
-        {
-            "result": record.result.model_dump(mode="json"),
-            "submission": record.submission,
-            "approved": record.approved,
-            "approver": record.approver,
-            "approve_reason": record.approve_reason,
-            "rejected_by": record.rejected_by,
-            "reject_reason": record.reject_reason,
-            "dispatch_status": record.dispatch_status,
-        }
-    )
+    return json.dumps(_record_to_dict(record))
 
 
-def _load_record(payload: str) -> ApprovalRecord:
-    data = json.loads(payload)
+def _record_from_dict(data: dict) -> ApprovalRecord:
     return ApprovalRecord(
         result=AgentResult.model_validate(data["result"]),
         submission=data.get("submission", {}),
@@ -115,6 +119,10 @@ def _load_record(payload: str) -> ApprovalRecord:
         reject_reason=data.get("reject_reason", ""),
         dispatch_status=data.get("dispatch_status"),
     )
+
+
+def _load_record(payload: str) -> ApprovalRecord:
+    return _record_from_dict(json.loads(payload))
 
 
 class InMemoryStore:
@@ -163,8 +171,83 @@ CREATE TABLE IF NOT EXISTS approvals (
 """
 
 
+class PostgresStore:
+    """PostgreSQL-backed store — the production system of record.
+
+    One short-lived psycopg connection per call (the same shape as
+    the SQLite double), payload as JSONB, ordering by the identity
+    ``seq`` column so history reads match insertion order. Schema is
+    owned by the migrations (``db.ensure_migrated`` runs them before
+    the first query); this class never issues DDL.
+    """
+
+    def __init__(self, url: str) -> None:
+        from .db import ensure_migrated
+
+        self._url = url
+        ensure_migrated(url)
+
+    def _connect(self):
+        from .db import connect
+
+        return connect(self._url)
+
+    def save(self, record: ApprovalRecord) -> None:
+        from psycopg.types.json import Jsonb
+
+        decided = record.result.status in ("approved", "rejected")
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO approvals (submission_id, payload, decided) "
+                "VALUES (%s, %s, %s) "
+                "ON CONFLICT (submission_id) DO UPDATE SET "
+                "payload = EXCLUDED.payload, decided = EXCLUDED.decided, "
+                "updated_at = now()",
+                (
+                    record.result.submission_id,
+                    Jsonb(_record_to_dict(record)),
+                    decided,
+                ),
+            )
+            conn.commit()
+
+    def get(self, submission_id: str) -> ApprovalRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM approvals WHERE submission_id = %s",
+                (submission_id,),
+            ).fetchone()
+        return _record_from_dict(row[0]) if row else None
+
+    def _all_records(self) -> list[ApprovalRecord]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM approvals ORDER BY seq"
+            ).fetchall()
+        return [_record_from_dict(row[0]) for row in rows]
+
+    def prior_submissions(self, exclude_submission_id: str) -> list[dict]:
+        return [
+            history_entry(record)
+            for record in self._all_records()
+            if record.result.submission_id != exclude_submission_id
+        ]
+
+    def decision_feedback(self, exclude_submission_id: str) -> list[dict]:
+        entries = []
+        for record in reversed(self._all_records()):
+            if record.result.submission_id == exclude_submission_id:
+                continue
+            entry = feedback_entry(record)
+            if entry is not None:
+                entries.append(entry)
+        return entries
+
+
 class SQLiteStore:
-    """SQLite-backed store: one short-lived connection per call, WAL
+    """SQLite-backed store — a **test double** (the persistence tests
+    exercise the store contract against it; production runs use
+    :class:`PostgresStore`). One short-lived connection per call, WAL
     journaling, so concurrent batch writers serialise cleanly."""
 
     def __init__(self, path: str | Path) -> None:
@@ -224,16 +307,18 @@ class SQLiteStore:
         return entries
 
 
-def default_store_path() -> Path:
-    return Path(__file__).resolve().parents[2] / ".data" / "underwriting-agent.sqlite3"
+def default_store() -> PostgresStore | InMemoryStore:
+    """The store from the environment.
 
+    ``DATABASE_URL`` set → :class:`PostgresStore` (the production
+    system of record). Unset → :class:`InMemoryStore`, the test
+    double: analyses and decisions live for the process only. There
+    is deliberately no file-backed default any more — local files
+    are not a runtime story (see ``docs/architecture.md``).
+    """
+    from .db import database_url
 
-def default_store() -> InMemoryStore | SQLiteStore:
-    """The store from the environment: ``STATE_DB_PATH`` when set,
-    else the default on-disk location; ``STATE_DB_PATH=:memory:``
-    selects the in-memory store."""
-    load_dotenv()
-    configured = env_str("STATE_DB_PATH")
-    if configured == ":memory:":
-        return InMemoryStore()
-    return SQLiteStore(configured if configured else default_store_path())
+    url = database_url()
+    if url:
+        return PostgresStore(url)
+    return InMemoryStore()
