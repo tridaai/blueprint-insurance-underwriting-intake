@@ -74,6 +74,7 @@ def feedback_entry(record: ApprovalRecord) -> dict | None:
         "broker_name": sub.get("broker_name", ""),
         "decision": result.status,
         "reason": result.decision_reason,
+        "decided_at": result.decided_at,
     }
 
 

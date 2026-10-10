@@ -79,6 +79,10 @@
       <span class="note">From the store of record — analyze submissions to populate.</span></div>
     </section>
     <section>
+      <h2>Queue aging</h2>
+      <div id="queue" class="empty">Loading…</div>
+    </section>
+    <section>
       <h2>How it works</h2>
       <p class="note">extract → ingest (computed facts) → injection screen → triage (rules + LLM cross-check) → guideline retrieval → diagnosis (bounded tool loop) → scored options → draft letter + packet → self-verify → independent review → guardrails → <strong>underwriter gate</strong>. Code computes the numbers; the model does language work; the human decides.</p>
     </section>
@@ -194,6 +198,26 @@ async function showQuality(broker) {
   }
 }
 
+async function loadQueue() {
+  try {
+    const res = await fetch('/queue', {headers: headers()});
+    if (!res.ok) throw new Error('none');
+    const q = await res.json();
+    if (!q.total_awaiting) {
+      $('queue').innerHTML = '<span class="empty">Nothing awaiting an underwriter.</span>';
+      return;
+    }
+    $('queue').innerHTML =
+      `<table><thead><tr><th>Age</th><th>Awaiting</th></tr></thead><tbody>
+       ${q.buckets.map(b => `<tr><td>${esc(b.bucket)}</td><td>${esc(b.count)}</td></tr>`).join('')}
+       </tbody></table>
+       ${q.oldest ? `<p class="note">Oldest: ${esc(q.oldest.submission_id)} — ${esc(q.oldest.insured_name)}, ${esc(q.oldest.age_days)} day(s), ${esc(q.oldest.outcome)} / ${esc(q.oldest.risk_tier)}.</p>` : ''}
+       ${q.unknown_age && q.unknown_age.length ? `<p class="note">Unparseable submitted date: ${q.unknown_age.map(esc).join(', ')}</p>` : ''}`;
+  } catch (e) {
+    $('queue').innerHTML = '<span class="empty">Queue unavailable.</span>';
+  }
+}
+
 function render(result) {
   currentId = result.submission_id;
   currentValid = !!(result.validation && result.validation.passed);
@@ -202,6 +226,9 @@ function render(result) {
   html += `<div class="row">${pill(result.status, result.status === 'awaiting_underwriter' ? 'warn' : 'good')}
     ${pill(t.outcome + ' / ' + t.risk_tier)} ${pill('readiness: ' + f.readiness, f.readiness === 'ready' ? 'good' : 'warn')}
     ${result.reviewer_blocked ? pill('REVIEWER BLOCKED', 'bad') : ''}</div>`;
+  if (result.decided_at) {
+    html += `<p class="note">Decided ${esc(result.decided_at)} by ${esc(result.decided_by || '')}${result.decision_reason ? ' — ' + esc(result.decision_reason) : ''}</p>`;
+  }
   if (result.injection_flags && result.injection_flags.length) {
     html += `<p class="flag">⚠ Injection screen: ${result.injection_flags.length} flag(s) — flagged sentences were removed from prompts and drafts.</p>
     <ul>${result.injection_flags.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`;
@@ -276,6 +303,7 @@ async function analyze() {
   $('run-status').textContent = 'Done — awaiting underwriter.';
   render(result);
   loadInbox();
+  loadQueue();
 }
 
 async function decide(path) {
@@ -287,19 +315,21 @@ async function decide(path) {
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) { $('gate-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
-  $('gate-status').textContent = `Recorded: ${body.status} by ${body.decided_by}` + (body.dispatch_status ? ` · webhook ${body.dispatch_status}` : '') + '.';
+  $('gate-status').textContent = `Recorded: ${body.status} by ${body.decided_by}` + (body.decided_at ? ` at ${body.decided_at}` : '') + (body.dispatch_status ? ` · webhook ${body.dispatch_status}` : '') + '.';
   render(body);
   loadInbox();
+  loadQueue();
   $('gate-section').style.display = 'none';
 }
 
 $('analyze').addEventListener('click', analyze);
 $('approve').addEventListener('click', () => decide('approve'));
 $('reject').addEventListener('click', () => decide('reject'));
-$('refresh-inbox').addEventListener('click', loadInbox);
+$('refresh-inbox').addEventListener('click', () => { loadInbox(); loadQueue(); });
 loadSamples();
 loadEvals();
 loadInbox();
+loadQueue();
 </script>
 </body>
 </html>

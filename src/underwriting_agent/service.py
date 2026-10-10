@@ -43,6 +43,7 @@ from .insights import (
     broker_quality_report,
     compute_metrics,
     inbox_groups,
+    queue_aging,
     scorecard,
     scorecards_for,
 )
@@ -95,6 +96,7 @@ def _dispatch_once(record: ApprovalRecord) -> dict | None:
         "submission_id": result.submission_id,
         "status": result.status,
         "decided_by": result.decided_by,
+        "decided_at": result.decided_at,
         "triage": result.triage.model_dump(mode="json"),
         "drafts": {
             "subject": result.drafts.subject if result.drafts else "",
@@ -526,6 +528,7 @@ class SubmissionService:
         record.result.decision = "approved"
         record.result.decided_by = approver
         record.result.decision_reason = reason or None
+        record.result.decided_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         # Output routing: by default there is NO external action. When
         # the operator configures ACTION_WEBHOOK_URL, the approved
         # packet is POSTed to that endpoint (the customer's system of
@@ -560,6 +563,7 @@ class SubmissionService:
         record.result.decision = "rejected"
         record.result.decided_by = reviewer
         record.result.decision_reason = reason or None
+        record.result.decided_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         record.result.external_action_taken = False
         store.save(record)
         self._resume_thread(
@@ -668,6 +672,12 @@ class SubmissionService:
         """Operational aggregates over the store: run/decision counts,
         outcome mix, model usage, cost, and latency."""
         return compute_metrics(self._get_store().all_records())
+
+    def queue(self) -> dict:
+        """The awaiting queue by age bucket and outcome — how long
+        undecided submissions have been sitting, and which one has
+        been waiting longest."""
+        return queue_aging(self._get_store().all_records())
 
     def guideline_change_impact(self, classifier=None) -> dict:
         """Which awaiting submissions would re-triage differently

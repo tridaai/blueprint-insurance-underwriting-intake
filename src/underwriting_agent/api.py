@@ -268,6 +268,15 @@ def scorecards() -> dict:
     return service.scorecards()
 
 
+@app.get("/queue", dependencies=_AUTH)
+def queue() -> dict:
+    """Queue aging: the submissions still awaiting an underwriter,
+    bucketed by days since they were submitted (with the outcome
+    mix and the single oldest case) — a stranded queue is visible
+    here before a broker complains."""
+    return service.queue()
+
+
 @app.get("/metrics", dependencies=_AUTH)
 def metrics() -> dict:
     """Operational aggregates over the store: runs, decisions,

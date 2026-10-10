@@ -406,6 +406,10 @@ class AgentResult(BaseModel):
     decision: Optional[str] = None  # approved | rejected
     decided_by: Optional[str] = None
     decision_reason: Optional[str] = None
+    # When the decision was recorded (UTC ISO). The audit trail has
+    # always carried who decided and why; it now carries when, in
+    # the same field, on every surface that reports the decision.
+    decided_at: Optional[str] = None
     dispatch_status: Optional[str] = None  # sent | failed | None
     dispatch_attempts: list[DispatchAttempt] = Field(default_factory=list)
     external_action_taken: bool = False

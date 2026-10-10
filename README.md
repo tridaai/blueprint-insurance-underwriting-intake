@@ -149,9 +149,19 @@ all computed in code: the **inbox** groups the queue by insured and
 by broker (counts, latest outcome / tier / readiness), **scorecards**
 aggregate each party's track record (outcome mix, approval rate,
 average completeness, top referral reasons — and a new submission's
-packet cites its parties' scorecards as evidence), **`/metrics`**
-totals runs, decisions, tokens, cost, and latency, and
-**`/audit/export`** emits the full decision trail as JSON or CSV.
+packet cites its parties' scorecards as evidence),
+**`/reports/brokers/{name}/quality`** composes a per-broker
+submission-quality report from the same records — completeness
+trend, extraction discrepancy rate, top missing elements — with a
+drafted report text (drafted, never sent; the console shows it from
+the inbox), **`/metrics`** totals runs, decisions, tokens, cost,
+and latency, and **`/audit/export`** emits the full decision trail
+as JSON or CSV. Decisions record **`decided_at`** alongside who
+decided and why — on the result, in the audit export, in the
+feedback entries, and in the webhook payload — and **`/queue`**
+ages the awaiting queue (buckets by days since submission, outcome
+mix, the single oldest case; the console renders it as the Queue
+aging panel).
 Webhook dispatches can be HMAC-signed (`ACTION_WEBHOOK_SECRET`) so
 the receiving system can verify the packet's origin. Every dispatch
 is recorded in a **delivery ledger** on the record — attempt number,

@@ -22,7 +22,9 @@ from __future__ import annotations
 import csv
 import io
 from collections import Counter
+from datetime import datetime, timezone
 
+from .facts import _parse_date
 from .store import ApprovalRecord, history_entry
 
 
@@ -366,6 +368,7 @@ AUDIT_COLUMNS = [
     "status",
     "decided_by",
     "decision_reason",
+    "decided_at",
     "dispatch_status",
     "dispatch_attempts",
     "guardrails_passed",
@@ -402,6 +405,7 @@ def audit_rows(records: list[ApprovalRecord]) -> list[dict]:
                 "status": result.status,
                 "decided_by": result.decided_by or "",
                 "decision_reason": result.decision_reason or "",
+                "decided_at": result.decided_at or "",
                 "dispatch_status": record.dispatch_status or "",
                 "dispatch_attempts": len(record.dispatch_attempts or []),
                 "guardrails_passed": (
@@ -422,6 +426,80 @@ def audit_rows(records: list[ApprovalRecord]) -> list[dict]:
             }
         )
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Queue aging
+# ---------------------------------------------------------------------------
+
+# (label, min_age_days, max_age_days) — max None is open-ended.
+QUEUE_AGE_BUCKETS = [
+    ("0-1 days", 0, 1),
+    ("2-3 days", 2, 3),
+    ("4-7 days", 4, 7),
+    ("8-14 days", 8, 14),
+    ("15+ days", 15, None),
+]
+
+
+def queue_aging(
+    records: list[ApprovalRecord], now: datetime | None = None
+) -> dict:
+    """The awaiting queue by age — the stranded-queue early warning.
+
+    Age is whole days from the submission's ``submitted_at`` to
+    today (the same date arithmetic ``facts.submission_age_days``
+    uses). Every awaiting submission lands in exactly one bucket —
+    or in ``unknown_age`` when its submitted date cannot be parsed,
+    which is itself worth seeing. Decided records are not queue.
+    """
+    now = now or datetime.now(timezone.utc)
+    today = now.date()
+    buckets: dict[str, list[dict]] = {label: [] for label, _, _ in QUEUE_AGE_BUCKETS}
+    unknown: list[str] = []
+    by_outcome: Counter = Counter()
+    oldest: dict | None = None
+    total = 0
+    for record in records:
+        result = record.result
+        if result.status != "awaiting_underwriter":
+            continue
+        total += 1
+        by_outcome[result.triage.outcome] += 1
+        entry = history_entry(record)
+        raw = (record.submission or {}).get("submitted_at", "")
+        submitted = _parse_date(raw)
+        item = {
+            "submission_id": result.submission_id,
+            "insured_name": entry["insured_name"],
+            "broker_name": entry["broker_name"],
+            "outcome": result.triage.outcome,
+            "risk_tier": result.triage.risk_tier,
+            "submitted_at": raw,
+            "age_days": None,
+        }
+        if submitted is None:
+            unknown.append(result.submission_id)
+            continue
+        age = max(0, (today - submitted).days)
+        item["age_days"] = age
+        for label, low, high in QUEUE_AGE_BUCKETS:
+            if age >= low and (high is None or age <= high):
+                buckets[label].append(item)
+                break
+        if oldest is None or age > oldest["age_days"]:
+            oldest = item
+    return {
+        "generated_at": now.isoformat(timespec="seconds"),
+        "total_awaiting": total,
+        "buckets": [
+            {"bucket": label, "count": len(buckets[label]), "submissions": buckets[label]}
+            for label, _, _ in QUEUE_AGE_BUCKETS
+        ],
+        "unknown_age": unknown,
+        "by_outcome": dict(sorted(by_outcome.items())),
+        "oldest": oldest,
+    }
 
 
 def audit_csv(rows: list[dict]) -> str:
