@@ -609,6 +609,44 @@ numbers on the submission and its loss records. Line aliases fold too
   that is where since-snapshot movement belongs. Absent a
   snapshot the block is None — the system does not fabricate a
   baseline to look trend-aware.
+- **Round 13 makes the report actionable, gives the worklist a
+  worked state, and puts direction on the queue itself.**
+  (1) `draft_sla_proposal_from_row` drafts from one chosen
+  calibration row rather than the scan's best: the row is
+  recomputed at draft time (never trusted from a stale report),
+  and the proposal is built by the same `_sla_fields` the scan
+  and the refresh share, with the row's own breach counts kept
+  under `evidence.calibration_row` — one evidence base, three
+  readers, no drift between the report's numbers and the
+  proposal's. The scan's disciplines (swept candidates, one
+  open question per tier, rejected directions) bind the row
+  draft identically, because a second door with a lower bar
+  would quietly become the only door. (2) Exhaustion
+  acknowledgement is a field on the record, not a status on the
+  notice: `_exhausted_breach_notices` gains an `acknowledged`
+  read over the same computation, so the worklist and the
+  worked list can never disagree about what exhaustion means,
+  and the digest's count follows the worklist by construction.
+  The acknowledgement attests to an action outside the system
+  (a phone call), so it is deliberately *not* a delivery state
+  — the ledger keeps its eight failures, and a notice can be
+  acknowledged only while it is exhausted, so the attestation
+  can never be backdated onto a state that has passed.
+  (3) Calibration snapshots keep the report's decision-relevant
+  shape (budgets + sources, ready rows per tier), not its full
+  sweep arithmetic: the arithmetic is reproducible from the
+  records, the *as-of* claim is not. The diff's headline is
+  proposal-ready movement because that is what a budget debate
+  turns on; budget and decided-count movement ride along as the
+  explanation. (4) The trend-aware queue reuses the digest
+  snapshots rather than growing a second baseline: the queue
+  and the digest now read the same kept picture, so "new since
+  snap-0003" means the same thing on both screens. The flag is
+  attached in `queue_aging` (the only place that sees both the
+  breaches and the snapshot), defaults to None in the
+  single-item builder like the escalated-note flag, and cleared
+  breaches are reported rather than dropped — a fire that went
+  out is information, not absence.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 

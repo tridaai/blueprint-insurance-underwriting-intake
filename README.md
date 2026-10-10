@@ -217,6 +217,17 @@ with the broker letter's own text families before it is stored,
 and kept on the record as an internal draft. It is never sent;
 drafting it moves nothing else about the case.
 
+Once an ops-digest snapshot has been kept (below), the queue is
+also **trend-aware**: each breached item is flagged
+`breach_since_snapshot` — `new` when it was not among the latest
+snapshot's breached ids, `continuing` when it was already
+burning — and the view carries `breach_movement` (the new,
+continuing, and cleared id sets since that snapshot; cleared is
+a snapshot breach no longer in today's list, decided most
+often). The worklist itself now distinguishes a new fire from an
+old one, instead of showing both as the same flat state. No
+snapshot, no flags: direction is absent, never invented.
+
 A breach can also be **announced**: `POST /queue/sla-notifications`
 runs the breach check, and the first time the queue projection
 observes a case past its budget, one signed `sla_breach` webhook
@@ -266,7 +277,17 @@ nothing, refreshes nothing, and decides nothing. The exhausted
 notices also surface on the **dispatch view** (`GET /dispatch`)
 in their own list — aged from the breach's first observation,
 bucketed, and kept apart from the approval failures, because
-their next step is a human call, not another retry.
+their next step is a human call, not another retry. And the
+worklist now has a **worked state**: an operator who made that
+call acknowledges the notice
+(`POST /dispatch/exhausted/{id}/acknowledge`, console button) —
+who called, when, and their note, kept on the record. The case
+leaves the worklist, the buckets, and the digest's count, and
+stays readable on an acknowledged list in both views with the
+acknowledgement attached. The delivery ledger is never
+rewritten — the webhook still never landed, and the record
+keeps saying so; only a notice exhausted right now can be
+acknowledged, and only once.
 
 The digest can also be **snapshotted** (`POST /ops/digest/snapshots`,
 console button): the headline, the counts, and the ids behind each
@@ -376,6 +397,31 @@ force, marked `proposal_ready` when that moved set is exactly
 the one-sided evidence a proposal would be drafted from — so a
 human can read why a proposal exists, or why none does, without
 re-deriving it. Read-only, like the trigger calibration.
+
+The report is no longer only readable, though. An operator can
+**draft from a row** (`POST /queue/sla/calibration/draft`, body
+`tier` + `value`, console button on each ready row): the chosen
+row is recomputed against the store as it stands and, when it
+is proposal-ready, stored as a proposal carrying the row's
+evidence verbatim — the moved set, the decision splits, and the
+row's own breach counts under `evidence.calibration_row` —
+stamped `drafted_from: "calibration_row"` and the drafter's
+name, so a row draft is distinguishable from a scan draft. The
+scan's discipline binds it unchanged: swept candidates only,
+one open question per tier, a rejected direction never re-asked
+in another size, and a row that is not proposal-ready is
+refused with the reason — the report names a row, it does not
+lower the evidence bar. The report itself can also be **kept**
+(`POST /queue/sla/calibration/snapshots`, console button): the
+budgets in force with their sources, the decided cases weighed,
+and per tier the wait distribution and which candidate rows
+were proposal-ready — dated and under the taker's name, never
+on a timer. A **diff** (`GET /queue/sla/calibration/snapshots/diff`)
+reads the two latest kept reports against each other: per tier,
+which rows became proposal-ready and which stopped being,
+beside the budget and decided-count movement that explains the
+change — so a budget debate can cite the evidence as of a date
+instead of re-running history from memory.
 
 Two disciplines keep the proposals honest over time. A draft's
 evidence is a snapshot, so drafts **expire** (`PROPOSAL_EXPIRY_DAYS`,
