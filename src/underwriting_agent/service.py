@@ -101,39 +101,29 @@ class BatchItem:
     error: str | None = None
 
 
-def _dispatch_once(record: ApprovalRecord) -> dict | None:
-    """Perform one webhook dispatch attempt and return its ledger entry.
+def _post_webhook(payload: dict, attempt_no: int) -> dict | None:
+    """POST one payload through the output-routing seam and return
+    its ledger entry.
 
-    This is the output-routing seam — the thin adapter between an
-    approval and the customer's system of choice (their policy admin
-    system, a work queue, an automation endpoint). Returns ``None``
-    when no URL is configured (the default: no external action at
-    all). Otherwise returns the attempt record for the delivery
-    ledger: attempt number, timestamp, outcome (``"sent"`` on 2xx,
-    ``"failed"`` otherwise), the receiver's HTTP status when it
-    answered, the signature identifier when the dispatch was signed,
-    the error when it was not, and the backoff the retry schedule
-    assigned before this attempt. A failed dispatch never raises and
-    never undoes the approval. Short timeout on purpose: an approval
-    must not hang on a downstream system.
+    The seam itself: the customer's system of choice, reached at
+    ``ACTION_WEBHOOK_URL``, signed with ``ACTION_WEBHOOK_SECRET``
+    when set. Every event this service routes out (an approved
+    packet, an SLA breach) goes through here, so the signing, the
+    timeout, and the ledger-entry shape exist exactly once. Returns
+    ``None`` when no URL is configured (the default: no external
+    action at all). Otherwise returns the attempt record: attempt
+    number, timestamp, outcome (``"sent"`` on 2xx, ``"failed"``
+    otherwise), the receiver's HTTP status when it answered, the
+    signature identifier when the dispatch was signed, the error
+    when it was not, and the backoff the retry schedule assigned
+    before this attempt. A failed dispatch never raises. Short
+    timeout on purpose: a caller must not hang on a downstream
+    system.
     """
     load_dotenv()
     url = env_str("ACTION_WEBHOOK_URL")
     if not url:
         return None
-    result = record.result
-    payload = {
-        "submission_id": result.submission_id,
-        "status": result.status,
-        "decided_by": result.decided_by,
-        "decided_at": result.decided_at,
-        "triage": result.triage.model_dump(mode="json"),
-        "drafts": {
-            "subject": result.drafts.subject if result.drafts else "",
-            "broker_letter": result.drafts.broker_letter if result.drafts else "",
-            "underwriter_packet": result.drafts.underwriter_packet if result.drafts else "",
-        },
-    }
     body = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     # Signed dispatch: when ACTION_WEBHOOK_SECRET is set the receiver
@@ -155,7 +145,6 @@ def _dispatch_once(record: ApprovalRecord) -> dict | None:
         method="POST",
     )
     timeout = env_float("ACTION_WEBHOOK_TIMEOUT_SECONDS", 5.0)
-    attempt_no = len(record.dispatch_attempts) + 1
     entry: dict = {
         "attempt": attempt_no,
         "attempted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -185,6 +174,83 @@ def _dispatch_once(record: ApprovalRecord) -> dict | None:
         entry["error"] = f"receiver answered HTTP {exc.code}"
     except Exception as exc:  # dispatch failure is recorded, never raised
         entry["error"] = f"{type(exc).__name__}: {exc}"[:200]
+    return entry
+
+
+def _dispatch_once(record: ApprovalRecord) -> dict | None:
+    """One approval-packet dispatch attempt, for the delivery ledger.
+
+    The payload is the approved packet — the customer's system of
+    choice takes it from there. The attempt mechanics (signing,
+    posting, the ledger entry) live in :func:`_post_webhook`; this
+    builds the approval event's body and numbers the attempt within
+    the record's approval ledger.
+    """
+    result = record.result
+    payload = {
+        "event": "approval",
+        "submission_id": result.submission_id,
+        "status": result.status,
+        "decided_by": result.decided_by,
+        "decided_at": result.decided_at,
+        "triage": result.triage.model_dump(mode="json"),
+        "drafts": {
+            "subject": result.drafts.subject if result.drafts else "",
+            "broker_letter": result.drafts.broker_letter if result.drafts else "",
+            "underwriter_packet": result.drafts.underwriter_packet if result.drafts else "",
+        },
+    }
+    return _post_webhook(payload, len(record.dispatch_attempts) + 1)
+
+
+def _sla_breach_snapshot(item: dict) -> dict:
+    """The breach facts a notice carries, taken from a queue item —
+    the same projection the /queue view renders, so the webhook,
+    the queue, and the status note can never disagree about a
+    breach."""
+    return {
+        "submission_id": item["submission_id"],
+        "insured_name": item["insured_name"],
+        "broker_name": item["broker_name"],
+        "outcome": item["outcome"],
+        "risk_tier": item["risk_tier"],
+        "sla": {
+            "budget_days": item["sla_budget_days"],
+            "age_days": item["age_days"],
+            "days_over": item["sla_days_over"],
+        },
+    }
+
+
+def _dispatch_sla_breach(
+    record: ApprovalRecord, snapshot: dict, detected_at: str
+) -> dict | None:
+    """One SLA-breach dispatch attempt, for the record's breach ledger.
+
+    The payload is the breach event — a case sitting undecided past
+    its SLA budget — not a packet: nothing is decided, quoted, or
+    bound by it; it tells the customer's system of choice that a
+    queue case needs eyes. Returns the ledger entry, or ``None``
+    when no webhook is configured (nothing fired, nothing recorded).
+    """
+    payload = {
+        "event": "sla_breach",
+        "status": "awaiting_underwriter",
+        "detected_at": detected_at,
+        **snapshot,
+    }
+    entry = _post_webhook(payload, len(record.sla_breach_attempts) + 1)
+    if entry is None:
+        return None
+    record.sla_breach_attempts.append(entry)
+    if record.sla_breach_notice is None:
+        record.sla_breach_notice = {
+            "first_observed_at": detected_at,
+            **snapshot,
+            "dispatch_status": entry["status"],
+        }
+    else:
+        record.sla_breach_notice["dispatch_status"] = entry["status"]
     return entry
 
 
@@ -999,6 +1065,134 @@ class SubmissionService:
                 }
             )
         return outcomes
+
+    def notify_sla_breaches(self, now: datetime | None = None) -> dict:
+        """Fire the ``sla_breach`` webhook for newly observed breaches.
+
+        The queue flags breaches and the status note drafts for
+        them, but until now nobody outside this service was told.
+        This is the telling, through the same output-routing seam
+        as approvals (``ACTION_WEBHOOK_URL``, HMAC-signed when
+        ``ACTION_WEBHOOK_SECRET`` is set): the first time the queue
+        projection observes a case past its SLA budget, one
+        ``sla_breach`` event is POSTed and the notice is recorded
+        on the record — the record of the notice is the dedupe, so
+        re-checking the queue never re-fires for a submission,
+        however long it sits breached. A failed firing is a ledger
+        entry on the record's breach ledger, retryable by an
+        operator (see :meth:`retry_sla_breach_notice`); it is never
+        silently re-fired by a later check.
+
+        The crossing is computed from the queue projection at call
+        time — there is no timer in the service; an operator (or a
+        scheduler hitting the endpoint) runs the check. With no
+        webhook configured nothing fires and nothing is recorded:
+        the breaches are reported as observed-but-unannounced, so
+        configuring the webhook later still announces them.
+        """
+        now = now or datetime.now(timezone.utc)
+        detected_at = now.isoformat(timespec="seconds")
+        store = self._get_store()
+        records = store.all_records()
+        queue = queue_aging(records, now)
+        by_id = {r.result.submission_id: r for r in records}
+        fired: list[dict] = []
+        already_notified: list[str] = []
+        unannounced: list[str] = []
+        for item in queue["breaches"]:
+            record = by_id.get(item["submission_id"])
+            if record is None:
+                continue
+            if record.sla_breach_notice is not None:
+                already_notified.append(item["submission_id"])
+                continue
+            entry = _dispatch_sla_breach(
+                record, _sla_breach_snapshot(item), detected_at
+            )
+            if entry is None:
+                unannounced.append(item["submission_id"])
+                continue
+            store.save(record)
+            fired.append(
+                {
+                    "submission_id": item["submission_id"],
+                    "dispatch_status": entry["status"],
+                }
+            )
+        return {
+            "generated_at": detected_at,
+            "breaches": queue["breach_count"],
+            "fired": fired,
+            "already_notified": already_notified,
+            "unannounced_no_webhook": unannounced,
+        }
+
+    def retry_sla_breach_notice(self, submission_id: str) -> dict:
+        """Retry a failed SLA-breach dispatch.
+
+        The notice fired once (see :meth:`notify_sla_breaches`) and
+        the receiver did not take it; the retry is a new attempt on
+        the record's breach ledger carrying the original breach
+        snapshot (the breach that was observed, at the age it was
+        observed — a retry does not rewrite history with today's
+        age). Only a notice whose latest attempt failed has
+        anything to retry. The queue case itself is untouched —
+        output routing never changes a case's state.
+        """
+        store = self._get_store()
+        record = store.get(submission_id)
+        if record is None:
+            raise KeyError(f"Unknown submission_id: {submission_id} (analyze it first)")
+        notice = record.sla_breach_notice
+        if notice is None:
+            raise ValueError(
+                f"No SLA breach notice has fired for {submission_id} — "
+                "nothing to retry (run the breach check first)"
+            )
+        if not record.sla_breach_attempts or (
+            record.sla_breach_attempts[-1]["status"] != "failed"
+        ):
+            raise ValueError(
+                f"SLA breach notice for {submission_id} is not in a failed "
+                f"state (status: {notice.get('dispatch_status')}) — nothing to retry"
+            )
+        snapshot = {
+            key: notice[key]
+            for key in (
+                "submission_id",
+                "insured_name",
+                "broker_name",
+                "outcome",
+                "risk_tier",
+                "sla",
+            )
+        }
+        entry = _dispatch_sla_breach(
+            record, snapshot, notice["first_observed_at"]
+        )
+        if entry is None:
+            raise ValueError(
+                "ACTION_WEBHOOK_URL is not configured — the failed breach "
+                "notice cannot be retried until it is set"
+            )
+        store.save(record)
+        return {
+            "submission_id": submission_id,
+            "notice": record.sla_breach_notice,
+            "attempts": record.sla_breach_attempts,
+        }
+
+    def sla_breach(self, submission_id: str) -> dict | None:
+        """The SLA-breach notice + delivery ledger for one submission,
+        or None when the submission is unknown."""
+        record = self._get_store().get(submission_id)
+        if record is None:
+            return None
+        return {
+            "submission_id": submission_id,
+            "notice": record.sla_breach_notice,
+            "attempts": record.sla_breach_attempts,
+        }
 
     def get(self, submission_id: str) -> AgentResult | None:
         record = self._get_store().get(submission_id)

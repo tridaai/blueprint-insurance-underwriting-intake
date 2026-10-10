@@ -587,6 +587,10 @@ def queue_item_for(
         item["age_days"] = max(0, (now.date() - submitted).days)
     item.update(_sla_for(item, budgets))
     item["blocking_lines"] = _blocking_line_entries(result, item["age_days"])
+    # The breach-webhook notice, when one has fired for this record
+    # (service.notify_sla_breaches) — the queue shows whether a
+    # breached case has been announced, not just that it breached.
+    item["sla_breach_notice"] = record.sla_breach_notice
     return item
 
 

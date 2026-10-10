@@ -45,6 +45,17 @@ class ApprovalRecord:
     # or None when none has been drafted. An internal draft — it is
     # stored on the record and never sent. Older payloads predate it.
     status_note: dict | None = None
+    # The SLA-breach webhook notice (see service.notify_sla_breaches):
+    # set the first time the queue projection observes this record
+    # past its SLA budget AND a breach dispatch was attempted —
+    # {first_observed_at, insured_name, broker_name, outcome,
+    # risk_tier, sla, dispatch_status}. Its presence is the dedupe:
+    # a submission is breach-notified at most once, however often
+    # the queue is re-checked. The attempts live in their own ledger
+    # below (the same shape as dispatch_attempts, a different event).
+    # Older payloads predate both fields.
+    sla_breach_notice: dict | None = None
+    sla_breach_attempts: list[dict] = field(default_factory=list)
 
 
 def history_entry(record: ApprovalRecord) -> dict:
@@ -113,6 +124,8 @@ def _record_to_dict(record: ApprovalRecord) -> dict:
         "dispatch_status": record.dispatch_status,
         "dispatch_attempts": record.dispatch_attempts,
         "status_note": record.status_note,
+        "sla_breach_notice": record.sla_breach_notice,
+        "sla_breach_attempts": record.sla_breach_attempts,
     }
 
 
@@ -132,6 +145,8 @@ def _record_from_dict(data: dict) -> ApprovalRecord:
         dispatch_status=data.get("dispatch_status"),
         dispatch_attempts=data.get("dispatch_attempts") or [],
         status_note=data.get("status_note"),
+        sla_breach_notice=data.get("sla_breach_notice"),
+        sla_breach_attempts=data.get("sla_breach_attempts") or [],
     )
 
 

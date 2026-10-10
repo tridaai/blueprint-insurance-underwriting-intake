@@ -82,6 +82,8 @@
     <section>
       <h2>Queue aging &amp; SLA</h2>
       <div id="queue" class="empty">Loading…</div>
+      <div class="row" style="margin-top:10px"><button id="notify-breaches">Notify SLA breaches</button>
+      <span class="note" id="sla-notify-status"></span></div>
       <div id="queue-note" style="margin-top:10px"></div>
     </section>
     <section>
@@ -273,16 +275,41 @@ async function loadQueue() {
        </tbody></table>
        ${q.oldest ? `<p class="note">Oldest: ${esc(q.oldest.submission_id)} — ${esc(q.oldest.insured_name)}, ${esc(q.oldest.age_days)} day(s), ${esc(q.oldest.outcome)} / ${esc(q.oldest.risk_tier)}.</p>` : ''}
        <p class="note">SLA budgets by risk tier: ${esc(budgetText)} — ${q.breach_count ? `<span class="flag">${esc(q.breach_count)} breached</span>` : 'no breaches'}${q.blocked_bundles ? ` · ${esc(q.blocked_bundles)} bundle(s) blocked on a line` : ''}.</p>
-       ${q.breaches && q.breaches.length ? `<table><thead><tr><th>Breached</th><th>Tier</th><th>Age / budget</th><th></th></tr></thead><tbody>
-       ${q.breaches.map(i => `<tr><td>${esc(i.submission_id)}<br><span class="note">${esc(i.insured_name)}</span></td><td>${esc(i.risk_tier)}</td><td>${esc(i.age_days)}d / ${esc(i.sla_budget_days)}d (${esc(i.sla_days_over)}d over)</td><td><button data-note="${esc(i.submission_id)}">Draft status note</button></td></tr>`).join('')}
+       ${q.breaches && q.breaches.length ? `<table><thead><tr><th>Breached</th><th>Tier</th><th>Age / budget</th><th>Breach webhook</th><th></th></tr></thead><tbody>
+       ${q.breaches.map(i => `<tr><td>${esc(i.submission_id)}<br><span class="note">${esc(i.insured_name)}</span></td><td>${esc(i.risk_tier)}</td><td>${esc(i.age_days)}d / ${esc(i.sla_budget_days)}d (${esc(i.sla_days_over)}d over)</td><td>${i.sla_breach_notice ? `fired ${esc(i.sla_breach_notice.first_observed_at)} · ${i.sla_breach_notice.dispatch_status === 'sent' ? pill('sent', 'good') : pill('failed', 'bad') + ` <button data-breach-retry="${esc(i.submission_id)}">Retry</button>`}` : '<span class="note">not notified</span>'}</td><td><button data-note="${esc(i.submission_id)}">Draft status note</button></td></tr>`).join('')}
        </tbody></table>` : ''}
        ${blockedItems.length ? `<p class="note">Blocked on lines:<br>${blockedItems.map(i => `${esc(i.submission_id)} — ` + i.blocking_lines.map(b => `${esc(b.line_of_business)} (${esc(b.age_days)}d waiting; missing: ${b.missing_items.map(esc).join(', ') || '—'})`).join('<br>')).join('<br>')}</p>` : ''}
        ${q.unknown_age && q.unknown_age.length ? `<p class="note">Unparseable submitted date: ${q.unknown_age.map(esc).join(', ')}</p>` : ''}`;
     document.querySelectorAll('[data-note]').forEach(btn =>
       btn.addEventListener('click', () => draftNote(btn.getAttribute('data-note'))));
+    document.querySelectorAll('[data-breach-retry]').forEach(btn =>
+      btn.addEventListener('click', () => retryBreach(btn.getAttribute('data-breach-retry'))));
   } catch (e) {
     $('queue').innerHTML = '<span class="empty">Queue unavailable.</span>';
   }
+}
+
+async function notifyBreaches() {
+  $('sla-notify-status').textContent = 'Checking the queue for breaches…';
+  const res = await fetch('/queue/sla-notifications', {method: 'POST', headers: headers()});
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('sla-notify-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  const fired = (body.fired || []).map(f => `${f.submission_id} → ${f.dispatch_status}`).join(', ');
+  $('sla-notify-status').textContent =
+    `${body.breaches} breached · fired ${body.fired.length}${fired ? ' (' + fired + ')' : ''}` +
+    (body.already_notified && body.already_notified.length ? ` · already notified: ${body.already_notified.join(', ')}` : '') +
+    (body.unannounced_no_webhook && body.unannounced_no_webhook.length ? ` · not announced (no ACTION_WEBHOOK_URL): ${body.unannounced_no_webhook.join(', ')}` : '');
+  loadQueue();
+}
+
+async function retryBreach(submissionId) {
+  $('sla-notify-status').textContent = 'Retrying the breach notice for ' + submissionId + '…';
+  const res = await fetch(`/submissions/${submissionId}/sla-breach/retry`, {method: 'POST', headers: headers()});
+  const body = await res.json().catch(() => ({}));
+  $('sla-notify-status').textContent = res.ok
+    ? `${submissionId}: breach notice ${body.notice ? body.notice.dispatch_status : ''} after ${body.attempts ? body.attempts.length : ''} attempt(s).`
+    : 'Error ' + res.status + ': ' + (body.detail || '');
+  loadQueue();
 }
 
 async function draftNote(submissionId) {
@@ -495,6 +522,7 @@ $('approve').addEventListener('click', () => decide('approve'));
 $('reject').addEventListener('click', () => decide('reject'));
 $('refresh-inbox').addEventListener('click', () => { loadInbox(); loadQueue(); loadDispatch(); loadCalibration(); });
 $('retry-due').addEventListener('click', retryDue);
+$('notify-breaches').addEventListener('click', notifyBreaches);
 loadSamples();
 loadEvals();
 loadInbox();

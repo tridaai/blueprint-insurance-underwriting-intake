@@ -287,6 +287,18 @@ def queue_aging_view() -> dict:
     return service.queue()
 
 
+@app.post("/queue/sla-notifications", dependencies=_AUTH)
+def notify_sla_breaches() -> dict:
+    """Run the SLA-breach check: the first time the queue projection
+    observes a case past its SLA budget, fire one signed
+    ``sla_breach`` webhook through the output-routing seam and
+    record the notice on the record (the record is the dedupe —
+    re-running the check never re-fires). With no ACTION_WEBHOOK_URL
+    configured, breaches are reported as observed-but-unannounced
+    and nothing is recorded."""
+    return service.notify_sla_breaches()
+
+
 @app.get("/metrics", dependencies=_AUTH)
 def metrics() -> dict:
     """Operational aggregates over the store: runs, decisions,
@@ -494,6 +506,30 @@ def get_status_note(submission_id: str) -> dict:
     if note is None:
         raise HTTPException(status_code=404, detail="No status note drafted for this submission.")
     return note
+
+
+@app.get("/submissions/{submission_id}/sla-breach", dependencies=_AUTH)
+def sla_breach(submission_id: str) -> dict:
+    """The SLA-breach notice for one submission and its own delivery
+    ledger (separate from the approval ledger: a different event).
+    ``notice`` is null until a breach check has fired for it."""
+    view = service.sla_breach(submission_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="Submission not analyzed yet.")
+    return view
+
+
+@app.post("/submissions/{submission_id}/sla-breach/retry", dependencies=_AUTH)
+def retry_sla_breach(submission_id: str) -> dict:
+    """Retry a failed SLA-breach dispatch: a new attempt on the
+    breach ledger, carrying the original breach snapshot. The queue
+    case itself is never changed by output routing."""
+    try:
+        return service.retry_sla_breach_notice(submission_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/submissions/{submission_id}/dispatch", dependencies=_AUTH)
