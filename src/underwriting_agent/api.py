@@ -269,7 +269,7 @@ def scorecards() -> dict:
 
 
 @app.get("/queue", dependencies=_AUTH)
-def queue() -> dict:
+def queue_aging_view() -> dict:
     """Queue aging: the submissions still awaiting an underwriter,
     bucketed by days since they were submitted (with the outcome
     mix and the single oldest case) — a stranded queue is visible
