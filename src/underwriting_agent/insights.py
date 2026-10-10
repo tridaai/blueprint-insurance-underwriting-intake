@@ -1835,6 +1835,40 @@ def ops_proposal_expiry_warning_days() -> int:
     )
 
 
+def _acknowledged_still_waiting(
+    acknowledged_entries: list[dict], now: datetime, wait_days: int
+) -> list[dict]:
+    """Acknowledged breach notices whose case still has not moved.
+
+    An acknowledgement closes the "nobody was told" gap, not the
+    case: the operator made the call, and the file went back to
+    waiting for a decision. A notice acknowledged at least
+    ``wait_days`` ago whose case is *still* undecided resurfaces
+    here — the worked state must not become a quieter place to
+    rot. The entries are the acknowledged read's own (the case
+    is awaiting a decision by that computation's construction),
+    annotated with the acknowledgement's age; the window is the
+    follow-through escalation window, a sibling knob rather than
+    a new family: a fortnight of silence after the call is the
+    same operational fact as a fortnight of silence after a note.
+    Oldest acknowledgement first.
+    """
+    waiting: list[dict] = []
+    for entry in acknowledged_entries:
+        ack = entry.get("acknowledgement") or {}
+        acked_at = _parse_timestamp(ack.get("acknowledged_at") or "")
+        if acked_at is None:
+            continue
+        ack_age = max(0, (now.date() - acked_at.date()).days)
+        if ack_age < wait_days:
+            continue
+        waiting.append({**entry, "acknowledged_age_days": ack_age})
+    waiting.sort(
+        key=lambda e: (-e["acknowledged_age_days"], e["submission_id"])
+    )
+    return waiting
+
+
 def ops_digest(
     records: list[ApprovalRecord],
     proposals: list[dict] | None = None,
@@ -1843,6 +1877,7 @@ def ops_digest(
     sla_budgets_map: dict[str, int] | None = None,
     follow_escalation_days: int | None = None,
     proposal_warning_days: int | None = None,
+    acknowledged_wait_days: int | None = None,
     latest_snapshot: dict | None = None,
 ) -> dict:
     """One operator digest over the surfaces that rot quietly.
@@ -1857,7 +1892,13 @@ def ops_digest(
     notices an operator has acknowledged count nowhere here —
     the case has been picked up — and ride along in
     ``acknowledged_breach_notices`` with the acknowledgement,
-    so the worked ones stay auditable from the same read),
+    so the worked ones stay auditable from the same read), and
+    **acknowledged but still waiting** (an acknowledged notice
+    whose case is still undecided a follow-through-escalation
+    window later — the call happened; the file still has not
+    moved — counted in ``total_attention`` on purpose: the
+    breached-queue count asks who picks the case up, this one
+    asks why the decision still has not landed),
     **breached queue cases** (awaiting
     submissions past their tier's SLA budget — :func:`queue_aging`,
     measured against the budgets in force), **outstanding
@@ -1885,8 +1926,17 @@ def ops_digest(
     now = now or datetime.now(timezone.utc)
     if proposal_warning_days is None:
         proposal_warning_days = ops_proposal_expiry_warning_days()
+    if acknowledged_wait_days is None:
+        acknowledged_wait_days = (
+            follow_escalation_days
+            if follow_escalation_days is not None
+            else follow_through_escalation_days()
+        )
 
     dispatch = dispatch_overview(records, now)
+    still_waiting = _acknowledged_still_waiting(
+        dispatch["acknowledged_breach_notices"], now, acknowledged_wait_days
+    )
     queue = queue_aging(records, now, sla_budgets_map=sla_budgets_map)
     follow = follow_through_digest(
         records, now, escalation_days=follow_escalation_days
@@ -1933,6 +1983,7 @@ def ops_digest(
     counts = {
         "stuck_dispatches": dispatch["stuck_count"],
         "exhausted_breach_notices": dispatch["exhausted_breach_count"],
+        "acknowledged_still_waiting": len(still_waiting),
         "breached_queue": queue["breach_count"],
         "follow_through_outstanding": len(outstanding),
         "follow_through_escalated": follow["escalated_count"],
@@ -1942,6 +1993,7 @@ def ops_digest(
     counts["total_attention"] = (
         counts["stuck_dispatches"]
         + counts["exhausted_breach_notices"]
+        + counts["acknowledged_still_waiting"]
         + counts["breached_queue"]
         + counts["follow_through_escalated"]
         + counts["proposals_expired"]
@@ -1955,6 +2007,12 @@ def ops_digest(
         parts.append(
             f"{counts['exhausted_breach_notices']} exhausted breach "
             "notice(s) — a case nobody was told about"
+        )
+    if counts["acknowledged_still_waiting"]:
+        parts.append(
+            f"{counts['acknowledged_still_waiting']} acknowledged "
+            "breach notice(s) still waiting on a decision — the "
+            "call happened; the file has not moved"
         )
     if counts["breached_queue"]:
         parts.append(f"{counts['breached_queue']} breached queue case(s)")
@@ -1982,12 +2040,14 @@ def ops_digest(
         "Ops digest: " + "; ".join(parts) + "."
         if parts
         else "Ops digest: nothing needs attention — no stuck "
-        "dispatches, no exhausted breach notices, no breached "
-        "cases, no escalated notes, no proposals nearing expiry."
+        "dispatches, no exhausted breach notices, no acknowledged "
+        "notices still waiting, no breached cases, no escalated "
+        "notes, no proposals nearing expiry."
     )
     sections = {
         "stuck_dispatches": dispatch["stuck_failures"],
         "exhausted_breach_notices": dispatch["exhausted_breach_notices"],
+        "acknowledged_still_waiting": still_waiting,
         "breached_queue": queue["breaches"],
         "follow_through_outstanding": outstanding,
         "follow_through_escalated": follow["escalated"],
@@ -2012,6 +2072,7 @@ def ops_digest(
         "acknowledged_breach_notices": dispatch[
             "acknowledged_breach_notices"
         ],
+        "acknowledged_wait_days": acknowledged_wait_days,
         "proposal_warning_days": proposal_warning_days,
         "movement": movement,
     }
@@ -2031,6 +2092,7 @@ DIGEST_SNAPSHOTS_KEY = "ops_digest_snapshots"
 DIGEST_COUNT_KEYS = (
     "stuck_dispatches",
     "exhausted_breach_notices",
+    "acknowledged_still_waiting",
     "breached_queue",
     "follow_through_outstanding",
     "follow_through_escalated",
@@ -2046,6 +2108,7 @@ DIGEST_COUNT_KEYS = (
 _DIGEST_SECTION_IDS = {
     "stuck_dispatches": "submission_id",
     "exhausted_breach_notices": "submission_id",
+    "acknowledged_still_waiting": "submission_id",
     "breached_queue": "submission_id",
     "follow_through_outstanding": "submission_id",
     "follow_through_escalated": "submission_id",
@@ -2059,6 +2122,7 @@ _DIGEST_SECTION_IDS = {
 _COUNT_LABELS = {
     "stuck_dispatches": "stuck dispatches",
     "exhausted_breach_notices": "exhausted breach notices",
+    "acknowledged_still_waiting": "acknowledged notices still waiting",
     "breached_queue": "breached queue cases",
     "follow_through_outstanding": "outstanding follow-through notes",
     "follow_through_escalated": "escalated follow-through notes",
