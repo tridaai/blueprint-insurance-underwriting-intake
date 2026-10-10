@@ -2153,6 +2153,47 @@ def _acknowledged_still_waiting(
     return waiting
 
 
+def _escalation_notice_state(
+    record: ApprovalRecord, exhausted_ids: set[str]
+) -> dict:
+    """One still-waiting case's escalation-telling state.
+
+    The second rung has a telling of its own (see
+    ``service.notify_acknowledged_escalations``) and the digest
+    is where an operator reads whether it happened: ``delivered``
+    (the escalation event landed), ``announced`` (fired, latest
+    attempt failed, attempts remain — delivery is in trouble but
+    a retry is still the move), ``exhausted`` (its ledger spent
+    the attempt budget undelivered — the case was told about and
+    called on, and the escalation saying so never landed), or
+    ``unannounced`` (no notice on the record at all: the
+    escalation check has not run for this case, or ran with no
+    webhook configured — either way nothing has left the
+    building, and the digest is the surface that notices a
+    sweep nobody ran). A case not yet on the second rung reads
+    ``not_escalated``: no telling is owed yet.
+    """
+    notice = record.escalation_notice
+    attempts = record.escalation_attempts or []
+    if notice is None:
+        state = "unannounced"
+    elif record.result.submission_id in exhausted_ids:
+        state = "exhausted"
+    elif attempts and attempts[-1].get("status") == "sent":
+        state = "delivered"
+    else:
+        state = "announced"
+    last = attempts[-1] if attempts else {}
+    return {
+        "state": state,
+        "attempts": len(attempts),
+        "first_observed_at": (notice or {}).get("first_observed_at") or "",
+        "last_attempt_at": last.get("attempted_at") or "",
+        "last_http_status": last.get("http_status"),
+        "last_error": last.get("error"),
+    }
+
+
 def ops_digest(
     records: list[ApprovalRecord],
     proposals: list[dict] | None = None,
@@ -2187,7 +2228,22 @@ def ops_digest(
     counted in ``acknowledged_escalated`` — a subset, never
     counted into ``total_attention`` a second time: the same
     cases, louder, and by then also on the queue's escalated
-    surfaces with the acknowledgement attached),
+    surfaces with the acknowledgement attached). Each
+    still-waiting entry also carries its **escalation-telling
+    state** (see :func:`_escalation_notice_state`): whether the
+    second rung's own webhook was ever fired for the case, and
+    what became of it. The telling gets its own counts —
+    ``exhausted_escalation_notices`` (the escalation's ledger
+    spent, undelivered: a different event from an exhausted
+    breach notice, where nobody was told at all — here the case
+    was told about and called on; the escalation saying so is
+    what never landed) and ``unannounced_escalations``
+    (escalated cases with no notice on the record: the
+    escalation check has not run, and this digest is the
+    surface that notices a sweep nobody ran). Both are subsets
+    of cases already counted in ``acknowledged_still_waiting``,
+    so neither enters ``total_attention`` — the same cases,
+    read for the state of their telling, not counted twice),
     **breached queue cases** (awaiting
     submissions past their tier's SLA budget — :func:`queue_aging`,
     measured against the budgets in force), **outstanding
@@ -2240,6 +2296,26 @@ def ops_digest(
     still_waiting = _acknowledged_still_waiting(
         dispatch["acknowledged_breach_notices"], now, acknowledged_wait_days
     )
+    # The still-waiting entries read acknowledgement entries,
+    # which do not carry the record; the escalation telling
+    # lives on the record, so it is joined here by id. Only an
+    # escalated entry is owed a telling — the rest read
+    # not_escalated, so the field is uniform down the list.
+    record_by_id = {r.result.submission_id: r for r in records}
+    exhausted_escalation_ids = {
+        entry["submission_id"]
+        for entry in dispatch["exhausted_escalation_notices"]
+    }
+    unannounced_escalations = 0
+    for entry in still_waiting:
+        record = record_by_id.get(entry["submission_id"])
+        if not entry["escalated"] or record is None:
+            entry["escalation_notice_state"] = {"state": "not_escalated"}
+            continue
+        state = _escalation_notice_state(record, exhausted_escalation_ids)
+        entry["escalation_notice_state"] = state
+        if state["state"] == "unannounced":
+            unannounced_escalations += 1
     queue = queue_aging(records, now, sla_budgets_map=sla_budgets_map)
     follow = follow_through_digest(
         records, now, escalation_days=follow_escalation_days
@@ -2291,6 +2367,19 @@ def ops_digest(
         "acknowledged_escalated": sum(
             1 for entry in still_waiting if entry["escalated"]
         ),
+        # The second rung's telling, counted on the subset
+        # discipline (see the docstring): exhausted escalation
+        # notices are the still-waiting cases whose escalation
+        # event spent its attempts undelivered, and unannounced
+        # escalations are the escalated cases no escalation
+        # check has ever fired for. Neither enters
+        # total_attention — the cases are already counted in
+        # acknowledged_still_waiting; these counts read the
+        # state of their telling.
+        "exhausted_escalation_notices": dispatch[
+            "exhausted_escalation_count"
+        ],
+        "unannounced_escalations": unannounced_escalations,
         "breached_queue": queue["breach_count"],
         "follow_through_outstanding": len(outstanding),
         "follow_through_escalated": follow["escalated_count"],
@@ -2344,6 +2433,18 @@ def ops_digest(
                 "the second window, escalated to the queue"
             )
         parts.append(part)
+    if counts["exhausted_escalation_notices"]:
+        parts.append(
+            f"{counts['exhausted_escalation_notices']} exhausted "
+            "escalation notice(s) — the case was told about and "
+            "called on; the escalation saying so never landed"
+        )
+    if counts["unannounced_escalations"]:
+        parts.append(
+            f"{counts['unannounced_escalations']} escalated "
+            "case(s) never announced — the escalation check "
+            "has not run"
+        )
     if counts["breached_queue"]:
         parts.append(f"{counts['breached_queue']} breached queue case(s)")
     if counts["follow_through_escalated"]:
@@ -2370,13 +2471,17 @@ def ops_digest(
         "Ops digest: " + "; ".join(parts) + "."
         if parts
         else "Ops digest: nothing needs attention — no stuck "
-        "dispatches, no exhausted breach notices, no acknowledged "
+        "dispatches, no exhausted breach notices, no exhausted "
+        "escalation notices, no acknowledged "
         "notices still waiting, no breached cases, no escalated "
         "notes, no proposals nearing expiry."
     )
     sections = {
         "stuck_dispatches": dispatch["stuck_failures"],
         "exhausted_breach_notices": dispatch["exhausted_breach_notices"],
+        "exhausted_escalation_notices": dispatch[
+            "exhausted_escalation_notices"
+        ],
         "acknowledged_still_waiting": still_waiting,
         "breached_queue": queue["breaches"],
         "follow_through_outstanding": outstanding,
@@ -2426,6 +2531,8 @@ DIGEST_COUNT_KEYS = (
     "exhausted_breach_notices",
     "acknowledged_still_waiting",
     "acknowledged_escalated",
+    "exhausted_escalation_notices",
+    "unannounced_escalations",
     "breached_queue",
     "follow_through_outstanding",
     "follow_through_escalated",
@@ -2445,6 +2552,7 @@ DIGEST_COUNT_KEYS = (
 _DIGEST_SECTION_IDS = {
     "stuck_dispatches": "submission_id",
     "exhausted_breach_notices": "submission_id",
+    "exhausted_escalation_notices": "submission_id",
     "acknowledged_still_waiting": "submission_id",
     "breached_queue": "submission_id",
     "follow_through_outstanding": "submission_id",
@@ -2461,6 +2569,8 @@ _COUNT_LABELS = {
     "exhausted_breach_notices": "exhausted breach notices",
     "acknowledged_still_waiting": "acknowledged notices still waiting",
     "acknowledged_escalated": "acknowledged notices escalated",
+    "exhausted_escalation_notices": "exhausted escalation notices",
+    "unannounced_escalations": "unannounced escalations",
     "breached_queue": "breached queue cases",
     "follow_through_outstanding": "outstanding follow-through notes",
     "follow_through_escalated": "escalated follow-through notes",
