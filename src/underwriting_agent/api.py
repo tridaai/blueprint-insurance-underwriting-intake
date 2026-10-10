@@ -644,8 +644,9 @@ def rename_sla_calibration_snapshot_label(
     """Rename a kept calibration report's label, on the snapshot
     itself: the address moves, the evidence does not — the move
     is recorded in the snapshot's label history (from, to, who,
-    when), the old label is freed at once, and citations by it
-    answer 404 like any label that names nothing. Refused
+    when), the old label is freed at once, and a citation by it
+    answers with the by-label read's successor read, naming
+    the rename, rather than a dead end. Refused
     (422): an unknown ``from_label`` (naming the labels in use),
     an empty or unchanged ``to_label``, the reserved
     ``current``, and a ``to_label`` another kept report already
@@ -700,19 +701,32 @@ def sla_calibration_rename_log() -> dict:
 )
 def sla_calibration_snapshot_by_label(label: str) -> dict:
     """The one kept report a label cites, addressed by the
-    handle itself. 404 when no kept snapshot carries the label —
-    a citation that names nothing is a broken citation, said
+    handle itself.
+
+    A label a kept report carries answers with the report, as
+    always. A label that names nothing but was **renamed
+    away** answers with the successor read instead of a dead
+    end: the report that now descends from the cited name
+    under ``snapshot``, with the cited name, the name it wears
+    now, and the rename chain between them — a redirect in
+    data, naming the move, never pretending the old address
+    still names the report directly. 404 only when the label
+    names nothing and never did, or its report has been pruned
+    — a citation that names nothing is a broken citation, said
     plainly rather than answered with an empty list."""
     snapshot = service.sla_calibration_snapshot_by_label(label)
-    if snapshot is None:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"No kept calibration snapshot carries the label "
-                f"'{label}'."
-            ),
-        )
-    return snapshot
+    if snapshot is not None:
+        return snapshot
+    successor = service.sla_calibration_snapshot_successor(label)
+    if successor is not None:
+        return successor
+    raise HTTPException(
+        status_code=404,
+        detail=(
+            f"No kept calibration snapshot carries the label "
+            f"'{label}'."
+        ),
+    )
 
 
 @app.post("/queue/sla/calibration/snapshots/prune", dependencies=_AUTH)

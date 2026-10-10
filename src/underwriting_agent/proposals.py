@@ -2195,6 +2195,74 @@ def calibration_rename_log(
     return entries
 
 
+def calibration_snapshot_successor(
+    snapshots: list[dict], label: str
+) -> dict | None:
+    """The kept report a renamed-away label now descends to,
+    or None — the citation repair.
+
+    A citation written before a rename names a label no kept
+    report carries; the rename history knows where the name
+    went. The chain is followed per report: on each kept
+    report, the moves from the first whose ``from`` is the
+    cited label to the end of that report's history — a
+    history is sequential (each move's ``to`` is the next
+    move's ``from``, and the last move's ``to`` is the label
+    the report wears now), so the chain ends at that report's
+    current label by construction. A label freed by a rename
+    can be taken again by a later keep and renamed again, so
+    more than one chain can start at the cited name; the one
+    whose final move is latest wins — the name's most recent
+    fate is the citation's best answer — with keep order
+    breaking ties, so the read is deterministic.
+
+    The answer is a **successor read**, shaped distinctly from
+    the report itself: the report under ``snapshot``, the
+    label cited, the label it wears now, and the chain of
+    moves between them. It never pretends the old address
+    still names the report — it names the rename that moved
+    it. None when no kept report's history starts a chain at
+    the label: the name was never renamed here, or its report
+    has been pruned (the rename log's pruned stratum names
+    that fate; there is no report left to descend to).
+    """
+    if not label:
+        return None
+    best: dict | None = None
+    best_key: tuple | None = None
+    for position, snapshot in enumerate(snapshots):
+        history = snapshot.get("label_history") or []
+        start = next(
+            (
+                i
+                for i, move in enumerate(history)
+                if move.get("from") == label
+            ),
+            None,
+        )
+        if start is None:
+            continue
+        chain = [
+            {
+                "from": move.get("from", ""),
+                "to": move.get("to", ""),
+                "renamed_by": move.get("renamed_by", ""),
+                "renamed_at": move.get("renamed_at", ""),
+            }
+            for move in history[start:]
+        ]
+        key = (chain[-1]["renamed_at"], position)
+        if best_key is None or key > best_key:
+            best_key = key
+            best = {
+                "snapshot": snapshot,
+                "cited_label": label,
+                "current_label": snapshot.get("label", ""),
+                "rename_chain": chain,
+            }
+    return best
+
+
 # ---------------------------------------------------------------------------
 # Deciding a proposal — the one consequential write
 # ---------------------------------------------------------------------------

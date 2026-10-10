@@ -6,10 +6,17 @@ forking the citation into two kept reports over one evidence
 base. The rename now moves the address on the kept snapshot
 itself: the label changes in place, the move is recorded in
 the snapshot's ``label_history`` (from, to, who, when), the
-evidence is untouched, and the old label is freed at once —
-citations by it answer 404 honestly. The new label answers
-to every keep's rules: not ``current``, not another kept
-report's label, not empty, not the label already carried.
+evidence is untouched, and the old label is freed at once.
+The new label answers to every keep's rules: not
+``current``, not another kept report's label, not empty, not
+the label already carried.
+
+(Round 23 reversal, stated: this round pinned the freed
+label's citations to a 404. Round 23's citation repair
+supersedes that pin — a by-label read of a renamed-away label
+now answers with the successor read naming the rename; see
+tests/test_calibration_citation_repair.py. The 404 survives
+for labels that name nothing and never did.)
 """
 
 from __future__ import annotations
@@ -173,7 +180,7 @@ def client():
     return TestClient(api_module.app)
 
 
-def test_the_rename_over_the_api_and_the_old_citation_404s(client):
+def test_the_rename_over_the_api_and_the_old_citation_is_repaired(client):
     client.post(
         "/queue/sla/calibration/snapshots",
         json={"actor": "Ops Lead", "label": "pre-change"},
@@ -191,8 +198,18 @@ def test_the_rename_over_the_api_and_the_old_citation_404s(client):
     assert body["label"] == "pre-budget-change"
     assert body["label_history"][0]["renamed_by"] == "Uma"
 
+    # Round 23 re-pin (see the module docstring): the freed
+    # label's citation no longer dead-ends at a 404 — the
+    # by-label read repairs it through the rename log and
+    # answers with the successor read, naming the move.
     old = client.get("/queue/sla/calibration/snapshots/by-label/pre-change")
-    assert old.status_code == 404
+    assert old.status_code == 200
+    repaired = old.json()
+    assert repaired["cited_label"] == "pre-change"
+    assert repaired["current_label"] == "pre-budget-change"
+    assert repaired["snapshot"]["snapshot_id"] == body["snapshot_id"]
+    assert repaired["rename_chain"][0]["from"] == "pre-change"
+    assert repaired["rename_chain"][0]["renamed_by"] == "Uma"
     new = client.get(
         "/queue/sla/calibration/snapshots/by-label/pre-budget-change"
     )

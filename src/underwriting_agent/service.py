@@ -2284,9 +2284,12 @@ class SubmissionService:
         who, when), so the report's evidence — budgets, ready
         rows, its keeper and moment — is untouched and its
         addressing history is auditable. The old label is freed
-        at once: a by-label read of it names nothing (404), a
-        keep may take it, and the new label resolves to this
-        report in the list, the by-label read, and the diff.
+        at once: a keep may take it, and a by-label read of it
+        no longer dead-ends — it answers with the successor
+        read (see :meth:`sla_calibration_snapshot_successor`),
+        naming the rename chain to the label this report wears
+        now; the new label resolves to this report in the list,
+        the by-label read, and the diff.
 
         The refusals are the addressing discipline's: the
         ``from`` label must name a kept report (an unknown one
@@ -2380,6 +2383,22 @@ class SubmissionService:
         from .proposals import calibration_snapshot_by_label
 
         return calibration_snapshot_by_label(
+            self.sla_calibration_snapshots(), label
+        )
+
+    def sla_calibration_snapshot_successor(self, label: str) -> dict | None:
+        """The successor read for a label no kept report
+        carries (``proposals.calibration_snapshot_successor``):
+        when the name was renamed away, the report that now
+        descends from it, the label it wears now, and the chain
+        of renames between — so a citation written before a
+        rename can be followed instead of dead-ending at a 404.
+        None when the name was never renamed here or its report
+        has been pruned: the repair answers only for a report
+        that still stands."""
+        from .proposals import calibration_snapshot_successor
+
+        return calibration_snapshot_successor(
             self.sla_calibration_snapshots(), label
         )
 
