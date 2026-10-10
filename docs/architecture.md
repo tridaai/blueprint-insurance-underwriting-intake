@@ -580,6 +580,35 @@ numbers on the submission and its loss records. Line aliases fold too
   a previewed outcome is therefore the outcome the write
   produces, pinned by a test that previews, then sweeps, and
   compares the results field for field.
+- **Round 12 prices the silence, and gives the budgets a
+  calibration of their own.** (1) `sla_budget_calibration`
+  replays `decided_wait_cases` the way `trigger_calibration`
+  replays renewals: per tier a wait distribution against the
+  budget in force — provenance read from the settings history,
+  because the document stores the whole budgets map and presence
+  proves nothing — and candidate rows carrying the moved set
+  against the budget in force, flagged `proposal_ready` exactly
+  when `_best_sla_candidate` would draft from it. The report and
+  the proposal scan are two reads of one evidence base.
+  (2) A breach notice's ledger is a different event from an
+  approval ledger, so exhaustion is computed from the notice's
+  own attempts (`_exhausted_breach_notices`): budget spent, last
+  attempt failed, case still awaiting — aged from the first
+  observation, listed apart in the dispatch view and the digest,
+  because its remedy is a phone call and merging it into the
+  retry list would train operators to click past it.
+  (3) A restore entry gains `decision_note`: the audit record
+  already answered what/who/when for every other consequential
+  act (proposal decisions carry notes), and a restore is the
+  most judgement-shaped act of all; the preview echoes the
+  draft note because that is where the wording gets decided.
+  (4) The digest reads itself against the latest snapshot
+  (`latest_snapshot` → a `movement` block + one headline
+  sentence): the trend endpoint compares kept snapshots to each
+  other, but the operator's first screen is the live digest, so
+  that is where since-snapshot movement belongs. Absent a
+  snapshot the block is None — the system does not fabricate a
+  baseline to look trend-aware.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 

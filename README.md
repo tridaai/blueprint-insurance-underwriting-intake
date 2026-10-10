@@ -254,12 +254,19 @@ an SLA breach, since the case may be decided while the note rots.
 
 All of it composes into one **ops digest** (`GET /ops/digest`,
 and a console panel): the surfaces that rot quietly — approval
-dispatches stuck failing with retries left, queue cases past
+dispatches stuck failing with retries left, **exhausted breach
+notices** (an SLA-breach notice whose own delivery ledger spent
+its attempts undelivered, on a case still undecided — a case
+nobody was told about), queue cases past
 their SLA budget, follow-through still outstanding (escalated
 ones named), and calibration proposals nearing or past their
 evidence expiry — under one composed headline with the entries
 behind it. Computed at read time, never sent; reading it retries
-nothing, refreshes nothing, and decides nothing.
+nothing, refreshes nothing, and decides nothing. The exhausted
+notices also surface on the **dispatch view** (`GET /dispatch`)
+in their own list — aged from the breach's first observation,
+bucketed, and kept apart from the approval failures, because
+their next step is a human call, not another retry.
 
 The digest can also be **snapshotted** (`POST /ops/digest/snapshots`,
 console button): the headline, the counts, and the ids behind each
@@ -269,7 +276,14 @@ under the digest) compares the kept snapshots: the headline counts
 as a series, each count's change from the first snapshot to the
 latest and since the previous one, and — between the latest two —
 which ids **entered** and which **cleared** each section, so a
-count that moved reads apart from the churn underneath it.
+count that moved reads apart from the churn underneath it. And
+once a snapshot exists the digest itself is **trend-aware**: it
+carries a `movement` block reading the live counts and section
+membership against the latest snapshot's (change and direction
+per count, entered/cleared ids per section), and the headline
+speaks that movement in one sentence — the first screen an
+operator opens already says what got worse. No snapshot, no
+movement block: absence, never a fabricated baseline.
 
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:
@@ -350,7 +364,18 @@ decision are not evidence. The drafted proposals join the same
 list and decision endpoint; accepting one writes the budget into
 a second settings record (`GET /queue/sla/settings`), and the
 queue, the breach check, and status-note drafting all measure
-cases against the budgets that record resolves.
+cases against the budgets that record resolves. The budgets also
+have their own **calibration report**
+(`GET /queue/sla/calibration`): the same wait replay read as a
+what-if — per tier, the decided waits as a distribution (min,
+percentiles, mean against the budget in force, its source named
+per tier) and a sweep of candidate budgets whose rows carry
+breach counts and decision splits on both sides of the line,
+plus the cases each candidate would move against the budget in
+force, marked `proposal_ready` when that moved set is exactly
+the one-sided evidence a proposal would be drafted from — so a
+human can read why a proposal exists, or why none does, without
+re-deriving it. Read-only, like the trigger calibration.
 
 Two disciplines keep the proposals honest over time. A draft's
 evidence is a snapshot, so drafts **expire** (`PROPOSAL_EXPIRY_DAYS`,
@@ -391,7 +416,12 @@ a dry run — the values in force, the values as of the chosen
 entry, and exactly which dimension values would change — writing
 nothing and appending nothing. A restore that would move nothing
 previews as exactly that, instead of failing the way the restore
-itself does.
+itself does. A restore may also carry a **decision note** (the
+request's optional `note`): it is stored on the restore entry,
+so the record answers *why* the record went back, not only
+what/who/when — and the preview is where the note is drafted,
+echoed back against the exact moves it would be stored with
+while still writing nothing.
 
 **Multi-line submissions** — a broker often submits the whole
 account at once, so intake accepts a bundle (`lines` on the
