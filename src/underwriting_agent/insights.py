@@ -1032,6 +1032,23 @@ def queue_aging(
     second touch never pretends to be the first. A decided case
     drops off by the acknowledged read's own construction (the
     exhaustion worklist only ever holds undecided cases).
+
+    Both escalated surfaces also read the second rung's
+    **telling state** in the digest's own vocabulary (see
+    :func:`_escalation_notice_state`): each
+    ``escalated_acknowledgements`` entry and each item's
+    ``acknowledged_escalation`` carries the computed
+    ``escalation_notice_state`` — delivered / announced /
+    exhausted / unannounced — beside the raw notice the entry
+    has always carried, so the underwriter who picks the case
+    up reads whether the escalation webhook landed, is in
+    trouble, spent its ledger, or was never fired, in the same
+    words the morning digest used. An unannounced entry is
+    **aged** the digest's way too (``unannounced_days``: the
+    days since the case crossed the second rung with no
+    telling) — a sweep that has not run yet today and one that
+    stopped a month ago are different facts on the worklist
+    as well.
     """
     now = now or datetime.now(timezone.utc)
     budgets = sla_budgets_map if sla_budgets_map is not None else sla_budgets()
@@ -1156,6 +1173,16 @@ def queue_aging(
         else follow_through_escalation_days()
     )
     record_by_id = {r.result.submission_id: r for r in records}
+    # The telling's exhausted set, read the digest's way (see
+    # ops_digest): the state computation needs to know which
+    # escalation ledgers are spent, and the queue must not
+    # invent a second reading of that fact.
+    exhausted_escalation_ids = {
+        entry["submission_id"]
+        for entry in _exhausted_escalation_notices(
+            records, now, env_int("DISPATCH_ATTEMPT_BUDGET", 8)
+        )
+    }
     escalated_ack_by_id: dict[str, dict] = {}
     for entry in _exhausted_breach_notices(
         records,
@@ -1170,7 +1197,7 @@ def queue_aging(
         ack_age = max(0, (now.date() - acked_at.date()).days)
         if ack_age >= 2 * ack_window:
             record = record_by_id.get(entry["submission_id"])
-            escalated_ack_by_id[entry["submission_id"]] = {
+            escalated_entry = {
                 **entry,
                 "acknowledged_age_days": ack_age,
                 "escalation_days": 2 * ack_window,
@@ -1179,7 +1206,31 @@ def queue_aging(
                 "escalation_notice": (
                     record.escalation_notice if record is not None else None
                 ),
+                # The same telling, computed: the digest's
+                # vocabulary (delivered / announced / exhausted
+                # / unannounced) beside the raw notice, so the
+                # worklist and the morning read cannot disagree
+                # about whether the escalation landed.
+                "escalation_notice_state": (
+                    _escalation_notice_state(
+                        record, exhausted_escalation_ids
+                    )
+                    if record is not None
+                    else {"state": "unannounced"}
+                ),
             }
+            if (
+                escalated_entry["escalation_notice_state"]["state"]
+                == "unannounced"
+            ):
+                # Aged as the digest ages it: the days since
+                # the case crossed this rung (its
+                # acknowledgement reaching twice the window)
+                # with no telling.
+                escalated_entry["unannounced_days"] = max(
+                    0, ack_age - 2 * ack_window
+                )
+            escalated_ack_by_id[entry["submission_id"]] = escalated_entry
     ack_flagged = 0
     for item in all_items:
         escalated = escalated_ack_by_id.get(item["submission_id"])
@@ -1191,7 +1242,14 @@ def queue_aging(
             "acknowledged_at": ack.get("acknowledged_at", ""),
             "note": ack.get("note", ""),
             "acknowledged_age_days": escalated["acknowledged_age_days"],
+            "escalation_notice_state": escalated[
+                "escalation_notice_state"
+            ],
         }
+        if "unannounced_days" in escalated:
+            item["acknowledged_escalation"]["unannounced_days"] = (
+                escalated["unannounced_days"]
+            )
         ack_flagged += 1
     escalated_acknowledgements = sorted(
         escalated_ack_by_id.values(),
