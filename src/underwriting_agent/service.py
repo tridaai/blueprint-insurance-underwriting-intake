@@ -1967,6 +1967,45 @@ class SubmissionService:
         )
         return annotate_proposal(proposal)
 
+    def _check_calibration_label(
+        self, snapshots: list[dict], label: str
+    ) -> None:
+        """The label rules every calibration keep answers to.
+
+        A label is an address, so it must name one report: the
+        reserved ``current`` is refused outright (it names the
+        live side of a diff, a moving target no keep may wear),
+        and a label a kept snapshot already carries is refused
+        naming the holder and the labels in use. Unlabelled
+        keeps are unlimited and checked no further.
+        """
+        from .proposals import (
+            CURRENT_CALIBRATION_LABEL,
+            calibration_snapshot_by_label,
+            calibration_snapshot_labels,
+        )
+
+        if label == CURRENT_CALIBRATION_LABEL:
+            raise ValueError(
+                "The label 'current' is reserved for the live "
+                "side of a calibration diff — it names the "
+                "report as it stands now, so no kept snapshot "
+                "may carry it."
+            )
+        if label:
+            holder = calibration_snapshot_by_label(snapshots, label)
+            if holder is not None:
+                in_use = ", ".join(
+                    f"'{name}'"
+                    for name in calibration_snapshot_labels(snapshots)
+                )
+                raise ValueError(
+                    f"Label '{label}' is already carried by "
+                    f"{holder.get('snapshot_id', '')} — kept "
+                    "calibration labels are unique, so a citation "
+                    f"names one report. Labels in use: {in_use}."
+                )
+
     def snapshot_sla_calibration(self, actor: str, label: str = "") -> dict:
         """Keep a snapshot of the SLA calibration report as it
         stands now (``proposals.build_calibration_snapshot``):
@@ -1993,41 +2032,72 @@ class SubmissionService:
         wearing it would make the citation name a moving target."""
         from .proposals import (
             CALIBRATION_SNAPSHOTS_KEY,
-            CURRENT_CALIBRATION_LABEL,
             build_calibration_snapshot,
-            calibration_snapshot_by_label,
-            calibration_snapshot_labels,
         )
 
         store = self._get_store()
         document = store.get_document(CALIBRATION_SNAPSHOTS_KEY) or {}
         snapshots = list(document.get("snapshots") or [])
-        if label == CURRENT_CALIBRATION_LABEL:
-            raise ValueError(
-                "The label 'current' is reserved for the live "
-                "side of a calibration diff — it names the "
-                "report as it stands now, so no kept snapshot "
-                "may carry it."
-            )
-        if label:
-            holder = calibration_snapshot_by_label(snapshots, label)
-            if holder is not None:
-                in_use = ", ".join(
-                    f"'{name}'"
-                    for name in calibration_snapshot_labels(snapshots)
-                )
-                raise ValueError(
-                    f"Label '{label}' is already carried by "
-                    f"{holder.get('snapshot_id', '')} — kept "
-                    "calibration labels are unique, so a citation "
-                    f"names one report. Labels in use: {in_use}."
-                )
+        self._check_calibration_label(snapshots, label)
         snapshot = build_calibration_snapshot(
             self.sla_budget_calibration(),
             next_snapshot_id(snapshots, "cal-"),
             actor,
             label=label,
         )
+        snapshots.append(snapshot)
+        document["snapshots"] = snapshots
+        store.save_document(CALIBRATION_SNAPSHOTS_KEY, document)
+        return snapshot
+
+    def keep_calibration_current(self, actor: str, label: str) -> dict:
+        """Keep the live side of a calibration diff, from the diff.
+
+        A diff against ``current`` that shows movement worth
+        citing used to end with the operator keeping the live
+        report by hand and re-running the diff to cite it — a
+        second computation the citation could not be sure
+        matched the one they read. This act closes that loop:
+        the live report is shaped once, in the snapshot's own
+        shape (``proposals.live_calibration_snapshot``), and
+        that very shape is what gets kept — re-stamped with the
+        next snapshot id, the keeper's name, the keep moment,
+        and the label the operator gives at that moment, and
+        marked ``kept_from: "current"`` so the list can tell a
+        diff-born keep from a plain one. The label rules are
+        every keep's (see :meth:`_check_calibration_label`):
+        ``current`` itself refused, a label already carried
+        refused. A label is *required* here, where a plain keep
+        allows none: this act exists to make a citation, and a
+        citation needs its handle at the moment it is made.
+        """
+        from .proposals import (
+            CALIBRATION_SNAPSHOTS_KEY,
+            live_calibration_snapshot,
+        )
+
+        if not label:
+            raise ValueError(
+                "Keeping the current side of a diff needs the "
+                "label the citation will use — the act exists to "
+                "name the live report the operator just read. "
+                "For an unlabelled keep, use the plain snapshot."
+            )
+        store = self._get_store()
+        document = store.get_document(CALIBRATION_SNAPSHOTS_KEY) or {}
+        snapshots = list(document.get("snapshots") or [])
+        self._check_calibration_label(snapshots, label)
+        live = live_calibration_snapshot(self.sla_budget_calibration())
+        snapshot = {
+            **live,
+            "snapshot_id": next_snapshot_id(snapshots, "cal-"),
+            "taken_at": datetime.now(timezone.utc).isoformat(
+                timespec="seconds"
+            ),
+            "taken_by": actor,
+            "label": label,
+            "kept_from": "current",
+        }
         snapshots.append(snapshot)
         document["snapshots"] = snapshots
         store.save_document(CALIBRATION_SNAPSHOTS_KEY, document)

@@ -577,6 +577,29 @@ def snapshot_sla_calibration(request: CalibrationSnapshotRequest) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.post(
+    "/queue/sla/calibration/snapshots/keep-current",
+    dependencies=_AUTH,
+)
+def keep_calibration_current(request: CalibrationSnapshotRequest) -> dict:
+    """Keep the live side of a calibration diff, from the diff:
+    the report as it stands now, shaped once and kept under the
+    label the operator gives at that moment — the very shape a
+    ``to_label=current`` diff just showed them, re-stamped with
+    the next snapshot id and their name, and marked
+    ``kept_from: "current"``. The label is required (the act
+    exists to make a citation) and answers to every keep's
+    rules: ``current`` refused as reserved, a label already in
+    use refused naming the holder — both 422."""
+    actor = _decision_actor(request)
+    try:
+        return service.keep_calibration_current(
+            actor, label=request.label or ""
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.get("/queue/sla/calibration/snapshots", dependencies=_AUTH)
 def sla_calibration_snapshots(label: str | None = None) -> dict:
     """Every stored SLA-calibration snapshot, in the order kept,
