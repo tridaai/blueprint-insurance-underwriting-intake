@@ -1490,6 +1490,31 @@ class SubmissionService:
         discipline for both kept-report documents)."""
         return self._prune_kept_snapshots(DIGEST_SNAPSHOTS_KEY, actor, keep)
 
+    def preview_prune_ops_digest_snapshots(self, keep: int) -> dict:
+        """Preview a digest-snapshot prune (see
+        :meth:`_preview_prune_kept_snapshots`): which snapshots a
+        keep-last-N would remove and what range would survive,
+        before anything is written."""
+        return self._preview_prune_kept_snapshots(DIGEST_SNAPSHOTS_KEY, keep)
+
+    def _preview_prune_kept_snapshots(self, key: str, keep: int) -> dict:
+        """The prune's dry run, shared by both kept documents.
+
+        Runs the prune's own split over the document as it
+        stands (``insights.snapshot_prune_preview``) and reports
+        the plan — the ids that would leave, the surviving
+        range — writing nothing and recording nothing: no prune
+        entry is appended, because a preview pruned nothing. A
+        prune that follows on the same document produces exactly
+        the previewed removals. ``keep`` below 1 is refused by
+        the shared computation, as it is for the prune itself.
+        """
+        from .insights import snapshot_prune_preview
+
+        document = self._get_store().get_document(key) or {}
+        snapshots = list(document.get("snapshots") or [])
+        return snapshot_prune_preview(snapshots, keep)
+
     def _prune_kept_snapshots(self, key: str, actor: str, keep: int) -> dict:
         """Keep-last-N retention for a kept-snapshot document.
 
@@ -1658,6 +1683,19 @@ class SubmissionService:
 
         return self._prune_kept_snapshots(
             CALIBRATION_SNAPSHOTS_KEY, actor, keep
+        )
+
+    def preview_prune_sla_calibration_snapshots(self, keep: int) -> dict:
+        """Preview a calibration-snapshot prune (see
+        :meth:`_preview_prune_kept_snapshots`): which kept
+        reports a keep-last-N would remove and what range would
+        survive, before anything is written — the document a
+        budget debate cites is pruned against evidence, not
+        memory."""
+        from .proposals import CALIBRATION_SNAPSHOTS_KEY
+
+        return self._preview_prune_kept_snapshots(
+            CALIBRATION_SNAPSHOTS_KEY, keep
         )
 
     def sla_calibration_snapshot_diff(self) -> dict:

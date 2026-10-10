@@ -586,6 +586,24 @@ def prune_sla_calibration_snapshots(request: SnapshotPruneRequest) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.post(
+    "/queue/sla/calibration/snapshots/prune/preview", dependencies=_AUTH
+)
+def preview_prune_sla_calibration_snapshots(
+    request: SnapshotPruneRequest,
+) -> dict:
+    """Preview the calibration-snapshot prune: which kept reports
+    a keep-last-``keep`` would remove and what range would
+    survive — a dry run that writes nothing and records nothing,
+    so the document a budget debate cites is pruned against the
+    same evidence the prune itself will keep. ``keep`` below 1
+    is refused, exactly as the prune refuses it."""
+    try:
+        return service.preview_prune_sla_calibration_snapshots(request.keep)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.get("/queue/sla/calibration/snapshots/diff", dependencies=_AUTH)
 def sla_calibration_snapshot_diff() -> dict:
     """The proposal-ready movement between the two latest
@@ -671,6 +689,22 @@ def prune_ops_digest_snapshots(request: SnapshotPruneRequest) -> dict:
         return service.prune_ops_digest_snapshots(
             _decision_actor(request), request.keep
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/ops/digest/snapshots/prune/preview", dependencies=_AUTH)
+def preview_prune_ops_digest_snapshots(
+    request: SnapshotPruneRequest,
+) -> dict:
+    """Preview the digest-snapshot prune: which kept snapshots a
+    keep-last-``keep`` would remove and what range would survive
+    — a dry run that writes nothing and records nothing, so the
+    operator prunes against the same evidence the prune itself
+    will keep. ``keep`` below 1 is refused, exactly as the prune
+    refuses it."""
+    try:
+        return service.preview_prune_ops_digest_snapshots(request.keep)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

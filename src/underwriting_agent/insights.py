@@ -2501,6 +2501,32 @@ def prune_snapshot_list(
     return list(snapshots[-keep:]), list(snapshots[:-keep])
 
 
+def snapshot_prune_preview(snapshots: list[dict], keep: int) -> dict:
+    """A prune, dry-run: what a keep-last-N prune *would* do.
+
+    The restore/refresh preview idiom applied to retention: the
+    prune is exact about what left only after it left, so an
+    operator deciding whether the oldest kept reports may go had
+    to commit blind. The preview runs the same split the prune
+    runs (:func:`prune_snapshot_list` — ``keep`` below 1 is
+    refused here too) and reports the ids that would leave and
+    the range that would survive, writing nothing: the preview
+    and the prune that follows it on the same document cannot
+    disagree, because both read the one computation.
+    """
+    kept, pruned = prune_snapshot_list(snapshots, keep)
+    return {
+        "snapshot_count": len(snapshots),
+        "keep": keep,
+        "would_change": bool(pruned),
+        "would_prune_count": len(pruned),
+        "would_prune_ids": [s.get("snapshot_id", "") for s in pruned],
+        "surviving_count": len(kept),
+        "surviving_first": kept[0].get("snapshot_id", "") if kept else "",
+        "surviving_last": kept[-1].get("snapshot_id", "") if kept else "",
+    }
+
+
 def snapshot_prune_entry(
     *,
     actor: str,
