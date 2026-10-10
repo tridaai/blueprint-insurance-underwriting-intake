@@ -324,6 +324,27 @@ class AutonomyRecommendation(BaseModel):
     reasons: list[str] = Field(default_factory=list)
 
 
+class DispatchAttempt(BaseModel):
+    """One approval-webhook delivery attempt, from the ledger.
+
+    Every dispatch (the approval-time attempt and any operator
+    retry) is recorded with when it happened, what the receiver
+    answered, and which signature it carried — a failed delivery is
+    an operational fact with a retry path, not a status string.
+    ``backoff_seconds`` is the delay the retry schedule assigned
+    before this attempt (0 for the first; the schedule is bookkeeping
+    for the operator-triggered retry, which does not itself sleep).
+    """
+
+    attempt: int = 1
+    attempted_at: str = ""
+    status: str = ""  # sent | failed
+    http_status: Optional[int] = None
+    signature_id: Optional[str] = None  # truncated X-Trida-Signature value
+    error: Optional[str] = None
+    backoff_seconds: float = 0.0
+
+
 class RunTelemetry(BaseModel):
     backend: str = "mock"
     model: str = ""
@@ -381,6 +402,7 @@ class AgentResult(BaseModel):
     decided_by: Optional[str] = None
     decision_reason: Optional[str] = None
     dispatch_status: Optional[str] = None  # sent | failed | None
+    dispatch_attempts: list[DispatchAttempt] = Field(default_factory=list)
     external_action_taken: bool = False
     error: Optional[str] = None
 

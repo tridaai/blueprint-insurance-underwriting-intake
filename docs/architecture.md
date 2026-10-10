@@ -356,7 +356,11 @@ numbers on the submission and its loss records. Line aliases fold too
   webhook, fired only *after* a human decision, and its failure
   never rewrites history. With `ACTION_WEBHOOK_SECRET` set the
   dispatch is HMAC-SHA256-signed (`X-Trida-Signature`) over the
-  exact body bytes.
+  exact body bytes. Every attempt is written to a delivery ledger
+  on the record (timestamp, HTTP status, truncated signature id,
+  error, scheduled backoff), and a failed delivery is retryable
+  through the service/API — the approval it belongs to is never
+  re-opened by a retry.
 - **The store is the reporting surface.** Inbox grouping, party
   scorecards, `/metrics`, and the audit export are deterministic
   projections of the same records the gate writes (`insights.py`) —

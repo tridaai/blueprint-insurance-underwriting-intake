@@ -400,3 +400,26 @@ def reject(submission_id: str, request: DecisionRequest) -> AgentResult:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/submissions/{submission_id}/dispatch", dependencies=_AUTH)
+def dispatch_ledger(submission_id: str) -> dict:
+    """The approval-webhook delivery ledger for one submission:
+    every attempt with its timestamp, HTTP status, signature id,
+    and the backoff the retry schedule assigned it."""
+    ledger = service.dispatch_ledger(submission_id)
+    if ledger is None:
+        raise HTTPException(status_code=404, detail="Submission not analyzed yet.")
+    return ledger
+
+
+@app.post("/submissions/{submission_id}/dispatch/retry", response_model=AgentResult, dependencies=_AUTH)
+def retry_dispatch(submission_id: str) -> AgentResult:
+    """Retry a failed approval-webhook dispatch. The retry is a new
+    ledger attempt; the approval itself is never rewritten."""
+    try:
+        return service.retry_dispatch(submission_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

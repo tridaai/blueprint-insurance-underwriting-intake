@@ -36,6 +36,10 @@ class ApprovalRecord:
     rejected_by: str = ""
     reject_reason: str = ""
     dispatch_status: str | None = None
+    # The webhook delivery ledger: one dict per dispatch attempt
+    # (see schemas.DispatchAttempt). Older stored payloads predate
+    # it and load with an empty ledger.
+    dispatch_attempts: list[dict] = field(default_factory=list)
 
 
 def history_entry(record: ApprovalRecord) -> dict:
@@ -101,6 +105,7 @@ def _record_to_dict(record: ApprovalRecord) -> dict:
         "rejected_by": record.rejected_by,
         "reject_reason": record.reject_reason,
         "dispatch_status": record.dispatch_status,
+        "dispatch_attempts": record.dispatch_attempts,
     }
 
 
@@ -118,6 +123,7 @@ def _record_from_dict(data: dict) -> ApprovalRecord:
         rejected_by=data.get("rejected_by", ""),
         reject_reason=data.get("reject_reason", ""),
         dispatch_status=data.get("dispatch_status"),
+        dispatch_attempts=data.get("dispatch_attempts") or [],
     )
 
 

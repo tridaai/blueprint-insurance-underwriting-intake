@@ -153,7 +153,13 @@ packet cites its parties' scorecards as evidence), **`/metrics`**
 totals runs, decisions, tokens, cost, and latency, and
 **`/audit/export`** emits the full decision trail as JSON or CSV.
 Webhook dispatches can be HMAC-signed (`ACTION_WEBHOOK_SECRET`) so
-the receiving system can verify the packet's origin.
+the receiving system can verify the packet's origin. Every dispatch
+is recorded in a **delivery ledger** on the record — attempt number,
+timestamp, HTTP status, signature id, error, and the backoff the
+retry schedule assigned it — and a failed dispatch can be retried
+(`POST /submissions/{id}/dispatch/retry`) instead of being a dead
+status string; the ledger is readable at
+`GET /submissions/{id}/dispatch` and counted in the audit export.
 
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:

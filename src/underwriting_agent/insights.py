@@ -253,6 +253,7 @@ AUDIT_COLUMNS = [
     "decided_by",
     "decision_reason",
     "dispatch_status",
+    "dispatch_attempts",
     "guardrails_passed",
     "reviewer_blocked",
     "backend",
@@ -288,6 +289,7 @@ def audit_rows(records: list[ApprovalRecord]) -> list[dict]:
                 "decided_by": result.decided_by or "",
                 "decision_reason": result.decision_reason or "",
                 "dispatch_status": record.dispatch_status or "",
+                "dispatch_attempts": len(record.dispatch_attempts or []),
                 "guardrails_passed": (
                     result.validation.passed if result.validation else None
                 ),
