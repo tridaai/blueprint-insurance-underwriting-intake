@@ -335,6 +335,18 @@ def insured_scorecard(name: str) -> dict:
     return card
 
 
+@app.get("/insureds/{name}/loss-timeline", dependencies=_AUTH)
+def insured_loss_timeline_view(name: str) -> dict:
+    """The insured's loss-development timeline: every submission
+    (per line for bundles) in order, its stored renewal diff, and
+    one event stream per claim — appeared, developed, no longer
+    listed — chained across renewals."""
+    timeline = service.loss_timeline(name)
+    if timeline is None:
+        raise HTTPException(status_code=404, detail=f"No stored submissions for insured {name!r}.")
+    return timeline
+
+
 @app.get("/scorecards/brokers/{name}", dependencies=_AUTH)
 def broker_scorecard(name: str) -> dict:
     card = service.scorecard("broker", name)

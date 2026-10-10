@@ -25,6 +25,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from .config import env_float, env_int
+from .diffing import _norm_desc
 from .facts import _parse_date, normalize_line
 from .store import ApprovalRecord, history_entry
 
@@ -767,6 +768,180 @@ def compose_status_note(
         "this case."
     )
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Insured loss-development timeline
+# ---------------------------------------------------------------------------
+
+
+def _claim_key(date: str, description: str) -> str:
+    """A claim's timeline identity, keyed the way the diffs report
+    claims: date + normalised description. (Loss runs that carry
+    carrier claim ids keep identity across wording edits inside a
+    single diff; across a whole history the reported date +
+    description is the stable handle the diffs themselves expose.)
+    """
+    return f"{(date or '').strip()}|{_norm_desc(description)}"
+
+
+def insured_loss_timeline(
+    records: list[ApprovalRecord], insured_name: str
+) -> dict | None:
+    """One insured's loss development across all their submissions.
+
+    Every renewal diff already answers "what changed since last
+    time" for its own pair; at the third renewal the underwriter's
+    question is the whole arc. This chains the stored per-line
+    diffs in store order into one history: an entry per submission
+    (per line, for bundles) with its computed loss summary and its
+    diff against the previous submission of that line, and — the
+    point of the view — one event stream per claim: when it
+    appeared on a run, how its incurred and status developed, and
+    whether it is still listed. Returns None for an unknown
+    insured. Read-only: the stored diffs are reported, never
+    recomputed.
+    """
+    hits = [
+        r for r in records if insured_name and _party_name(r, "insured") == insured_name
+    ]
+    if not hits:
+        return None
+    entries: list[dict] = []
+    claims: dict[str, dict] = {}
+    claim_order: list[str] = []
+    totals = {
+        "renewals": 0,
+        "appeared": 0,
+        "developed": 0,
+        "no_longer_listed": 0,
+        "cumulative_net_incurred_change": 0.0,
+    }
+
+    def _claim(key: str, date: str, description: str, submission_id: str) -> dict:
+        claim = claims.get(key)
+        if claim is None:
+            claim = {
+                "key": key,
+                "date": date,
+                "description": description,
+                "first_seen_submission_id": submission_id,
+                "state": "on_latest_run",
+                "latest_incurred": 0.0,
+                "latest_status": "",
+                "events": [],
+            }
+            claims[key] = claim
+            claim_order.append(key)
+        return claim
+
+    for record in hits:
+        result = record.result
+        submitted_at = (record.submission or {}).get("submitted_at", "")
+        if result.multi_line:
+            units = [
+                (a.line_of_business, a.submission_id, a.result)
+                for a in result.line_analyses
+            ]
+        else:
+            units = [(result.line_of_business, result.submission_id, result)]
+        for line, unit_id, unit in units:
+            diff = unit.submission_diff
+            entry = {
+                "submission_id": unit_id,
+                "record_submission_id": result.submission_id,
+                "line_of_business": line,
+                "submitted_at": submitted_at,
+                "outcome": unit.triage.outcome,
+                "risk_tier": unit.triage.risk_tier,
+                "status": result.status,
+                "loss_summary": unit.facts.loss_summary.model_dump(mode="json"),
+                "prior_submission_id": diff.prior_submission_id if diff else None,
+                "net_incurred_change": None,
+                "events": {"appeared": 0, "developed": 0, "no_longer_listed": 0},
+            }
+            development = diff.loss_development if diff else None
+            if diff is not None:
+                totals["renewals"] += 1
+            if development is not None:
+                entry["net_incurred_change"] = development.net_incurred_change
+                totals["cumulative_net_incurred_change"] = round(
+                    totals["cumulative_net_incurred_change"]
+                    + development.net_incurred_change,
+                    2,
+                )
+                for ref in development.appeared:
+                    claim = _claim(
+                        _claim_key(ref.date, ref.description),
+                        ref.date,
+                        ref.description,
+                        unit_id,
+                    )
+                    claim["events"].append(
+                        {
+                            "type": "appeared",
+                            "submission_id": unit_id,
+                            "incurred": ref.amount_incurred,
+                            "status": ref.status,
+                        }
+                    )
+                    claim["state"] = "on_latest_run"
+                    claim["latest_incurred"] = ref.amount_incurred
+                    claim["latest_status"] = ref.status
+                    entry["events"]["appeared"] += 1
+                    totals["appeared"] += 1
+                for change in development.developed:
+                    claim = _claim(
+                        _claim_key(change.date, change.description),
+                        change.date,
+                        change.description,
+                        unit_id,
+                    )
+                    claim["events"].append(
+                        {
+                            "type": "developed",
+                            "submission_id": unit_id,
+                            "prior_incurred": change.prior_incurred,
+                            "incurred": change.current_incurred,
+                            "delta_incurred": change.delta_incurred,
+                            "prior_status": change.prior_status,
+                            "status": change.current_status,
+                        }
+                    )
+                    claim["state"] = "on_latest_run"
+                    claim["latest_incurred"] = change.current_incurred
+                    claim["latest_status"] = change.current_status
+                    entry["events"]["developed"] += 1
+                    totals["developed"] += 1
+                for ref in development.disappeared:
+                    claim = _claim(
+                        _claim_key(ref.date, ref.description),
+                        ref.date,
+                        ref.description,
+                        unit_id,
+                    )
+                    claim["events"].append(
+                        {
+                            "type": "no_longer_listed",
+                            "submission_id": unit_id,
+                            "incurred": ref.amount_incurred,
+                            "status": ref.status,
+                        }
+                    )
+                    claim["state"] = "no_longer_listed"
+                    claim["latest_incurred"] = ref.amount_incurred
+                    claim["latest_status"] = ref.status
+                    entry["events"]["no_longer_listed"] += 1
+                    totals["no_longer_listed"] += 1
+            entries.append(entry)
+    totals["claims_tracked"] = len(claim_order)
+    return {
+        "insured": insured_name,
+        "submissions": len(hits),
+        "entries": entries,
+        "claims": [claims[key] for key in claim_order],
+        "totals": totals,
+    }
 
 
 def audit_csv(rows: list[dict]) -> str:

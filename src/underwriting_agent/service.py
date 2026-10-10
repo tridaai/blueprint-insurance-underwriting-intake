@@ -60,6 +60,7 @@ from .insights import (
     compute_metrics,
     dispatch_overview,
     inbox_groups,
+    insured_loss_timeline,
     queue_aging,
     queue_item_for,
     scorecard,
@@ -1024,6 +1025,13 @@ class SubmissionService:
     def scorecard(self, kind: str, name: str) -> dict | None:
         """One party's scorecard (``kind`` is "insured" or "broker")."""
         return scorecard(self._get_store().all_records(), kind, name)
+
+    def loss_timeline(self, insured_name: str) -> dict | None:
+        """One insured's loss-development timeline: their stored
+        per-line renewal diffs chained into per-claim event streams
+        (appeared / developed / no longer listed) — the whole arc,
+        not just the last pair (``insights.insured_loss_timeline``)."""
+        return insured_loss_timeline(self._get_store().all_records(), insured_name)
 
     def broker_quality_report(self, broker_name: str) -> dict | None:
         """The broker submission-quality report (trend, discrepancy
