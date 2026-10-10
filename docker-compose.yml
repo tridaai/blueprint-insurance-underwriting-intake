@@ -16,7 +16,7 @@
 # the OpenAI-compatible backend at it:
 #   docker compose --profile local-llm up --build
 #   (with MODEL_BACKEND=openai, OPENAI_BASE_URL=http://ollama:11434/v1,
-#    LLM_MODEL=<a pulled model> — see docs/architecture.md)
+#    OPENAI_MODEL=<a pulled model> — see docs/architecture.md)
 #
 # Credentials below are local-stack defaults for this reference
 # stack, overridable via the environment. A real deployment injects
@@ -48,8 +48,9 @@ services:
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      LLM_MODEL: ${LLM_MODEL:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
     depends_on:
       db:
         condition: service_healthy
