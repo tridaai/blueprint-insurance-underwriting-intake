@@ -353,11 +353,25 @@ def compute_metrics(records: list[ApprovalRecord]) -> dict:
     """Operational aggregates over the whole store.
 
     Run and decision counts, outcome and tier mix, guardrail and
-    reviewer signals, and — from each run's recorded telemetry —
-    model calls, tokens, estimated cost, and latency. Token/cost
-    figures only include runs whose backend reported them (the
-    offline fallback reports tokens as None rather than inventing
-    numbers, and says so via ``costed_runs``/``token_runs``).
+    reviewer signals, the **letter-advisory trend** (below), and —
+    from each run's recorded telemetry — model calls, tokens,
+    estimated cost, and latency. Token/cost figures only include
+    runs whose backend reported them (the offline fallback reports
+    tokens as None rather than inventing numbers, and says so via
+    ``costed_runs``/``token_runs``).
+
+    The advisory trend aggregates what each run recorded about
+    its broker letter's borderline phrasings (see
+    ``letter_repair.letter_advisories``): how many runs drafted a
+    letter a judge would still read as a commitment, how many
+    advisories that was, the family mix, and how often the one
+    steered redraft cleared them (``advisory_repaired`` — the
+    shipped letter carries none). Advisories never block, so
+    without this aggregate they are invisible until a judge
+    finds them; as a metric family they are the drafting-quality
+    signal the team watches — a rising per-run rate is a model
+    or prompt regression arriving *before* it becomes guardrail
+    failures.
     """
     statuses: Counter = Counter()
     outcomes: Counter = Counter()
@@ -370,6 +384,10 @@ def compute_metrics(records: list[ApprovalRecord]) -> dict:
     latencies: list[float] = []
     guardrail_failures = 0
     reviewer_blocks = 0
+    advisory_runs = 0
+    advisory_total = 0
+    advisory_families: Counter = Counter()
+    advisory_repaired_runs = 0
     for record in records:
         result = record.result
         statuses[result.status] += 1
@@ -379,6 +397,14 @@ def compute_metrics(records: list[ApprovalRecord]) -> dict:
             guardrail_failures += 1
         if result.reviewer_blocked:
             reviewer_blocks += 1
+        advisories = result.letter_advisories or []
+        if advisories:
+            advisory_runs += 1
+            advisory_total += len(advisories)
+            for advisory in advisories:
+                advisory_families[advisory.get("family") or "unknown"] += 1
+        if result.advisory_repaired:
+            advisory_repaired_runs += 1
         telemetry = result.telemetry
         if telemetry is None:
             continue
@@ -417,6 +443,20 @@ def compute_metrics(records: list[ApprovalRecord]) -> dict:
         "risk_tiers": dict(sorted(tiers.items())),
         "guardrail_failures": guardrail_failures,
         "reviewer_blocks": reviewer_blocks,
+        "letter_advisories": {
+            "runs_with_advisories": advisory_runs,
+            "total": advisory_total,
+            "per_run": (
+                round(advisory_total / len(records), 3) if records else None
+            ),
+            "by_family": dict(sorted(advisory_families.items())),
+            "repaired_runs": advisory_repaired_runs,
+            "clear_rate": (
+                round(advisory_repaired_runs / advisory_runs, 3)
+                if advisory_runs
+                else None
+            ),
+        },
         "model_calls": model_calls,
         "token_runs": token_runs,
         "input_tokens": input_tokens,

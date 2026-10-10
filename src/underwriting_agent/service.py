@@ -1409,7 +1409,9 @@ class SubmissionService:
 
     def metrics(self) -> dict:
         """Operational aggregates over the store: run/decision counts,
-        outcome mix, model usage, cost, and latency."""
+        outcome mix, the letter-advisory trend (borderline drafting
+        quality, aggregated from the runs' recorded advisories),
+        model usage, cost, and latency."""
         return compute_metrics(self._get_store().all_records())
 
     def queue(self) -> dict:
