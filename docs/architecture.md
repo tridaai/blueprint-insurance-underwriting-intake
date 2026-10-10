@@ -115,7 +115,7 @@ cleanly. Nodes:
 | `classify` | rules triage + LLM cross-check (`crosscheck.py`) | provider mode |
 | `retrieve` | guideline retrieval (fan-out branch) | never |
 | `discrepancies` | extraction discrepancy lines (fan-out branch) | never |
-| `history` | memory + feedback evidence lines (fan-out branch) | never |
+| `history` | memory + feedback evidence lines, renewal diff (fan-out branch) | never |
 | `diagnose` | risk diagnosis; bounded tool loop in provider mode | provider mode |
 | `options` | proposals (model wording) + deterministic scoring | optional |
 | `draft` | broker letter + underwriter packet | always (template or LLM) |
@@ -361,6 +361,13 @@ numbers on the submission and its loss records. Line aliases fold too
   scorecards, `/metrics`, and the audit export are deterministic
   projections of the same records the gate writes (`insights.py`) —
   no separate analytics pipeline to drift from the record.
+- **Renewals diff against the store.** The history branch also
+  computes the renewal diff (`diffing.py`): the insured's most
+  recent stored submission (payload + its computed facts) against
+  the new one, field by field. The result carries it
+  (`submission_diff`), the diagnosis cites it as evidence, and the
+  packet prints a "Changes since last submission" section. A first
+  submission has no diff — absence is not a change.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 

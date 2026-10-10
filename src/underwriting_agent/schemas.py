@@ -196,6 +196,34 @@ class SubmissionFacts(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Renewal / resubmission diff (computed in code — see diffing.py)
+# ---------------------------------------------------------------------------
+
+class DiffFieldChange(BaseModel):
+    field: str  # requested_limit | revenue | loss_history | ...
+    label: str = ""
+    previous: str = ""
+    current: str = ""
+    note: str = ""  # direction / magnitude, e.g. "increased" or "+29.2%"
+
+
+class SubmissionDiff(BaseModel):
+    """What changed since this insured's previous stored submission.
+
+    Underwriters price the change, not the snapshot, so the deltas
+    are computed in code (``diffing.py``) from the prior submission
+    payload and both sides' computed facts, and carried on the
+    result, into the diagnosis evidence, and into the packet.
+    """
+
+    prior_submission_id: str = ""
+    prior_submitted_at: str = ""
+    prior_outcome: str = ""
+    prior_risk_tier: str = ""
+    changes: list[DiffFieldChange] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Triage + cross-check
 # ---------------------------------------------------------------------------
 
@@ -323,6 +351,9 @@ class AgentResult(BaseModel):
     status: str = "awaiting_underwriter"  # awaiting_underwriter | approved | rejected
     insured_name: str = ""
     line_of_business: str = ""
+    # Renewal diff vs this insured's previous stored submission
+    # (None on a first submission — absence is not a change).
+    submission_diff: Optional[SubmissionDiff] = None
     extractions: list[DocumentExtraction] = Field(default_factory=list)
     facts: SubmissionFacts = Field(default_factory=SubmissionFacts)
     injection_flags: list[str] = Field(default_factory=list)

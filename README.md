@@ -155,6 +155,16 @@ totals runs, decisions, tokens, cost, and latency, and
 Webhook dispatches can be HMAC-signed (`ACTION_WEBHOOK_SECRET`) so
 the receiving system can verify the packet's origin.
 
+**Renewals** — when an insured submits again, the new run diffs
+itself against the insured's most recent stored submission, in code:
+requested limit and deductible, revenue, years in business, line and
+class, prior carrier, effective date, and the computed loss summary.
+The deltas land on the result (`submission_diff`), in the diagnosis
+evidence, and in a "Changes since last submission" section of the
+packet — underwriters price the change, not the snapshot. Sample
+**SUB-1013** is SUB-1001's renewal (limit up, revenue up, one new
+small claim) and shows the diff when the two are analysed in order.
+
 Two samples show the safety story end to end:
 
 - **SUB-1011** — the broker relays a client's demand: their "coverage
@@ -247,7 +257,7 @@ uv sync --extra dev            # or: pip install -e ".[dev]" -c constraints.txt
 cp .env.example .env           # set MODEL_BACKEND + your key
 
 uv run underwriting-agent-demo          # traced demo, one sample
-uv run underwriting-agent --all         # batch CLI over all 12 samples
+uv run underwriting-agent --all         # batch CLI over all 13 samples
 uv run underwriting-agent --all --concurrency 4
 uv run uvicorn underwriting_agent.api:app --port 8000   # console + API
 
@@ -373,6 +383,7 @@ src/underwriting_agent/
   retriever.py      keyword / semantic / hybrid (RRF) guideline retrieval
   screening.py      prompt-injection screening of broker text
   diagnosis.py      risk diagnosis over computed evidence
+  diffing.py        renewal diff vs the insured's last submission
   tools_agent.py    the bounded diagnosis tool loop
   options.py        next-step proposals, scored in code
   model_backends.py mock / OpenAI / Anthropic / Ollama backends

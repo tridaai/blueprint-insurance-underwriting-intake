@@ -297,6 +297,7 @@ class SubmissionService:
             retriever=retriever,
             history=history,
             priors=priors,
+            prior_submission=self._prior_submission_for(model, prior_records),
             event_sink=event_sink,
             checkpointer=self._get_checkpointer(),
             thread_id=model.submission_id,
@@ -359,6 +360,36 @@ class SubmissionService:
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
             return list(pool.map(guarded, submissions))
+
+    def _prior_submission_for(
+        self, model: SubmissionInput, prior_records: list[ApprovalRecord]
+    ) -> dict | None:
+        """The insured's most recent prior stored submission, as the
+        bundle renewal diffing consumes: the stored payload plus the
+        prior run's computed facts and triage (``diffing.py``).
+
+        ``prior_records`` is store-ordered (oldest first) and already
+        excludes this submission id, so the last insured match is
+        the most recent prior. None when this insured has never
+        submitted — a first submission has nothing to diff against.
+        """
+        if not model.insured_name:
+            return None
+        for record in reversed(prior_records):
+            insured = record.result.insured_name or record.submission.get(
+                "insured_name", ""
+            )
+            if insured != model.insured_name or not record.submission:
+                continue
+            return {
+                "submission_id": record.result.submission_id,
+                "submitted_at": record.submission.get("submitted_at", ""),
+                "outcome": record.result.triage.outcome,
+                "risk_tier": record.result.triage.risk_tier,
+                "submission": record.submission,
+                "facts": record.result.facts.model_dump(mode="json"),
+            }
+        return None
 
     def _feedback_for(self, submission: SubmissionInput) -> list[dict]:
         """Recent underwriter feedback matching this insured or broker.

@@ -38,7 +38,7 @@ def test_console_is_served(client):
 
 def test_samples_and_guidelines_endpoints(client):
     samples = client.get("/samples").json()
-    assert len(samples) == 12
+    assert len(samples) == 13
     guidelines = client.get("/guidelines").json()
     assert any(g["id"] == "UW-GEN-04" for g in guidelines)
 

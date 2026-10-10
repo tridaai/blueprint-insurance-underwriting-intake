@@ -23,6 +23,7 @@ EXPECTED = {
     "SUB-1010": ("borderline", "moderate"),
     "SUB-1011": ("in_appetite", "low"),
     "SUB-1012": ("borderline", "high"),
+    "SUB-1013": ("in_appetite", "moderate"),
 }
 
 

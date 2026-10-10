@@ -51,6 +51,7 @@ from .clarify import build_information_request
 from .config import env_int, env_str, load_dotenv
 from .crosscheck import resolve_triage
 from .diagnosis import build_diagnosis, format_loss_summary, memory_evidence_lines
+from .diffing import compute_submission_diff, diff_evidence_lines, diff_packet_lines
 from .errors import ProviderError
 from .events import NullSink, RunEvent
 from .extractor import extract_documents, extraction_discrepancies
@@ -70,6 +71,7 @@ from .schemas import (
     RecoveryOption,
     RetrievedGuideline,
     ReviewResult,
+    SubmissionDiff,
     SubmissionFacts,
     SubmissionInput,
     TraceStep,
@@ -194,6 +196,8 @@ class AgentState(TypedDict, total=False):
     history_evidence: list[str]
     history: Optional[dict[str, Any]]
     priors: list[dict[str, Any]]
+    prior_submission: Optional[dict[str, Any]]
+    submission_diff: Optional[dict[str, Any]]
     diagnosis: dict[str, Any]
     options: list[dict[str, Any]]
     options_notes: str
@@ -274,6 +278,11 @@ def _draft_context(
         diagnosis_risk_factors=diagnosis.risk_factors,
         guideline_details=[g.model_dump() for g in guidelines],
         citations=[g.guideline_id for g in guidelines],
+        submission_changes=(
+            diff_packet_lines(SubmissionDiff.model_validate(state["submission_diff"]))
+            if state.get("submission_diff")
+            else []
+        ),
         options=[o.model_dump() for o in options],
         recommended_option_kind=recommended.kind if recommended else "",
         recommended_option_text=(
@@ -396,11 +405,30 @@ def _build_graph(backend, retriever, sink, checkpointer=None):
 
     @node("history", "Insured/broker memory + underwriter feedback")
     def _history(state: AgentState) -> dict[str, Any]:
-        return {"history_evidence": memory_evidence_lines(state.get("history"))}
+        update: dict[str, Any] = {
+            "history_evidence": memory_evidence_lines(state.get("history"))
+        }
+        # Renewal diffing rides this branch: when the service found a
+        # prior submission for this insured, diff it against the new
+        # one in code — the deltas join the diagnosis evidence and
+        # the packet, and land on the result.
+        prior = state.get("prior_submission")
+        if prior:
+            sub = SubmissionInput.model_validate(state["submission"])
+            facts = SubmissionFacts.model_validate(state["facts"])
+            diff = compute_submission_diff(sub, facts, prior)
+            if diff is not None:
+                update["submission_diff"] = diff.model_dump()
+        return update
 
     @node("diagnose", "Risk diagnosis (bounded tool loop in provider mode)")
     def _diagnose(state: AgentState) -> dict[str, Any]:
         sub = SubmissionInput.model_validate(state["submission"])
+        history_lines = list(state.get("history_evidence", []))
+        if state.get("submission_diff"):
+            history_lines += diff_evidence_lines(
+                SubmissionDiff.model_validate(state["submission_diff"])
+            )
         toolbox = DiagnosisToolBox(
             submission=sub,
             triage=state["triage"],
@@ -419,7 +447,7 @@ def _build_graph(backend, retriever, sink, checkpointer=None):
             history=state.get("history"),
             toolbox=toolbox,
             discrepancies=state.get("discrepancies", []),
-            history_lines=state.get("history_evidence", []),
+            history_lines=history_lines,
         )
         return {"diagnosis": diagnosis.model_dump()}
 
@@ -862,6 +890,7 @@ def run_submission(
     retriever=None,
     history: dict | None = None,
     priors: list[dict] | None = None,
+    prior_submission: dict | None = None,
     event_sink=None,
     checkpointer: BaseCheckpointSaver | None = None,
     thread_id: str | None = None,
@@ -870,9 +899,11 @@ def run_submission(
 
     ``backend``/``retriever`` default to the environment-configured
     ones; ``history``/``priors`` carry the store's memory for this
-    insured/broker (the service layer supplies them); ``event_sink``
-    receives structured run events; ``checkpointer`` + ``thread_id``
-    pause the run at the gate for a later resume.
+    insured/broker (the service layer supplies them);
+    ``prior_submission`` is the insured's most recent prior stored
+    submission (payload + computed facts) for renewal diffing;
+    ``event_sink`` receives structured run events; ``checkpointer``
+    + ``thread_id`` pause the run at the gate for a later resume.
     """
     from .model_backends import MockModelBackend, get_backend
 
@@ -889,6 +920,7 @@ def run_submission(
         "submission": submission.model_dump(),
         "history": history,
         "priors": priors or [],
+        "prior_submission": prior_submission,
     }
     sink.emit(
         RunEvent(
@@ -930,6 +962,11 @@ def run_submission(
         status="awaiting_underwriter",
         insured_name=submission.insured_name,
         line_of_business=submission.line_of_business,
+        submission_diff=(
+            SubmissionDiff.model_validate(state["submission_diff"])
+            if state.get("submission_diff")
+            else None
+        ),
         extractions=[DocumentExtraction.model_validate(e) for e in state.get("extractions", [])],
         facts=SubmissionFacts.model_validate(state["facts"]),
         injection_flags=state.get("injection_flags", []),

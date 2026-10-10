@@ -508,5 +508,50 @@
     "submission_id": "SUB-1012",
     "submitted_at": "2026-10-07",
     "years_in_business": 15
+  },
+  {
+    "broker_email_text": "Renewal submission for Northgate Legal, following SUB-1001. The firm asks for the limit to go up to 3,000,000 this term. One phishing incident in February (mailbox compromise, contained the same day) is in the loss runs; MFA remains enforced firm-wide.",
+    "broker_name": "Harborline Brokers",
+    "class_of_business": "law firm",
+    "documents": [
+      {
+        "doc_type": "application",
+        "document_id": "sub1013-app",
+        "fields": {
+          "insured_name": "Northgate Legal LLP",
+          "line_of_business": "cyber",
+          "requested_limit": "3000000",
+          "revenue": "15500000"
+        },
+        "raw_text": "ACORD application (renewal): Northgate Legal LLP, cyber liability. Revenue 15500000. Requested limit 3000000. Multi-factor authentication enforced for all email and remote access."
+      },
+      {
+        "doc_type": "loss runs",
+        "document_id": "sub1013-lr",
+        "fields": {
+          "loss_history_present": "yes"
+        },
+        "raw_text": "Carrier loss runs, 2023-2026: one claim \u2014 February 2026 phishing incident, $18,500 incurred, closed. No other losses."
+      }
+    ],
+    "effective_date_requested": "2026-12-01",
+    "insured_name": "Northgate Legal LLP",
+    "line_of_business": "cyber",
+    "losses": [
+      {
+        "amount_incurred": 18500,
+        "date": "2026-02-14",
+        "description": "Phishing incident \u2014 mailbox compromise, contained and remediated",
+        "status": "closed"
+      }
+    ],
+    "notes": "Renewal of SUB-1001 with a requested limit increase; one small phishing claim in the new period.",
+    "prior_carrier": "Sentinel Mutual",
+    "requested_deductible": "25000",
+    "requested_limit": "3000000",
+    "revenue": 15500000,
+    "submission_id": "SUB-1013",
+    "submitted_at": "2026-10-09",
+    "years_in_business": 12
   }
 ]
