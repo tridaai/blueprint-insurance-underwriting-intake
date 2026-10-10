@@ -207,7 +207,12 @@ implemented as deterministic tests over the draft text:
   be in touch shortly") — each now a pattern family in the same
   check, with its own golden cases (RC1/ST1/RC2). The discipline is
   one-directional: the drafts get policed; the judge never gets
-  tuned to pass.
+  tuned to pass. The pack's regression gate
+  (`evals/judge_gate.py`) diffs each run against the pinned
+  finding families, and every run appends its summary to
+  `evals/judge_history.jsonl` — the pack prints the per-family
+  trend across runs, so whether the fixes are holding is a dated
+  series, not the latest run's impression.
 - `no_pii_in_draft` — SSN, Luhn-valid card numbers, passport
   patterns.
 - Structural: the drafts must reference the submission id, cite at
@@ -406,15 +411,25 @@ numbers on the submission and its loss records. Line aliases fold too
   drafts are one packet with per-line sections plus one letter,
   and the combined drafts pass the same verification, review, and
   guardrails as a single-line draft. One record, one gate: the
-  store never holds a sub-analysis as a decidable item.
+  store never holds a sub-analysis as a decidable item. The
+  bundle's information request is per line as well
+  (`clarify.build_bundle_information_request`, composed in code so
+  line attribution stays exact): only gapped lines are asked, each
+  for its own items, and the result records `blocking_lines` —
+  the lines whose missing elements hold the bundle back.
 - **Dispatch and trend are projections too.** The dispatch
   operations view (`insights.dispatch_overview`) reads every
   record's delivery ledger as one surface — failures oldest first,
   each with the next backoff from the recorded schedule and
-  whether its retry is due — and scorecards carry an
-  `approval_trend` (earlier-half vs recent-half approval rate over
-  the group's decision order), so a party drifting toward
-  rejections is visible before the flat rate moves.
+  whether its retry is due — and failures age on it: age from the
+  first failed attempt, bucketed like the queue's, with a *stuck*
+  flag for failures older than `DISPATCH_STUCK_AGE_HOURS` that
+  still have attempts left under `DISPATCH_ATTEMPT_BUDGET`
+  (exhausted is a different word, and the view keeps them apart).
+  Scorecards carry an `approval_trend` (earlier-half vs
+  recent-half approval rate over the group's decision order), so
+  a party drifting toward rejections is visible before the flat
+  rate moves.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 
@@ -430,10 +445,15 @@ numbers on the submission and its loss records. Line aliases fold too
    rules-only triage over the awaiting queue to report which
    outcomes the change would move. The report mutates nothing —
    whether a moved submission is re-run or left to its underwriter
-   with the note is a human call. Multi-line bundles are counted
-   as skipped, never re-triaged as a unit: their triage is
-   per-line, and one rules pass over the bundle payload would be
-   fiction.
+   with the note is a human call. Every move is attributed
+   (`retriage.explain_move`): the guideline document and the
+   specific line in it the fresh outcome rests on, computed from
+   the same trigger strings and facts the rules produced.
+   Multi-line bundles are re-triaged **per line** — each stored
+   sub-analysis against its own recomputed facts, the affected
+   lines named with their movement and reasons, plus what the
+   bundle roll-up would become — never as one flattened pass over
+   the bundle payload, which would be fiction.
 3. **Your intake adapter** — map your inbox/portal feed to
    `SubmissionInput`.
 4. **Your output route** — point `ACTION_WEBHOOK_URL` at your work

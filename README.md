@@ -178,11 +178,24 @@ summarises every record's attempts, lists the failures oldest
 first with the retry each is due under the recorded schedule, and
 **`POST /dispatch/retry-failed`** works the whole failure list in
 one call (the console renders this as the Dispatch ops panel).
+Failures also **age** there: age runs from the first failed
+attempt, bucketed like the queue's, and a failure older than
+`DISPATCH_STUCK_AGE_HOURS` (default 24) with attempts left under
+`DISPATCH_ATTEMPT_BUDGET` (default 8) is flagged **stuck** — an
+incident, not a row; one past its budget is exhausted and needs a
+decision, and the view says which is which.
 And because guidelines change, the corpus is versioned
 (`GUIDELINES_VERSION`, stamped on every result) and
 **`GET /guidelines/change-impact`** re-runs rules-only triage over
 the awaiting queue to report which outcomes a corpus change would
-move — a report, never a rewrite; acting on it stays human.
+move — a report, never a rewrite; acting on it stays human. Each
+move carries its **reasons**: the guideline document and the
+specific line in it the fresh outcome rests on (the trigger that
+newly fires or stops firing, the documentation standard behind a
+missing element, the loss-history line behind a tier move).
+Bundles are re-triaged **per line** — the affected lines are
+named with their own movement, never flattened into one pass over
+the bundle payload.
 
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:
@@ -223,7 +236,13 @@ submission wherever it lives — inside a prior bundle or on its
 own. Sample **SUB-1014** bundles a clean property line with a
 cyber line carrying a ransomware severity claim — divergent lines,
 one decision; golden cases B1/B2 pin the split and the per-line
-diffs.
+diffs. When a bundle is incomplete for one line, the ask is
+**per line** too: the broker letter and the information request
+carry a section for that line only, listing exactly its missing
+items — a complete line is never implied to owe anything — and
+the gate record names the **blocking lines**
+(`blocking_lines` on the result, and in the packet), so which
+line holds the bundle back is a fact of the record.
 
 Two samples show the safety story end to end:
 
@@ -438,7 +457,11 @@ review commitments, soft time commitments, figure leakage, invented
 details — are pinned, and a flagged verdict landing in a pinned
 family is printed as a named REGRESSION rather than a fresh
 surprise. The gate only names things; the drafts get policed, the
-judge never gets tuned to pass.
+judge never gets tuned to pass. Each run also appends its gate
+summary to `evals/judge_history.jsonl` (append-only) and the pack
+prints the **trend** — flagged drafts and per-family counts across
+every recorded run — so improvement is a dated series, not an
+impression.
 
 ## Repository structure
 
