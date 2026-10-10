@@ -97,7 +97,8 @@
       <h2>Ops digest</h2>
       <div id="opsdigest" class="empty">Loading…</div>
       <div class="row" style="margin-top:10px"><button id="refresh-digest">Refresh digest</button>
-      <span class="note">One composed read over the surfaces that rot quietly — computed, never sent.</span></div>
+      <button id="snapshot-digest">Snapshot this digest</button>
+      <span class="note" id="digest-snapshot-status">One composed read over the surfaces that rot quietly — computed, never sent. A snapshot keeps it, dated and under your name, so the next one reports movement.</span></div>
     </section>
     <section>
       <h2>Calibration &amp; proposals</h2>
@@ -297,9 +298,10 @@ async function loadQueue() {
        ${q.oldest ? `<p class="note">Oldest: ${esc(q.oldest.submission_id)} — ${esc(q.oldest.insured_name)}, ${esc(q.oldest.age_days)} day(s), ${esc(q.oldest.outcome)} / ${esc(q.oldest.risk_tier)}.</p>` : ''}
        <p class="note">SLA budgets by risk tier: ${esc(budgetText)} (source: ${q.sla_budgets_source === 'accepted_proposal' ? 'accepted proposal — settings record' : 'environment'}) — ${q.breach_count ? `<span class="flag">${esc(q.breach_count)} breached</span>` : 'no breaches'}${q.blocked_bundles ? ` · ${esc(q.blocked_bundles)} bundle(s) blocked on a line` : ''}.</p>
        ${q.breaches && q.breaches.length ? `<table><thead><tr><th>Breached</th><th>Tier</th><th>Age / budget</th><th>Breach webhook</th><th></th></tr></thead><tbody>
-       ${q.breaches.map(i => `<tr><td>${esc(i.submission_id)}<br><span class="note">${esc(i.insured_name)}</span></td><td>${esc(i.risk_tier)}</td><td>${esc(i.age_days)}d / ${esc(i.sla_budget_days)}d (${esc(i.sla_days_over)}d over)</td><td>${i.sla_breach_notice ? `fired ${esc(i.sla_breach_notice.first_observed_at)} · ${i.sla_breach_notice.dispatch_status === 'sent' ? pill('sent', 'good') : pill('failed', 'bad') + ` <button data-breach-retry="${esc(i.submission_id)}">Retry</button>`}` : '<span class="note">not notified</span>'}</td><td><button data-note="${esc(i.submission_id)}">Draft status note</button></td></tr>`).join('')}
+       ${q.breaches.map(i => `<tr><td>${esc(i.submission_id)}<br><span class="note">${esc(i.insured_name)}</span>${i.escalated_note ? `<br><span class="flag">follow-through note open ${esc(i.escalated_note.note_age_days)}d</span>` : ''}</td><td>${esc(i.risk_tier)}</td><td>${esc(i.age_days)}d / ${esc(i.sla_budget_days)}d (${esc(i.sla_days_over)}d over)</td><td>${i.sla_breach_notice ? `fired ${esc(i.sla_breach_notice.first_observed_at)} · ${i.sla_breach_notice.dispatch_status === 'sent' ? pill('sent', 'good') : pill('failed', 'bad') + ` <button data-breach-retry="${esc(i.submission_id)}">Retry</button>`}` : '<span class="note">not notified</span>'}</td><td><button data-note="${esc(i.submission_id)}">Draft status note</button></td></tr>`).join('')}
        </tbody></table>` : ''}
        ${blockedItems.length ? `<p class="note">Blocked on lines:<br>${blockedItems.map(i => `${esc(i.submission_id)} — ` + i.blocking_lines.map(b => `${esc(b.line_of_business)} (${esc(b.age_days)}d waiting; missing: ${b.missing_items.map(esc).join(', ') || '—'})`).join('<br>')).join('<br>')}</p>` : ''}
+       ${q.escalated_notes && q.escalated_notes.length ? `<p class="note">Escalated follow-through notes — loops only the underwriter can close:<br>${q.escalated_notes.map(e => `${esc(e.insured_name)} — note on ${esc(e.submission_id)} open ${esc(e.note_age_days)}d (${esc(e.state.replace(/_/g, ' '))})${e.awaiting_submission_ids && e.awaiting_submission_ids.length ? ' · awaiting here: ' + e.awaiting_submission_ids.map(esc).join(', ') : ' · nothing awaiting from this insured'}`).join('<br>')}</p>` : ''}
        ${q.unknown_age && q.unknown_age.length ? `<p class="note">Unparseable submitted date: ${q.unknown_age.map(esc).join(', ')}</p>` : ''}`;
     document.querySelectorAll('[data-note]').forEach(btn =>
       btn.addEventListener('click', () => draftNote(btn.getAttribute('data-note'))));
@@ -400,7 +402,7 @@ async function loadProposals() {
       const describe = e => e.changes
         ? e.changes.map(ch => `${esc(ch.dimension)} ${esc(ch.from)} → ${esc(ch.to)}`).join(', ') + (e.restore ? ' (restore)' : ' (revert)')
         : `${esc(e.dimension)} ${esc(e.from)} → ${esc(e.to)}${e.revert ? ' (revert)' : ''}`;
-      return `<p class="note">History: ${h.map((e, i) => `#${i} ${describe(e)} <button data-restore="${kind}:${i}">Restore to #${i}</button>`).join(' · ')}</p>`;
+      return `<p class="note">History: ${h.map((e, i) => `#${i} ${describe(e)} <button data-restore-preview="${kind}:${i}">Preview</button> <button data-restore="${kind}:${i}">Restore to #${i}</button>`).join(' · ')}</p>`;
     };
     $('proposals').innerHTML =
       `<h3>Calibration proposals</h3>
@@ -409,11 +411,11 @@ async function loadProposals() {
        <p class="note">SLA budgets in force: ${Object.keys(b).map(tier => `${esc(tier)} ${esc(b[tier])}d`).join(' · ')} — source: ${sourceText(sla)}.${canRevert(sla) ? ` <button id="revert-sla">Revert last SLA-budget change</button>` : ''}</p>
        ${histLine(sla, 'sla')}
        ${proposals.length ? `<table><thead><tr><th>Proposal</th><th>Move</th><th>Evidence</th><th>Status</th><th></th></tr></thead><tbody>
-       ${proposals.map(p => `<tr><td>${esc(p.proposal_id)}<br><span class="note">${esc(dimName(p))}</span></td><td>${moveText(p)}</td><td><span class="note">${esc(p.rationale)}${p.status === 'withdrawn' && p.withdrawal_reason ? ' Withdrawn: ' + esc(p.withdrawal_reason) : ''}${p.refreshes && p.refreshes.length ? ` Refreshed ${esc(p.refreshes.length)}× (last: ${esc(p.refreshes[p.refreshes.length - 1].outcome)}).` : ''}</span></td><td>${statusPill(p)}${p.decided_by ? `<br><span class="note">by ${esc(p.decided_by)}</span>` : ''}${p.status === 'draft' && !p.expired && p.expires_at ? `<br><span class="note">evidence live until ${esc(String(p.expires_at).slice(0, 10))}</span>` : ''}</td><td>${p.status === 'draft' ? (p.expired ? `<button data-prop-refresh="${esc(p.proposal_id)}">Refresh evidence</button>` : `<button data-prop-accept="${esc(p.proposal_id)}">Accept</button> <button data-prop-reject="${esc(p.proposal_id)}">Reject</button>`) : ''}</td></tr>`).join('')}
+       ${proposals.map(p => `<tr><td>${esc(p.proposal_id)}<br><span class="note">${esc(dimName(p))}</span></td><td>${moveText(p)}</td><td><span class="note">${esc(p.rationale)}${p.status === 'withdrawn' && p.withdrawal_reason ? ' Withdrawn: ' + esc(p.withdrawal_reason) : ''}${p.refreshes && p.refreshes.length ? ` Refreshed ${esc(p.refreshes.length)}× (last: ${esc(p.refreshes[p.refreshes.length - 1].outcome)}).` : ''}</span></td><td>${statusPill(p)}${p.decided_by ? `<br><span class="note">by ${esc(p.decided_by)}</span>` : ''}${p.status === 'draft' && !p.expired && p.expires_at ? `<br><span class="note">evidence live until ${esc(String(p.expires_at).slice(0, 10))}</span>` : ''}</td><td>${p.status === 'draft' ? (p.expired ? `<button data-prop-refresh-preview="${esc(p.proposal_id)}">Preview refresh</button> <button data-prop-refresh="${esc(p.proposal_id)}">Refresh evidence</button>` : `<button data-prop-accept="${esc(p.proposal_id)}">Accept</button> <button data-prop-reject="${esc(p.proposal_id)}">Reject</button>`) : ''}</td></tr>`).join('')}
        </tbody></table>` : '<p class="empty">No proposals drafted — draft from the stored renewals and decided waits when their evidence carries a one-sided move.</p>'}
        <div class="row" style="margin-top:8px"><button id="draft-proposals">Draft threshold proposals</button>
        <button id="draft-sla-proposals">Draft SLA-budget proposals</button>
-       ${expiredCount ? `<button id="refresh-expired">Refresh all expired (${expiredCount})</button>` : ''}
+       ${expiredCount ? `<button id="preview-refresh-expired">Preview sweep</button> <button id="refresh-expired">Refresh all expired (${expiredCount})</button>` : ''}
        <span class="note" id="proposal-status"></span></div>
        <p class="note">Accepting writes the value into the settings record the pipeline reads — the change, its evidence, and its decider stay on the record, and a revert restores the prior value as a new audited entry. A draft's evidence expires (14 days by default): an expired draft must be refreshed — its scan re-run against today's store — before it can be decided.</p>`;
     document.querySelectorAll('[data-prop-accept]').forEach(btn =>
@@ -422,14 +424,23 @@ async function loadProposals() {
       btn.addEventListener('click', () => decideProposal(btn.getAttribute('data-prop-reject'), false)));
     document.querySelectorAll('[data-prop-refresh]').forEach(btn =>
       btn.addEventListener('click', () => refreshProposal(btn.getAttribute('data-prop-refresh'))));
+    document.querySelectorAll('[data-prop-refresh-preview]').forEach(btn =>
+      btn.addEventListener('click', () => previewRefreshProposal(btn.getAttribute('data-prop-refresh-preview'))));
     $('draft-proposals').addEventListener('click', draftProposals);
     $('draft-sla-proposals').addEventListener('click', draftSlaProposals);
     const ra = $('refresh-expired');
     if (ra) ra.addEventListener('click', refreshAllExpired);
+    const rp = $('preview-refresh-expired');
+    if (rp) rp.addEventListener('click', previewRefreshAllExpired);
     document.querySelectorAll('[data-restore]').forEach(btn =>
       btn.addEventListener('click', () => {
         const parts = btn.getAttribute('data-restore').split(':');
         restoreSettings(parts[0], Number(parts[1]));
+      }));
+    document.querySelectorAll('[data-restore-preview]').forEach(btn =>
+      btn.addEventListener('click', () => {
+        const parts = btn.getAttribute('data-restore-preview').split(':');
+        previewRestore(parts[0], Number(parts[1]));
       }));
     const rt = $('revert-thresholds');
     if (rt) rt.addEventListener('click', () => revertSettings('/calibration/settings/revert', 'threshold'));
@@ -508,6 +519,25 @@ async function refreshAllExpired() {
   loadOpsDigest();
 }
 
+async function previewRefreshProposal(proposalId) {
+  $('proposal-status').textContent = 'Previewing the refresh for ' + proposalId + ' — the scan runs, nothing is written…';
+  const res = await fetch(`/calibration/proposals/${proposalId}/refresh/preview`, {headers: headers()});
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('proposal-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('proposal-status').textContent = body.outcome === 'would_renew'
+    ? `Preview: ${proposalId} would renew — ${body.dimension} ${body.refreshed.current_value} → ${body.refreshed.proposed_value}, decidable until ${String(body.refreshed.expires_at || '').slice(0, 10)}. Nothing was written.`
+    : `Preview: ${proposalId} would be withdrawn — ${body.withdrawal_reason}. Nothing was written.`;
+}
+
+async function previewRefreshAllExpired() {
+  $('proposal-status').textContent = 'Previewing the sweep — each expired draft scanned on its own, nothing written…';
+  const res = await fetch('/calibration/proposals/refresh-expired/preview', {headers: headers()});
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('proposal-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  const ids = list => (list || []).map(p => p.proposal_id).join(', ') || 'none';
+  $('proposal-status').textContent = `Preview: ${body.counts.swept} expired draft(s) — would renew: ${ids(body.would_renew)}; would withdraw: ${ids(body.would_withdraw)}. Nothing was written.`;
+}
+
 async function restoreSettings(kind, index) {
   const actor = $('actor').value.trim();
   if (!actor) { $('proposal-status').textContent = 'Enter the underwriter name in the gate panel first — a restore is audited under its actor.'; return; }
@@ -521,6 +551,21 @@ async function restoreSettings(kind, index) {
   $('proposal-status').textContent = `Restored the ${kind === 'sla' ? 'SLA-budget' : 'threshold'} settings to history entry #${index} — recorded as one new audited change.`;
   loadCalibration();
   loadQueue();
+}
+
+async function previewRestore(kind, index) {
+  const label = kind === 'sla' ? 'SLA-budget' : 'threshold';
+  const path = kind === 'sla' ? '/queue/sla/settings/restore/preview' : '/calibration/settings/restore/preview';
+  $('proposal-status').textContent = `Previewing a restore of the ${label} settings to history entry #${index}…`;
+  const res = await fetch(path, {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({history_index: index})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('proposal-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('proposal-status').textContent = body.would_change
+    ? `Preview: restoring the ${label} settings to #${index} would change ${body.changes.map(ch => `${ch.dimension} ${ch.from} → ${ch.to}`).join(' · ')}. Nothing was written.`
+    : `Preview: restoring the ${label} settings to #${index} would change nothing — the values in force already match that entry.`;
 }
 
 async function revertSettings(path, label) {
@@ -551,10 +596,56 @@ async function loadOpsDigest() {
        <tr><td>Breached queue cases</td><td>${c.breached_queue ? `<span class="flag">${esc(c.breached_queue)}</span>` : '0'}</td><td><span class="note">${(d.breached_queue || []).map(i => `${esc(i.submission_id)} (${esc(i.sla_days_over)}d over)`).join(', ') || '—'}</span></td></tr>
        <tr><td>Follow-through outstanding</td><td>${esc(c.follow_through_outstanding || 0)}${c.follow_through_escalated ? ` · <span class="flag">${esc(c.follow_through_escalated)} escalated</span>` : ''}</td><td><span class="note">${names(d.follow_through_escalated, 'submission_id') ? 'escalated: ' + names(d.follow_through_escalated, 'submission_id') : '—'}</span></td></tr>
        <tr><td>Proposals</td><td>${esc(c.proposals_expired || 0)} expired${c.proposals_expiring_soon ? ` · ${esc(c.proposals_expiring_soon)} nearing expiry` : ''}</td><td><span class="note">${(d.proposals_expired || []).map(p => esc(p.proposal_id)).join(', ') || '—'}</span></td></tr>
-       </tbody></table>`;
+       </tbody></table>
+       <p class="note" id="digest-trend"></p>`;
+    loadDigestTrend();
   } catch (e) {
     $('opsdigest').innerHTML = '<span class="empty">Ops digest unavailable.</span>';
   }
+}
+
+async function loadDigestTrend() {
+  const box = $('digest-trend');
+  if (!box) return;
+  try {
+    const res = await fetch('/ops/digest/trend', {headers: headers()});
+    if (!res.ok) throw new Error('none');
+    const t = await res.json();
+    if (!t.snapshot_count) {
+      box.textContent = 'No snapshots yet — snapshot this digest and the next visit reads movement against it.';
+      return;
+    }
+    const latest = t.series[t.series.length - 1];
+    let text = `${t.snapshot_count} snapshot(s) kept · latest ${esc(latest.snapshot_id)} by ${esc(latest.taken_by)} at ${esc(String(latest.taken_at).slice(0, 10))}.`;
+    if (t.snapshot_count > 1 && t.movement) {
+      const d = (t.deltas || {}).total_attention || {};
+      const signed = n => (n > 0 ? '+' + n : '' + n);
+      text += ` Total attention ${esc(d.first)} → ${esc(d.latest)} (${esc(signed(d.change))} since the first snapshot, ${esc(signed(d.since_previous))} since the previous).`;
+      const moves = [];
+      Object.keys(t.movement.sections || {}).forEach(section => {
+        const s = t.movement.sections[section];
+        if (s.entered && s.entered.length) moves.push('entered ' + section.replace(/_/g, ' ') + ': ' + s.entered.map(esc).join(', '));
+        if (s.cleared && s.cleared.length) moves.push('cleared ' + section.replace(/_/g, ' ') + ': ' + s.cleared.map(esc).join(', '));
+      });
+      text += moves.length ? ` Since ${esc(t.movement.from_snapshot)}: ${moves.join(' · ')}.` : ` Nothing entered or cleared since ${esc(t.movement.from_snapshot)}.`;
+    }
+    box.innerHTML = text;
+  } catch (e) {
+    box.textContent = '';
+  }
+}
+
+async function snapshotDigest() {
+  const actor = $('actor').value.trim();
+  if (!actor) { $('digest-snapshot-status').textContent = 'Enter the underwriter name in the gate panel first — a snapshot is kept under its taker.'; return; }
+  const res = await fetch('/ops/digest/snapshots', {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({actor})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('digest-snapshot-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('digest-snapshot-status').textContent = `Kept ${body.snapshot_id} — the trend now reads against it.`;
+  loadOpsDigest();
 }
 
 async function loadDispatch() {
@@ -732,6 +823,7 @@ $('approve').addEventListener('click', () => decide('approve'));
 $('reject').addEventListener('click', () => decide('reject'));
 $('refresh-inbox').addEventListener('click', () => { loadInbox(); loadQueue(); loadDispatch(); loadOpsDigest(); loadCalibration(); });
 $('refresh-digest').addEventListener('click', loadOpsDigest);
+$('snapshot-digest').addEventListener('click', snapshotDigest);
 $('retry-due').addEventListener('click', retryDue);
 $('notify-breaches').addEventListener('click', notifyBreaches);
 loadSamples();
