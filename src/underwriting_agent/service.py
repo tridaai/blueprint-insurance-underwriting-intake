@@ -50,16 +50,18 @@ from .checkpoints import get_checkpointer
 from .clarify import build_bundle_information_request
 from .config import env_float, env_str, load_dotenv
 from .graph import resume_approval, run_submission
-from .guardrails import validate_drafts
+from .guardrails import validate_drafts, validate_status_note
 from .guidelines_data import GUIDELINES_VERSION
 from .insights import (
     all_scorecards,
     audit_rows,
     broker_quality_report,
+    compose_status_note,
     compute_metrics,
     dispatch_overview,
     inbox_groups,
     queue_aging,
+    queue_item_for,
     scorecard,
     scorecards_for,
 )
@@ -1039,6 +1041,74 @@ class SubmissionService:
         undecided submissions have been sitting, and which one has
         been waiting longest."""
         return queue_aging(self._get_store().all_records())
+
+    def draft_status_note(self, submission_id: str) -> dict:
+        """Draft the underwriter status note for an SLA-breached case.
+
+        The note exists for one moment: an undecided submission has
+        sat past the SLA budget for its risk tier and somebody
+        should pick it up. It is composed in code from the record
+        and the queue projection (``insights.compose_status_note``),
+        guardrail-checked like every other draft
+        (``guardrails.validate_status_note``) — a note that fails is
+        refused, never stored — and then kept on the record as an
+        internal draft. Nothing is sent, to anyone, ever: the
+        underwriter reads it in the console and decides.
+
+        Re-drafting replaces the stored note (the case aged, the
+        facts may have moved). Raises KeyError for an unknown id
+        and ValueError when the submission is not awaiting a
+        decision or is still within its SLA budget.
+        """
+        store = self._get_store()
+        record = store.get(submission_id)
+        if record is None:
+            raise KeyError(f"Unknown submission_id: {submission_id} (analyze it first)")
+        item = queue_item_for(record)
+        if item is None:
+            raise ValueError(
+                f"Submission {submission_id} is not awaiting an underwriter "
+                f"(status: {record.result.status}) — status notes are for the queue"
+            )
+        if item["sla_state"] != "breached":
+            raise ValueError(
+                f"Submission {submission_id} is {item['sla_state']} its SLA "
+                f"budget ({item['sla_budget_days']} day(s) for tier "
+                f"{item['risk_tier']}, age {item['age_days']}) — status notes "
+                "are drafted for breached cases"
+            )
+        now = datetime.now(timezone.utc)
+        text = compose_status_note(record, item, now)
+        validation = validate_status_note(text, submission_id)
+        if not validation.passed:
+            failed = "; ".join(
+                f"{c.name}: {c.detail}" for c in validation.checks if not c.passed
+            )
+            raise ValueError(
+                "Drafted status note failed guardrail validation and was "
+                "not stored: " + failed
+            )
+        note = {
+            "submission_id": submission_id,
+            "text": text,
+            "drafted_at": now.isoformat(timespec="seconds"),
+            "sla": {
+                "risk_tier": item["risk_tier"],
+                "budget_days": item["sla_budget_days"],
+                "age_days": item["age_days"],
+                "days_over": item["sla_days_over"],
+            },
+            "validation": validation.model_dump(mode="json"),
+        }
+        record.status_note = note
+        store.save(record)
+        return note
+
+    def status_note(self, submission_id: str) -> dict | None:
+        """The stored status note for a submission, or None when no
+        note has been drafted (or the submission is unknown)."""
+        record = self._get_store().get(submission_id)
+        return record.status_note if record else None
 
     def guideline_change_impact(self, classifier=None) -> dict:
         """Which awaiting submissions would re-triage differently

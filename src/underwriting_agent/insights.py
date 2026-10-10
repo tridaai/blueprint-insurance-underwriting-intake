@@ -697,6 +697,78 @@ def queue_aging(
     }
 
 
+def compose_status_note(
+    record: ApprovalRecord, item: dict, now: datetime | None = None
+) -> str:
+    """The drafted underwriter status note for one SLA-breached case.
+
+    Composed in code from the record and the queue item (the same
+    projection the /queue view renders — the note and the queue
+    cannot disagree), in the broker letter's status-only
+    discipline: where the case stands, how far past its SLA budget
+    it is, and what is outstanding. No timelines, no outcomes, no
+    figures the record does not carry. The note is an internal
+    draft for the underwriter — it is never sent to anyone, and the
+    service guardrail-checks it before it is stored (see
+    ``guardrails.validate_status_note``).
+    """
+    result = record.result
+    facts = result.facts
+    now = now or datetime.now(timezone.utc)
+    lines = [
+        f"INTERNAL DRAFT — underwriter status note for submission "
+        f"{result.submission_id} (agent-drafted {now.date().isoformat()}; not sent)",
+        "",
+        f"Insured: {item['insured_name'] or result.insured_name} · "
+        f"broker: {item['broker_name'] or 'not stated'} · "
+        f"line: {result.line_of_business}",
+        f"Status: awaiting underwriter decision. Submitted "
+        f"{item['submitted_at'] or 'date not recorded'}; "
+        f"{item['age_days']} day(s) in the queue.",
+        f"SLA: risk tier {item['risk_tier']} carries a "
+        f"{item['sla_budget_days']}-day budget — this case is "
+        f"{item['sla_days_over']} day(s) past it.",
+        f"Triage: {result.triage.outcome} / {result.triage.risk_tier}, "
+        f"readiness {facts.readiness} (completeness {facts.completeness_score}).",
+    ]
+    if item["blocking_lines"]:
+        for entry in item["blocking_lines"]:
+            missing = ", ".join(entry["missing_items"]) or "items on file"
+            lines.append(
+                f"Blocking line: {entry['line_of_business']} — missing "
+                f"{missing}; the bundle has waited {entry['age_days']} "
+                "day(s) on this line."
+            )
+    elif facts.missing_elements:
+        lines.append(
+            "Outstanding: missing " + ", ".join(facts.missing_elements) + "."
+        )
+    elif facts.gap_sources:
+        lines.append("Outstanding: readiness gaps — " + "; ".join(facts.gap_sources) + ".")
+    else:
+        lines.append(
+            "Outstanding: nothing missing — the file is complete and "
+            "awaiting a decision."
+        )
+    if result.triage.referral_triggers:
+        lines.append(
+            f"Referral triggers on file: {len(result.triage.referral_triggers)}."
+        )
+    if result.review is not None and result.review.verdict != "pass":
+        lines.append(f"Independent review verdict: {result.review.verdict}.")
+    if result.needs_information:
+        lines.append(
+            "An information request has been composed for the broker "
+            "(composed only — not sent)."
+        )
+    lines.append(
+        "Next step: underwriter review and decision. This note is an "
+        "internal draft; the underwriter decides what happens with "
+        "this case."
+    )
+    return "\n".join(lines)
+
+
 def audit_csv(rows: list[dict]) -> str:
     """The audit rows as CSV text (header + one line per row)."""
     buffer = io.StringIO()

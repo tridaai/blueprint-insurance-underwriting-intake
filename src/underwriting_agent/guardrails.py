@@ -337,3 +337,138 @@ def validate_drafts(
     )
 
     return Validation(passed=all(c.passed for c in checks), checks=checks)
+
+
+def validate_status_note(note: str, submission_id: str) -> Validation:
+    """Guardrail-check a drafted queue status note.
+
+    The status note is an internal draft, but it is written in the
+    broker letter's status-only discipline — it reports where a
+    case stands, nothing more — so it is held to the same text
+    families as the drafts: no bind language, no premium figures,
+    no outcome or timing promises, and the letter-scoped families
+    (forward motion, review commitments, soft time commitments,
+    internal authority references) applied to the note itself,
+    plus the PII screen and the submission-id reference. The
+    structural draft checks (guideline citations, next-step line)
+    do not apply — a note cites the record it was drafted from,
+    which the id reference pins. A note that fails is never
+    stored: the service refuses it exactly the way approval
+    refuses a failing draft.
+    """
+    text = note or ""
+    checks: list[GuardrailCheck] = []
+
+    present = submission_id in text
+    checks.append(
+        GuardrailCheck(
+            name="references_submission_id",
+            passed=present,
+            detail=(
+                f"submission id {submission_id} referenced"
+                if present
+                else f"note never references submission {submission_id}"
+            ),
+        )
+    )
+
+    bind_hit = next(
+        (hit for hit in (_affirmative(p, text) for p in _BIND_PATTERNS) if hit),
+        None,
+    )
+    checks.append(
+        GuardrailCheck(
+            name="no_bind_language",
+            passed=bind_hit is None,
+            detail=(
+                "no language states or implies coverage is bound"
+                if bind_hit is None
+                else f"bind language found: '{bind_hit}' — the agent never binds coverage"
+            ),
+        )
+    )
+
+    premium_hit = next(
+        (m.group(0) for p in _PREMIUM_FIGURE if (m := re.search(p, text, re.IGNORECASE))),
+        None,
+    )
+    checks.append(
+        GuardrailCheck(
+            name="no_firm_premium",
+            passed=premium_hit is None,
+            detail=(
+                "no premium figure is stated or quoted"
+                if premium_hit is None
+                else f"premium figure found: '{premium_hit}' — the agent never quotes a premium"
+            ),
+        )
+    )
+
+    promise_hit = next(
+        (m.group(0) for p in _PROMISE_PATTERNS if (m := re.search(p, text, re.IGNORECASE))),
+        None,
+    )
+    checks.append(
+        GuardrailCheck(
+            name="no_prohibited_promises",
+            passed=promise_hit is None,
+            detail=(
+                "no outcome or timing promises"
+                if promise_hit is None
+                else f"prohibited promise found: '{promise_hit}'"
+            ),
+        )
+    )
+
+    problems: list[str] = []
+    for patterns, label in (
+        (_FORWARD_MOTION_PATTERNS, "forward-motion commitment"),
+        (_REVIEW_COMMITMENT_PATTERNS, "review commitment"),
+        (_SOFT_TIME_PATTERNS, "soft time commitment"),
+    ):
+        hit = next(
+            (h for h in (_affirmative(p, text) for p in patterns) if h), None
+        )
+        if hit:
+            problems.append(f"{label}: '{hit}'")
+    authority_hit = next(
+        (m.group(0) for p in _AUTHORITY_PATTERNS if (m := re.search(p, text, re.IGNORECASE))),
+        None,
+    )
+    if authority_hit:
+        problems.append(f"internal authority reference: '{authority_hit}'")
+    checks.append(
+        GuardrailCheck(
+            name="no_forward_motion_in_letter",
+            passed=not problems,
+            detail=(
+                "the note reports status only — no forward-motion or "
+                "review commitments, no soft time commitments, no "
+                "internal authority references"
+                if not problems
+                else "; ".join(problems)
+                + " — the note reports status; the underwriter decides the next step"
+            ),
+        )
+    )
+
+    pii_hit = None
+    if _SSN.search(text):
+        pii_hit = "what looks like a US Social Security number"
+    elif _find_card(text):
+        pii_hit = "what looks like a payment card number (Luhn-valid)"
+    elif _PASSPORT.search(text):
+        pii_hit = "what looks like a passport number"
+    checks.append(
+        GuardrailCheck(
+            name="no_pii_in_draft",
+            passed=pii_hit is None,
+            detail=(
+                "no SSN / card / passport patterns in the note"
+                if pii_hit is None
+                else f"PII in note: {pii_hit} — personal identifiers never belong in drafts"
+            ),
+        )
+    )
+
+    return Validation(passed=all(c.passed for c in checks), checks=checks)

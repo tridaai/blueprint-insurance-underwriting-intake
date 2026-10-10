@@ -40,6 +40,11 @@ class ApprovalRecord:
     # (see schemas.DispatchAttempt). Older stored payloads predate
     # it and load with an empty ledger.
     dispatch_attempts: list[dict] = field(default_factory=list)
+    # The drafted queue status note for an SLA-breached case (see
+    # service.draft_status_note): {text, drafted_at, sla, validation}
+    # or None when none has been drafted. An internal draft — it is
+    # stored on the record and never sent. Older payloads predate it.
+    status_note: dict | None = None
 
 
 def history_entry(record: ApprovalRecord) -> dict:
@@ -107,6 +112,7 @@ def _record_to_dict(record: ApprovalRecord) -> dict:
         "reject_reason": record.reject_reason,
         "dispatch_status": record.dispatch_status,
         "dispatch_attempts": record.dispatch_attempts,
+        "status_note": record.status_note,
     }
 
 
@@ -125,6 +131,7 @@ def _record_from_dict(data: dict) -> ApprovalRecord:
         reject_reason=data.get("reject_reason", ""),
         dispatch_status=data.get("dispatch_status"),
         dispatch_attempts=data.get("dispatch_attempts") or [],
+        status_note=data.get("status_note"),
     )
 
 

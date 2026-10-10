@@ -449,6 +449,31 @@ def reject(submission_id: str, request: DecisionRequest) -> AgentResult:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.post("/submissions/{submission_id}/status-note", dependencies=_AUTH)
+def draft_status_note(submission_id: str) -> dict:
+    """Draft the underwriter status note for an SLA-breached queue
+    case: composed from the record, guardrail-checked, stored on
+    the record as an internal draft. Nothing is sent. 422 when the
+    submission is not awaiting a decision or is within its SLA
+    budget — notes are for breaches."""
+    try:
+        return service.draft_status_note(submission_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/submissions/{submission_id}/status-note", dependencies=_AUTH)
+def get_status_note(submission_id: str) -> dict:
+    """The stored status note for a submission (404 when none has
+    been drafted)."""
+    note = service.status_note(submission_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail="No status note drafted for this submission.")
+    return note
+
+
 @app.get("/submissions/{submission_id}/dispatch", dependencies=_AUTH)
 def dispatch_ledger(submission_id: str) -> dict:
     """The approval-webhook delivery ledger for one submission:
