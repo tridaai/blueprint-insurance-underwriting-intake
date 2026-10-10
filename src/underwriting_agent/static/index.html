@@ -74,6 +74,7 @@
     <section>
       <h2>Inbox &amp; scorecards</h2>
       <div id="inbox" class="empty">Loading…</div>
+      <div id="followthrough" style="margin-top:10px"></div>
       <div id="quality" style="margin-top:10px"></div>
       <div id="timeline" style="margin-top:10px"></div>
       <div class="row" style="margin-top:10px"><button id="refresh-inbox">Refresh</button>
@@ -93,7 +94,7 @@
       <span class="note" id="dispatch-status"></span></div>
     </section>
     <section>
-      <h2>Diff-trigger calibration</h2>
+      <h2>Calibration &amp; proposals</h2>
       <div id="calibration" class="empty">Loading…</div>
       <div id="proposals" style="margin-top:10px"></div>
     </section>
@@ -203,6 +204,19 @@ async function loadInbox() {
     $('inbox').innerHTML =
       `<h3>Brokers</h3>${groupTable(inbox.brokers || [], 'broker')}${(cards.brokers || []).map(topReasons).join('')}
        <h3>Insureds</h3>${groupTable(inbox.insureds || [], 'insured')}`;
+    const ft = inbox.follow_through || {total_notes: 0, entries: [], counts: {}};
+    const ftPill = st => st === 'answered' ? pill('answered', 'good')
+      : st === 'partially_answered' ? pill('partially answered', 'warn')
+      : st === 'still_outstanding' ? pill('still outstanding', 'bad')
+      : st === 'awaiting_resubmission' ? pill('awaiting resubmission', 'warn')
+      : pill(esc(st));
+    $('followthrough').innerHTML = ft.total_notes
+      ? `<h3>Status-note follow-through</h3>
+         <p class="note">${Object.keys(ft.counts || {}).map(k => `${esc(ft.counts[k])} ${esc(k.replace(/_/g, ' '))}`).join(' · ')} — oldest outstanding first. A note's loop closes when a resubmission from the same insured answers what it was waiting on.</p>
+         <table><thead><tr><th>Note on</th><th>State</th><th>Outstanding</th><th></th></tr></thead><tbody>
+         ${ft.entries.map(e => `<tr><td>${esc(e.submission_id)}<br><span class="note">${esc(e.insured_name)} · noted ${esc(e.note_age_days)}d ago</span></td><td>${ftPill(e.state)}</td><td>${e.still_outstanding_items && e.still_outstanding_items.length ? e.still_outstanding_items.map(i => esc(i.item)).join(', ') : 'none'}</td><td>${e.by_submission_id ? `<span class="note">checked by ${esc(e.by_submission_id)}</span>` : ''}</td></tr>`).join('')}
+         </tbody></table>`
+      : '';
     document.querySelectorAll('[data-quality]').forEach(btn =>
       btn.addEventListener('click', () => showQuality(btn.getAttribute('data-quality'))));
     document.querySelectorAll('[data-timeline]').forEach(btn =>
@@ -275,7 +289,7 @@ async function loadQueue() {
        ${q.buckets.map(b => `<tr><td>${esc(b.bucket)}</td><td>${esc(b.count)}</td></tr>`).join('')}
        </tbody></table>
        ${q.oldest ? `<p class="note">Oldest: ${esc(q.oldest.submission_id)} — ${esc(q.oldest.insured_name)}, ${esc(q.oldest.age_days)} day(s), ${esc(q.oldest.outcome)} / ${esc(q.oldest.risk_tier)}.</p>` : ''}
-       <p class="note">SLA budgets by risk tier: ${esc(budgetText)} — ${q.breach_count ? `<span class="flag">${esc(q.breach_count)} breached</span>` : 'no breaches'}${q.blocked_bundles ? ` · ${esc(q.blocked_bundles)} bundle(s) blocked on a line` : ''}.</p>
+       <p class="note">SLA budgets by risk tier: ${esc(budgetText)} (source: ${q.sla_budgets_source === 'accepted_proposal' ? 'accepted proposal — settings record' : 'environment'}) — ${q.breach_count ? `<span class="flag">${esc(q.breach_count)} breached</span>` : 'no breaches'}${q.blocked_bundles ? ` · ${esc(q.blocked_bundles)} bundle(s) blocked on a line` : ''}.</p>
        ${q.breaches && q.breaches.length ? `<table><thead><tr><th>Breached</th><th>Tier</th><th>Age / budget</th><th>Breach webhook</th><th></th></tr></thead><tbody>
        ${q.breaches.map(i => `<tr><td>${esc(i.submission_id)}<br><span class="note">${esc(i.insured_name)}</span></td><td>${esc(i.risk_tier)}</td><td>${esc(i.age_days)}d / ${esc(i.sla_budget_days)}d (${esc(i.sla_days_over)}d over)</td><td>${i.sla_breach_notice ? `fired ${esc(i.sla_breach_notice.first_observed_at)} · ${i.sla_breach_notice.dispatch_status === 'sent' ? pill('sent', 'good') : pill('failed', 'bad') + ` <button data-breach-retry="${esc(i.submission_id)}">Retry</button>`}` : '<span class="note">not notified</span>'}</td><td><button data-note="${esc(i.submission_id)}">Draft status note</button></td></tr>`).join('')}
        </tbody></table>` : ''}
@@ -358,23 +372,44 @@ async function loadProposals() {
     const body = await res.json();
     const s = body.settings || {};
     const t = s.thresholds || {};
+    const sla = body.sla_settings || {};
+    const b = sla.budgets || {};
     const proposals = body.proposals || [];
-    const dimName = d => ({limit_jump_pct: 'Limit jump %', new_claim_min_incurred: 'New-claim floor $', development_min_increase: 'Development floor $'})[d] || d;
-    const statusPill = p => p.status === 'accepted' ? pill('accepted', 'good') : p.status === 'rejected' ? pill('rejected', 'bad') : pill('draft', 'warn');
+    const dimName = p => p.kind === 'sla_budget'
+      ? `SLA budget · ${p.dimension} tier`
+      : ({limit_jump_pct: 'Limit jump %', new_claim_min_incurred: 'New-claim floor $', development_min_increase: 'Development floor $'})[p.dimension] || p.dimension;
+    const moveText = p => p.kind === 'sla_budget'
+      ? `${esc(p.current_value)}d → ${esc(p.proposed_value)}d`
+      : `${esc(p.current_value)} → ${esc(p.proposed_value)}`;
+    const statusPill = p => p.status === 'accepted' ? pill('accepted', 'good')
+      : p.status === 'rejected' ? pill('rejected', 'bad')
+      : p.status === 'withdrawn' ? pill('withdrawn')
+      : p.expired ? pill('expired', 'bad') : pill('draft', 'warn');
+    const sourceText = v => v.source === 'accepted_proposal' ? 'accepted proposal (settings record)' : 'environment configuration';
+    const canRevert = v => v.settings && v.settings.history && v.settings.history.length;
     $('proposals').innerHTML =
-      `<h3>Threshold proposals</h3>
-       <p class="note">In force: limit jump ${esc(t.limit_jump_pct)}% · new-claim floor $${esc(t.new_claim_min_incurred)} · development floor $${esc(t.development_min_increase)} — source: ${s.source === 'accepted_proposal' ? `accepted proposal (settings record${s.settings && s.settings.updated_by ? ', last set by ' + esc(s.settings.updated_by) : ''})` : 'environment configuration'}.</p>
+      `<h3>Calibration proposals</h3>
+       <p class="note">Thresholds in force: limit jump ${esc(t.limit_jump_pct)}% · new-claim floor $${esc(t.new_claim_min_incurred)} · development floor $${esc(t.development_min_increase)} — source: ${sourceText(s)}.${canRevert(s) ? ` <button id="revert-thresholds">Revert last threshold change</button>` : ''}</p>
+       <p class="note">SLA budgets in force: ${Object.keys(b).map(tier => `${esc(tier)} ${esc(b[tier])}d`).join(' · ')} — source: ${sourceText(sla)}.${canRevert(sla) ? ` <button id="revert-sla">Revert last SLA-budget change</button>` : ''}</p>
        ${proposals.length ? `<table><thead><tr><th>Proposal</th><th>Move</th><th>Evidence</th><th>Status</th><th></th></tr></thead><tbody>
-       ${proposals.map(p => `<tr><td>${esc(p.proposal_id)}<br><span class="note">${esc(dimName(p.dimension))}</span></td><td>${esc(p.current_value)} → ${esc(p.proposed_value)}</td><td><span class="note">${esc(p.rationale)}</span></td><td>${statusPill(p)}${p.decided_by ? `<br><span class="note">by ${esc(p.decided_by)}</span>` : ''}</td><td>${p.status === 'draft' ? `<button data-prop-accept="${esc(p.proposal_id)}">Accept</button> <button data-prop-reject="${esc(p.proposal_id)}">Reject</button>` : ''}</td></tr>`).join('')}
-       </tbody></table>` : '<p class="empty">No proposals drafted — draft from the stored renewals when their decisions carry a one-sided move.</p>'}
-       <div class="row" style="margin-top:8px"><button id="draft-proposals">Draft proposals from stored renewals</button>
+       ${proposals.map(p => `<tr><td>${esc(p.proposal_id)}<br><span class="note">${esc(dimName(p))}</span></td><td>${moveText(p)}</td><td><span class="note">${esc(p.rationale)}${p.status === 'withdrawn' && p.withdrawal_reason ? ' Withdrawn: ' + esc(p.withdrawal_reason) : ''}${p.refreshes && p.refreshes.length ? ` Refreshed ${esc(p.refreshes.length)}× (last: ${esc(p.refreshes[p.refreshes.length - 1].outcome)}).` : ''}</span></td><td>${statusPill(p)}${p.decided_by ? `<br><span class="note">by ${esc(p.decided_by)}</span>` : ''}${p.status === 'draft' && !p.expired && p.expires_at ? `<br><span class="note">evidence live until ${esc(String(p.expires_at).slice(0, 10))}</span>` : ''}</td><td>${p.status === 'draft' ? (p.expired ? `<button data-prop-refresh="${esc(p.proposal_id)}">Refresh evidence</button>` : `<button data-prop-accept="${esc(p.proposal_id)}">Accept</button> <button data-prop-reject="${esc(p.proposal_id)}">Reject</button>`) : ''}</td></tr>`).join('')}
+       </tbody></table>` : '<p class="empty">No proposals drafted — draft from the stored renewals and decided waits when their evidence carries a one-sided move.</p>'}
+       <div class="row" style="margin-top:8px"><button id="draft-proposals">Draft threshold proposals</button>
+       <button id="draft-sla-proposals">Draft SLA-budget proposals</button>
        <span class="note" id="proposal-status"></span></div>
-       <p class="note">Accepting writes the threshold into the settings record the classifier reads — the change, its evidence, and its decider stay on the record. Rejecting changes nothing but the proposal.</p>`;
+       <p class="note">Accepting writes the value into the settings record the pipeline reads — the change, its evidence, and its decider stay on the record, and a revert restores the prior value as a new audited entry. A draft's evidence expires (14 days by default): an expired draft must be refreshed — its scan re-run against today's store — before it can be decided.</p>`;
     document.querySelectorAll('[data-prop-accept]').forEach(btn =>
       btn.addEventListener('click', () => decideProposal(btn.getAttribute('data-prop-accept'), true)));
     document.querySelectorAll('[data-prop-reject]').forEach(btn =>
       btn.addEventListener('click', () => decideProposal(btn.getAttribute('data-prop-reject'), false)));
+    document.querySelectorAll('[data-prop-refresh]').forEach(btn =>
+      btn.addEventListener('click', () => refreshProposal(btn.getAttribute('data-prop-refresh'))));
     $('draft-proposals').addEventListener('click', draftProposals);
+    $('draft-sla-proposals').addEventListener('click', draftSlaProposals);
+    const rt = $('revert-thresholds');
+    if (rt) rt.addEventListener('click', () => revertSettings('/calibration/settings/revert', 'threshold'));
+    const rs = $('revert-sla');
+    if (rs) rs.addEventListener('click', () => revertSettings('/queue/sla/settings/revert', 'SLA-budget'));
   } catch (e) {
     $('proposals').innerHTML = '<span class="empty">Proposals unavailable.</span>';
   }
@@ -391,17 +426,59 @@ async function draftProposals() {
   loadProposals();
 }
 
+async function draftSlaProposals() {
+  $('proposal-status').textContent = 'Replaying the decided cases\u2019 waits…';
+  const res = await fetch('/queue/sla-proposals/draft', {method: 'POST', headers: headers()});
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('proposal-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('proposal-status').textContent = body.drafted && body.drafted.length
+    ? 'Drafted: ' + body.drafted.map(p => p.proposal_id).join(', ') + '.'
+    : 'No new proposals — no one-sided decided move in the decided waits.';
+  loadProposals();
+}
+
 async function decideProposal(proposalId, accept) {
   const actor = $('actor').value.trim();
-  if (!actor) { $('proposal-status').textContent = 'Enter the underwriter name in the gate panel first — a threshold change needs its decider.'; return; }
+  if (!actor) { $('proposal-status').textContent = 'Enter the underwriter name in the gate panel first — a settings change needs its decider.'; return; }
   const res = await fetch(`/calibration/proposals/${proposalId}/decide`, {
     method: 'POST', headers: headers(),
     body: JSON.stringify({actor, accept})
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) { $('proposal-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
-  $('proposal-status').textContent = `${proposalId} ${body.status} by ${body.decided_by}` + (body.status === 'accepted' ? ' — the new threshold is in force for the next analysis.' : '.');
+  $('proposal-status').textContent = `${proposalId} ${body.status} by ${body.decided_by}` + (body.status === 'accepted' ? ' — the new value is in force from the next read.' : '.');
   loadCalibration();
+  loadQueue();
+}
+
+async function refreshProposal(proposalId) {
+  const actor = $('actor').value.trim();
+  if (!actor) { $('proposal-status').textContent = 'Enter the underwriter name in the gate panel first — a refresh is audited under its actor.'; return; }
+  $('proposal-status').textContent = 'Re-running the evidence scan for ' + proposalId + '…';
+  const res = await fetch(`/calibration/proposals/${proposalId}/refresh`, {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({actor})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('proposal-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('proposal-status').textContent = body.status === 'withdrawn'
+    ? `${proposalId} withdrawn — the refreshed evidence no longer carries the move.`
+    : `${proposalId} renewed on fresh evidence — decidable until ${String(body.expires_at || '').slice(0, 10)}.`;
+  loadProposals();
+}
+
+async function revertSettings(path, label) {
+  const actor = $('actor').value.trim();
+  if (!actor) { $('proposal-status').textContent = 'Enter the underwriter name in the gate panel first — a revert is audited under its actor.'; return; }
+  const res = await fetch(path, {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({actor})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('proposal-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('proposal-status').textContent = `Reverted the last ${label} change — the prior value is back in force, recorded as a new history entry.`;
+  loadCalibration();
+  loadQueue();
 }
 
 async function loadDispatch() {
