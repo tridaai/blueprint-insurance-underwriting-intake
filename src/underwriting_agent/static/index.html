@@ -173,9 +173,18 @@ async function loadInbox() {
     const cards = await cardsRes.json();
     const cardByName = {};
     [...(cards.brokers || []), ...(cards.insureds || [])].forEach(c => { cardByName[c.kind + ':' + c.name] = c; });
+    const trendMark = t => {
+      if (!t || t.delta === null || t.delta === undefined) return '';
+      if (t.direction === 'improving') return ` <span title="Approval-rate trend: recent decisions vs earlier decisions">▲ +${esc(t.delta)}</span>`;
+      if (t.direction === 'declining') return ` <span title="Approval-rate trend: recent decisions vs earlier decisions">▼ ${esc(t.delta)}</span>`;
+      if (t.direction === 'flat') return ' <span title="Approval-rate trend: recent decisions vs earlier decisions">→ flat</span>';
+      return '';
+    };
     const groupTable = (groups, kind) => groups.length ? `<table><thead><tr><th>${kind === 'broker' ? 'Broker' : 'Insured'}</th><th>#</th><th>Latest</th><th>Approval rate</th><th>Avg completeness</th>${kind === 'broker' ? '<th></th>' : ''}</tr></thead><tbody>
       ${groups.map(g => { const c = cardByName[kind + ':' + g.name];
-        return `<tr><td>${esc(g.name)}</td><td>${esc(g.submission_count)}</td><td>${esc(g.latest_outcome)} / ${esc(g.latest_risk_tier)} · ${esc(g.latest_readiness)}</td><td>${c && c.approval_rate !== null && c.approval_rate !== undefined ? esc(c.approval_rate) : '—'}</td><td>${c ? esc(c.avg_completeness) : '—'}</td>${kind === 'broker' ? `<td><button data-quality="${esc(g.name)}">Quality draft</button></td>` : ''}</tr>`; }).join('')}
+        const main = `<tr><td><button data-expand title="Show this group's submissions">▸</button> ${esc(g.name)}</td><td>${esc(g.submission_count)}</td><td>${esc(g.latest_outcome)} / ${esc(g.latest_risk_tier)} · ${esc(g.latest_readiness)}</td><td>${c && c.approval_rate !== null && c.approval_rate !== undefined ? esc(c.approval_rate) + trendMark(c.approval_trend) : '—'}</td><td>${c ? esc(c.avg_completeness) : '—'}</td>${kind === 'broker' ? `<td><button data-quality="${esc(g.name)}">Quality draft</button></td>` : ''}</tr>`;
+        const subs = (g.submissions || []).map(s => `${esc(s.submission_id)} — ${esc(s.outcome)} / ${esc(s.risk_tier)} · ${esc(s.status)}${s.submitted_at ? ' · ' + esc(s.submitted_at) : ''}`).join('<br>');
+        return main + `<tr class="detail" style="display:none"><td colspan="6">${subs || 'No submissions.'}</td></tr>`; }).join('')}
       </tbody></table>` : '<p class="empty">none yet</p>';
     const topReasons = c => c && c.top_referral_reasons && c.top_referral_reasons.length
       ? `<p class="note">${esc(c.name)} — top referral reasons: ${c.top_referral_reasons.map(r => esc(r.reason) + ' ×' + esc(r.count)).join(', ')}</p>` : '';
@@ -184,6 +193,12 @@ async function loadInbox() {
        <h3>Insureds</h3>${groupTable(inbox.insureds || [], 'insured')}`;
     document.querySelectorAll('[data-quality]').forEach(btn =>
       btn.addEventListener('click', () => showQuality(btn.getAttribute('data-quality'))));
+    document.querySelectorAll('[data-expand]').forEach(btn =>
+      btn.addEventListener('click', () => {
+        const detail = btn.closest('tr').nextElementSibling;
+        if (detail) detail.style.display = detail.style.display === 'none' ? '' : 'none';
+        btn.textContent = btn.textContent === '▸' ? '▾' : '▸';
+      }));
   } catch (e) {
     $('inbox').innerHTML = '<span class="empty">Inbox unavailable.</span>';
   }

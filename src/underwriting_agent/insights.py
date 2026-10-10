@@ -39,7 +39,9 @@ def inbox_groups(records: list[ApprovalRecord], kind: str) -> list[dict]:
 
     Records arrive in store order (oldest first); "latest" is the
     most recently analysed submission for the party. Groups are
-    returned most-recent-activity first.
+    returned most-recent-activity first. Each group also carries
+    its ``submissions`` — the drill-down list behind the counts, in
+    store order, one entry per submission with its status.
     """
     groups: dict[str, dict] = {}
     order: list[str] = []
@@ -56,6 +58,7 @@ def inbox_groups(records: list[ApprovalRecord], kind: str) -> list[dict]:
                 "outcome_counts": {},
                 "awaiting_count": 0,
                 "decided_count": 0,
+                "submissions": [],
             }
             groups[name] = group
             order.append(name)
@@ -66,6 +69,17 @@ def inbox_groups(records: list[ApprovalRecord], kind: str) -> list[dict]:
             group["awaiting_count"] += 1
         elif result.status in ("approved", "rejected"):
             group["decided_count"] += 1
+        group["submissions"].append(
+            {
+                "submission_id": result.submission_id,
+                "outcome": outcome,
+                "risk_tier": result.triage.risk_tier,
+                "readiness": result.facts.readiness,
+                "completeness": result.facts.completeness_score,
+                "status": result.status,
+                "submitted_at": record.submission.get("submitted_at", ""),
+            }
+        )
         group.update(
             latest_submission_id=result.submission_id,
             latest_outcome=outcome,
@@ -77,6 +91,45 @@ def inbox_groups(records: list[ApprovalRecord], kind: str) -> list[dict]:
         order.remove(name)
         order.append(name)  # most recent activity last
     return [groups[name] for name in reversed(order)]
+
+
+def _approval_trend(decided_entries: list[dict]) -> dict:
+    """The direction of a group's approval rate over its own
+    decision history.
+
+    The scorecard's approval rate is one number over everything;
+    the trend reads the same decisions in the order they were made
+    (store order): the approval rate over the earlier half of the
+    decisions against the recent half. A delta beyond ±0.05 is a
+    direction; inside it, the rate is flat. Fewer than two
+    decisions cannot have a direction and say so instead of
+    inventing one.
+    """
+    sequence = [
+        1 if e["status"] == "approved" else 0 for e in decided_entries
+    ]
+    if len(sequence) < 2:
+        return {
+            "decisions": len(sequence),
+            "early_rate": None,
+            "recent_rate": None,
+            "delta": None,
+            "direction": "single_decision" if sequence else "insufficient_history",
+        }
+    mid = len(sequence) // 2
+    early = sum(sequence[:mid]) / mid
+    recent = sum(sequence[mid:]) / (len(sequence) - mid)
+    delta = round(recent - early, 3)
+    direction = (
+        "improving" if delta > 0.05 else "declining" if delta < -0.05 else "flat"
+    )
+    return {
+        "decisions": len(sequence),
+        "early_rate": round(early, 3),
+        "recent_rate": round(recent, 3),
+        "delta": delta,
+        "direction": direction,
+    }
 
 
 def scorecard(records: list[ApprovalRecord], kind: str, name: str) -> dict | None:
@@ -98,6 +151,11 @@ def scorecard(records: list[ApprovalRecord], kind: str, name: str) -> dict | Non
             rejections += 1
         completeness_total += result.facts.completeness_score
     decisions = approvals + rejections
+    decided_entries = [
+        {"status": record.result.status}
+        for record in hits
+        if record.result.status in ("approved", "rejected")
+    ]
     return {
         "kind": kind,
         "name": name,
@@ -107,6 +165,7 @@ def scorecard(records: list[ApprovalRecord], kind: str, name: str) -> dict | Non
         "approvals": approvals,
         "rejections": rejections,
         "approval_rate": round(approvals / decisions, 3) if decisions else None,
+        "approval_trend": _approval_trend(decided_entries),
         "avg_completeness": round(completeness_total / len(hits), 3),
         "top_referral_reasons": [
             {"reason": reason, "count": count}
