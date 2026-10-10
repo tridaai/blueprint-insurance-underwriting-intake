@@ -1548,6 +1548,18 @@ class SubmissionService:
         )
         return annotate_proposal(proposal)
 
+    def refresh_expired_calibration_proposals(self, actor: str) -> dict:
+        """Refresh every expired calibration draft in one call
+        (``proposals.refresh_expired_proposals``): each draft's
+        evidence scan re-runs individually — renewed with a fresh
+        snapshot or withdrawn with its reason — and the report
+        lists the two outcomes side by side. Nothing is decided
+        by the sweep."""
+        from .proposals import refresh_expired_proposals
+
+        store = self._get_store()
+        return refresh_expired_proposals(store, store.all_records(), actor)
+
     def revert_diff_threshold_settings(self, actor: str) -> dict:
         """Revert the threshold settings record's latest accepted
         change (``proposals.revert_threshold_settings``): the

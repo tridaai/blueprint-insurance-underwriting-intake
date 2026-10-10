@@ -308,6 +308,19 @@ def draft_calibration_proposals() -> dict:
     return service.draft_calibration_proposals()
 
 
+@app.post("/calibration/proposals/refresh-expired", dependencies=_AUTH)
+def refresh_expired_calibration_proposals(request: DecisionRequest) -> dict:
+    """Refresh every expired proposal in one call: each expired
+    draft's evidence scan re-runs individually against today's
+    store — renewed in place with a fresh snapshot, or withdrawn
+    when the evidence no longer carries the move — and the report
+    lists renewals and withdrawals side by side. The sweep decides
+    nothing; a renewed draft still waits for its human."""
+    return service.refresh_expired_calibration_proposals(
+        _decision_actor(request)
+    )
+
+
 @app.post("/calibration/proposals/{proposal_id}/decide", dependencies=_AUTH)
 def decide_calibration_proposal(
     proposal_id: str, request: ProposalDecisionRequest

@@ -965,3 +965,51 @@ def refresh_proposal(
     proposal.setdefault("refreshes", []).append(entry)
     _save_proposals(store, proposals)
     return proposal
+
+
+def refresh_expired_proposals(
+    store: Store,
+    records: list[ApprovalRecord],
+    actor: str,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """Refresh every expired draft in one operator call.
+
+    The sweep is a loop, not a shortcut: each expired draft goes
+    through :func:`refresh_proposal` on its own — its own evidence
+    scan re-run against the store as it stands, its own refresh
+    entry appended to its own audit list, renewed or withdrawn on
+    its own evidence. Nothing is bulk-decided: a renewed draft
+    still waits for a human decision, and a draft whose evidence
+    no longer holds is withdrawn one by one, with its reason.
+    Live drafts are untouched (their evidence is current by
+    definition) and decided or withdrawn proposals are history.
+
+    Returns the sweep report: the renewed drafts and the
+    withdrawn ones, side by side, each annotated with its new
+    expiry state.
+    """
+    now_dt = _now_dt(now)
+    expired_ids = [
+        p["proposal_id"]
+        for p in load_proposals(store)
+        if is_expired(p, now_dt)
+    ]
+    renewed: list[dict] = []
+    withdrawn: list[dict] = []
+    for proposal_id in expired_ids:
+        refreshed = refresh_proposal(store, records, proposal_id, actor, now=now_dt)
+        target = renewed if refreshed["status"] == "draft" else withdrawn
+        target.append(annotate_proposal(refreshed, now_dt))
+    return {
+        "refreshed_at": _fmt(now_dt),
+        "by": actor,
+        "renewed": renewed,
+        "withdrawn": withdrawn,
+        "counts": {
+            "swept": len(expired_ids),
+            "renewed": len(renewed),
+            "withdrawn": len(withdrawn),
+        },
+    }
