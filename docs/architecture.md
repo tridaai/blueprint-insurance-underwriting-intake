@@ -987,6 +987,40 @@ numbers on the submission and its loss records. Line aliases fold too
   re-telling by hand, patience, a decision); inside a band
   the oldest acknowledgement still leads, so round 16's pin
   survives as the unannounced band's own rule.
+- **Round 24 states the fates round 23 left silent, and
+  counts them.** (1) A citation whose report a prune removed
+  no longer 404s like a name that never existed: the shared
+  snapshot prune entry now also keeps the label each pruned
+  report wore when it left (`pruned_labels`, named in the
+  preview before the act), and the by-label read answers
+  such a label with a **tombstone**
+  (`calibration_snapshot_tombstone`) — the label it wore at
+  the prune, the rename chain that led there, the prune
+  itself (who, when) — returning no report; the 404 survives
+  only for names that never named anything, and round 23's
+  no-resurrection pin is reversed in its silence only: a
+  tombstone is not a report. (2) The queue read **counts the
+  telling's bands** (`telling_band_counts`), composed from
+  the same entries round 23's ordering reads, in band order
+  with the unannounced first, zero-filled — the ordered list
+  shows the work, the counts state its shape, and the two
+  cannot disagree; the console header names them. (3) The
+  re-ask steps get the broker annotation's honesty from the
+  proposals document's own prune record: the proposals prune
+  entry counts the `previously_decided` markers it removed
+  (`pruned_reasks`), and the trend annotates each re-ask
+  step down a prune inside the step's window explains — the
+  step is retention, not the prune-then-re-ask loop
+  converging; a prune that removed no markers explains
+  nothing, and a step no prune explains is left unannotated.
+  (4) The repairing reads are **recorded**: each successor
+  or tombstone answer appends one note to the calibration
+  document's `citation_traffic` — the one write a read makes
+  on this document, and only the answering kinds make it (a
+  direct hit and a 404 record nothing) — and /metrics counts
+  the notes as a family (answers, split by kind, per cited
+  label, per successor target), so a label everyone still
+  cites shows as a number: a rename that didn't take.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 

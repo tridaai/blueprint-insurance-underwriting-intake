@@ -235,7 +235,14 @@ it crossed the rung with no telling — so the underwriter who
 picks the case up reads whether the escalation webhook
 landed, is in trouble, spent its ledger, or was never fired,
 in the same words the morning digest used, not a raw notice
-to interpret on the spot.
+to interpret on the spot. The queue read also **counts the
+telling's bands** (`telling_band_counts`, beside
+`items_with_escalated_acknowledgements`): the ordered list
+shows the work, the counts state its shape — how many cases
+nobody has heard about, against how many merely wait on a
+decision — composed from the same entries the ordering
+reads, in band order with the unannounced named first, so
+the two can never disagree.
 Webhook dispatches can be HMAC-signed (`ACTION_WEBHOOK_SECRET`) so
 the receiving system can verify the packet's origin. Every dispatch
 is recorded in a **delivery ledger** on the record — attempt number,
@@ -387,7 +394,14 @@ snapshots steps them *down* with no report going undrafted —
 each such step carries an annotation naming the prune inside
 its window (who, when, how many events left), so the step
 reads as retention, not a drafting collapse; a step down no
-prune explains is left unannotated. And
+prune explains is left unannotated. The **re-ask counts**
+get the same honesty from the proposals document's own
+prune record: they are computed from the proposals as they
+stand, so a proposals prune that removes decided re-asks
+(the prune entry counts them, `pruned_reasks`) steps them
+down with the loop no closer to converging — each such step
+is annotated naming the prune, so the step reads as
+retention, not the loop converging. And
 once a snapshot exists the digest itself is **trend-aware**: it
 carries a `movement` block reading the live counts and section
 membership against the latest snapshot's (change and direction
@@ -755,7 +769,23 @@ prune that removed its report named, the entry's label
 reading the one the report wore when it left — so the
 addressing history survives the report, and a citation by a
 pruned report's old label 404s with its fate on the record
-rather than into silence.
+rather than into silence. The prune entry also keeps the
+label each pruned report wore when it left (`pruned_labels`,
+named in the preview before the act), and the by-label read
+now answers a pruned report's label with a **tombstone**
+instead of that 404: the cited label, the report it named,
+the label it wore when it left, the rename chain that led
+there, and the prune itself (who, when) — its fate stated
+plainly, returning no report; the 404 survives only for a
+name that never named anything. Each repairing answer is
+also **recorded** — the one write a read makes on this
+document: a note per successor or tombstone answer, counted
+by `/metrics` as the `citation_traffic` family (answers in
+total, split by kind, per cited label, per successor
+target), so renamed-and-pruned citation traffic is visible
+as a number — a label everyone still cites is a rename that
+didn't take, and the console's calibration panel shows the
+counts beside the rename log.
 
 Two disciplines keep the proposals honest over time. A draft's
 evidence is a snapshot, so drafts **expire** (`PROPOSAL_EXPIRY_DAYS`,
