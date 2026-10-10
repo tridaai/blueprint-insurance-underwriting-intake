@@ -83,6 +83,12 @@
       <div id="queue" class="empty">Loading…</div>
     </section>
     <section>
+      <h2>Dispatch ops</h2>
+      <div id="dispatch" class="empty">Loading…</div>
+      <div class="row" style="margin-top:10px"><button id="retry-due">Retry all due</button>
+      <span class="note" id="dispatch-status"></span></div>
+    </section>
+    <section>
       <h2>How it works</h2>
       <p class="note">extract → ingest (computed facts) → injection screen → triage (rules + LLM cross-check) → guideline retrieval → diagnosis (bounded tool loop) → scored options → draft letter + packet → self-verify → independent review → guardrails → <strong>underwriter gate</strong>. Code computes the numbers; the model does language work; the human decides.</p>
     </section>
@@ -218,6 +224,49 @@ async function loadQueue() {
   }
 }
 
+async function loadDispatch() {
+  try {
+    const res = await fetch('/dispatch', {headers: headers()});
+    if (!res.ok) throw new Error('none');
+    const d = await res.json();
+    if (!d.attempts_total) {
+      $('dispatch').innerHTML = '<span class="empty">No webhook dispatches yet — a dispatch happens on approval when ACTION_WEBHOOK_URL is configured.</span>';
+      return;
+    }
+    let html = `<p class="note">${esc(d.attempts_total)} attempt(s) across ${esc(d.records_with_attempts)} record(s) · ${esc(d.sent_records)} delivered · ${esc(d.failed_records)} failing${d.oldest_failure_at ? ' · oldest failure ' + esc(d.oldest_failure_at) : ''}</p>`;
+    if (d.failures && d.failures.length) {
+      html += `<table><thead><tr><th>Submission</th><th>Attempts</th><th>Last error</th><th>Retry</th><th></th></tr></thead><tbody>
+      ${d.failures.map(f => `<tr><td>${esc(f.submission_id)}<br><span class="note">${esc(f.insured_name)}</span></td><td>${esc(f.attempts)}</td><td>${esc(f.last_http_status ? 'HTTP ' + f.last_http_status : f.last_error || '—')}</td><td>${f.retry_due ? pill('due', 'warn') : `<span class="note">in ${esc(f.next_backoff_seconds)}s backoff</span>`}</td><td><button data-retry="${esc(f.submission_id)}">Retry</button></td></tr>`).join('')}
+      </tbody></table>`;
+    }
+    $('dispatch').innerHTML = html;
+    document.querySelectorAll('[data-retry]').forEach(btn =>
+      btn.addEventListener('click', () => retryOne(btn.getAttribute('data-retry'))));
+  } catch (e) {
+    $('dispatch').innerHTML = '<span class="empty">Dispatch view unavailable.</span>';
+  }
+}
+
+async function retryOne(submissionId) {
+  $('dispatch-status').textContent = 'Retrying ' + submissionId + '…';
+  const res = await fetch(`/submissions/${submissionId}/dispatch/retry`, {method: 'POST', headers: headers()});
+  const body = await res.json().catch(() => ({}));
+  $('dispatch-status').textContent = res.ok
+    ? `${submissionId}: dispatch ${body.dispatch_status} after ${body.dispatch_attempts ? body.dispatch_attempts.length : ''} attempt(s).`
+    : 'Error ' + res.status + ': ' + (body.detail || '');
+  loadDispatch();
+}
+
+async function retryDue() {
+  $('dispatch-status').textContent = 'Retrying failed dispatches…';
+  const res = await fetch('/dispatch/retry-failed', {method: 'POST', headers: headers()});
+  const body = await res.json().catch(() => ({}));
+  $('dispatch-status').textContent = res.ok
+    ? `Retried ${body.count}: ` + (body.retried || []).map(o => `${o.submission_id} → ${o.dispatch_status || 'error'}`).join(', ')
+    : 'Error ' + res.status;
+  loadDispatch();
+}
+
 function render(result) {
   currentId = result.submission_id;
   currentValid = !!(result.validation && result.validation.passed);
@@ -321,6 +370,7 @@ async function analyze() {
   render(result);
   loadInbox();
   loadQueue();
+  loadDispatch();
 }
 
 async function decide(path) {
@@ -336,17 +386,20 @@ async function decide(path) {
   render(body);
   loadInbox();
   loadQueue();
+  loadDispatch();
   $('gate-section').style.display = 'none';
 }
 
 $('analyze').addEventListener('click', analyze);
 $('approve').addEventListener('click', () => decide('approve'));
 $('reject').addEventListener('click', () => decide('reject'));
-$('refresh-inbox').addEventListener('click', () => { loadInbox(); loadQueue(); });
+$('refresh-inbox').addEventListener('click', () => { loadInbox(); loadQueue(); loadDispatch(); });
+$('retry-due').addEventListener('click', retryDue);
 loadSamples();
 loadEvals();
 loadInbox();
 loadQueue();
+loadDispatch();
 </script>
 </body>
 </html>

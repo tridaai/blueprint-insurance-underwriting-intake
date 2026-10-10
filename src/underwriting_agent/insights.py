@@ -22,7 +22,7 @@ from __future__ import annotations
 import csv
 import io
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .facts import _parse_date
 from .store import ApprovalRecord, history_entry
@@ -329,12 +329,26 @@ def compute_metrics(records: list[ApprovalRecord]) -> dict:
             output_tokens += telemetry.output_tokens or 0
         if telemetry.estimated_cost_usd is not None:
             costs.append(telemetry.estimated_cost_usd)
+    dispatch_attempts = 0
+    dispatch_sent = 0
+    dispatch_failed = 0
+    for record in records:
+        dispatch_attempts += len(record.dispatch_attempts or [])
+        if record.dispatch_status == "sent":
+            dispatch_sent += 1
+        elif record.dispatch_status == "failed":
+            dispatch_failed += 1
     decisions = statuses.get("approved", 0) + statuses.get("rejected", 0)
     return {
         "runs": len(records),
         "awaiting_underwriter": statuses.get("awaiting_underwriter", 0),
         "approved": statuses.get("approved", 0),
         "rejected": statuses.get("rejected", 0),
+        "dispatch": {
+            "attempts": dispatch_attempts,
+            "sent_records": dispatch_sent,
+            "failed_records": dispatch_failed,
+        },
         "approval_rate": (
             round(statuses.get("approved", 0) / decisions, 3) if decisions else None
         ),
@@ -510,3 +524,97 @@ def audit_csv(rows: list[dict]) -> str:
     for row in rows:
         writer.writerow({column: row.get(column) for column in AUDIT_COLUMNS})
     return buffer.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Dispatch operations — the webhook ledgers, read as one surface
+# ---------------------------------------------------------------------------
+
+
+def _next_backoff_seconds(attempts_made: int) -> float:
+    """The backoff the retry schedule assigns the *next* attempt.
+
+    Mirrors the schedule ``service._dispatch_once`` records: the
+    first retry waits 30s, doubling to a 600s cap.
+    """
+    if attempts_made < 1:
+        return 0
+    return min(30 * 2 ** (attempts_made - 1), 600)
+
+
+def _parse_timestamp(raw: str) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def dispatch_overview(
+    records: list[ApprovalRecord], now: datetime | None = None
+) -> dict:
+    """The dispatch operations view over every record's ledger.
+
+    Each approval-webhook ledger answers for its own submission;
+    this is the surface over all of them: how many deliveries were
+    attempted, which records' latest attempt failed (oldest failure
+    first — that is the order an operator works them), and which of
+    those failures are *due* a retry under the recorded backoff
+    schedule (last attempt + the next attempt's backoff <= now).
+    Retries stay operator-triggered; "due" is the schedule's word,
+    computed here, not a timer the service runs.
+    """
+    now = now or datetime.now(timezone.utc)
+    attempts_total = 0
+    sent_records = 0
+    failures: list[dict] = []
+    oldest_failure_at: str | None = None
+    oldest_key: datetime | None = None
+    for record in records:
+        attempts = record.dispatch_attempts or []
+        attempts_total += len(attempts)
+        if not attempts:
+            continue
+        if record.dispatch_status == "sent":
+            sent_records += 1
+            continue
+        if record.dispatch_status != "failed":
+            continue
+        entry = history_entry(record)
+        last = attempts[-1]
+        last_at = _parse_timestamp(last.get("attempted_at") or "")
+        backoff = _next_backoff_seconds(len(attempts))
+        due_at = last_at + timedelta(seconds=backoff) if last_at else None
+        failures.append(
+            {
+                "submission_id": record.result.submission_id,
+                "insured_name": entry["insured_name"],
+                "broker_name": entry["broker_name"],
+                "attempts": len(attempts),
+                "last_attempt_at": last.get("attempted_at") or "",
+                "last_http_status": last.get("http_status"),
+                "last_error": last.get("error"),
+                "next_attempt": len(attempts) + 1,
+                "next_backoff_seconds": backoff,
+                "retry_due": due_at is None or now >= due_at,
+                "_sort": last_at or datetime.max.replace(tzinfo=timezone.utc),
+            }
+        )
+        if last_at is not None and (oldest_key is None or last_at < oldest_key):
+            oldest_key = last_at
+            oldest_failure_at = last.get("attempted_at")
+    failures.sort(key=lambda f: (f["_sort"], f["submission_id"]))
+    for failure in failures:
+        failure.pop("_sort", None)
+    return {
+        "generated_at": now.isoformat(timespec="seconds"),
+        "attempts_total": attempts_total,
+        "records_with_attempts": sent_records + len(failures),
+        "sent_records": sent_records,
+        "failed_records": len(failures),
+        "due_retries": [f for f in failures if f["retry_due"]],
+        "failures": failures,
+        "oldest_failure_at": oldest_failure_at,
+    }

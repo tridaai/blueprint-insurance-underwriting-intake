@@ -56,6 +56,7 @@ from .insights import (
     audit_rows,
     broker_quality_report,
     compute_metrics,
+    dispatch_overview,
     inbox_groups,
     queue_aging,
     scorecard,
@@ -960,6 +961,41 @@ class SubmissionService:
             "dispatch_status": record.dispatch_status,
             "attempts": record.dispatch_attempts,
         }
+
+    def dispatch_ops(self) -> dict:
+        """The dispatch operations view: every record's webhook
+        ledger read as one surface — attempts, failures (oldest
+        first), and which failures are due a retry under the
+        recorded backoff schedule (``insights.dispatch_overview``)."""
+        return dispatch_overview(self._get_store().all_records())
+
+    def retry_failed_dispatches(self) -> list[dict]:
+        """Retry every record whose latest dispatch failed.
+
+        The bulk companion to :meth:`retry_dispatch`: one outcome
+        per failed record — the new dispatch status, or the error
+        that left it failed (receiver still down, webhook since
+        unconfigured). Records that are not failed are untouched,
+        and one record's failure never stops the rest.
+        """
+        outcomes: list[dict] = []
+        for record in self._get_store().all_records():
+            if record.dispatch_status != "failed":
+                continue
+            submission_id = record.result.submission_id
+            try:
+                result = self.retry_dispatch(submission_id)
+            except ValueError as exc:
+                outcomes.append({"submission_id": submission_id, "error": str(exc)})
+                continue
+            outcomes.append(
+                {
+                    "submission_id": submission_id,
+                    "dispatch_status": result.dispatch_status,
+                    "attempts": len(result.dispatch_attempts),
+                }
+            )
+        return outcomes
 
     def get(self, submission_id: str) -> AgentResult | None:
         record = self._get_store().get(submission_id)

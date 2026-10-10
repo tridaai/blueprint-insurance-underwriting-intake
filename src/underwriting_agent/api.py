@@ -280,8 +280,25 @@ def queue_aging_view() -> dict:
 @app.get("/metrics", dependencies=_AUTH)
 def metrics() -> dict:
     """Operational aggregates over the store: runs, decisions,
-    outcome mix, model calls/tokens/cost, latency."""
+    outcome mix, model calls/tokens/cost, latency, dispatch totals."""
     return service.metrics()
+
+
+@app.get("/dispatch", dependencies=_AUTH)
+def dispatch_ops() -> dict:
+    """Dispatch operations: the approval-webhook ledgers across all
+    records — total attempts, records delivered, failures (oldest
+    first) with their last error, and which failures are due a
+    retry under the recorded backoff schedule."""
+    return service.dispatch_ops()
+
+
+@app.post("/dispatch/retry-failed", dependencies=_AUTH)
+def dispatch_retry_failed() -> dict:
+    """Retry every failed approval-webhook dispatch. One outcome
+    per failed record; approvals themselves are never rewritten."""
+    outcomes = service.retry_failed_dispatches()
+    return {"count": len(outcomes), "retried": outcomes}
 
 
 @app.get("/audit/export", dependencies=_AUTH)
