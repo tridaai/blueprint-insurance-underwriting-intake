@@ -74,7 +74,7 @@ what a managed-services deployment maps onto directly:
                   ┌──────────────────┐ ┌───────────────┐ ┌────────────┐
                   │ PostgreSQL       │ │ S3-compatible │ │ model      │
                   │ + pgvector       │ │ bucket        │ │ provider / │
-                  │ · approval store │ │ (MinIO in     │ │ Ollama /   │
+                  │ · approval store │ │ (SeaweedFS in │ │ Ollama /   │
                   │ · checkpoints    │ │  compose)     │ │ NVIDIA NIM │
                   │ · guideline      │ │ submission    │ │            │
                   │   embeddings     │ │ documents     │ │            │
@@ -1110,7 +1110,8 @@ honest list:
   guardrails, not language quality.
 - Extraction consumes document text only; scanned-document OCR is
   out of scope (adapter concern).
-- Docker stacks are reviewed but not build-verified in the
-  development environment (no Docker daemon there). The Postgres,
-  checkpointer, and pgvector paths *are* verified against a real
-  PostgreSQL by the gated integration tests.
+- Docker stacks are build-verified: `docker compose build` succeeds
+  and the full stack runs healthy (verified on a developer machine,
+  2026-10-10; the authoring sandbox itself has no Docker daemon).
+  The Postgres, checkpointer, and pgvector paths *are* verified
+  against a real PostgreSQL by the gated integration tests.

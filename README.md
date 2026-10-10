@@ -1022,10 +1022,11 @@ numbered SQL migrations applied at startup; the API emits
 (liveness) and `/readiness` (database ping).
 
 - **Compose stack (the production shape)** — `docker compose up --build`
-  brings up the api + PostgreSQL (pgvector image) + MinIO, wired by
+  brings up the api + PostgreSQL (pgvector image) + SeaweedFS
+  (S3-compatible gateway), wired by
   `DATABASE_URL` / `S3_*`. Add
   `-f docker-compose.local.yml --profile local-llm` for a fully
-  local Ollama model and host-published db/MinIO ports for tooling.
+  local Ollama model and host-published db/S3 ports for tooling.
 - **Your own infrastructure** — run the image (multi-stage
   Dockerfile, non-root, healthcheck) anywhere and point
   `DATABASE_URL` at a managed Postgres with pgvector and `S3_BUCKET`
@@ -1037,14 +1038,16 @@ numbered SQL migrations applied at startup; the API emits
   implementations remain in the codebase as test doubles only;
   there is no local-file runtime mode.)
 
-> The Dockerfile and compose stacks are carefully reviewed against
-> the services' documented configuration, but they have **not been
-> build-verified** in the environment this blueprint was developed
-> in (no Docker daemon there). The Python paths — including the
-> Postgres store, the official Postgres checkpointer, and pgvector
-> retrieval — are verified by the gated integration tests
-> (`tests/test_postgres_integration.py`) against a real PostgreSQL.
-> First `docker compose up` is the stack's first full exercise.
+> The Dockerfile and compose stacks are **build-verified**:
+> `docker compose build` succeeds and the full stack (api +
+> PostgreSQL + SeaweedFS S3 gateway) runs healthy — verified on a
+> developer machine on 2026-10-10 (the sandbox this blueprint was
+> developed in has no Docker daemon, and there is no CI build; the
+> quality gates are the local `make` commands). The Python paths —
+> including the Postgres store, the official Postgres checkpointer,
+> and pgvector retrieval — are verified by the gated integration
+> tests (`tests/test_postgres_integration.py`) against a real
+> PostgreSQL.
 
 ## Architecture
 
