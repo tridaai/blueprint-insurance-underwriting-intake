@@ -1520,6 +1520,10 @@ def calibration_snapshot_diff(older: dict, newer: dict) -> dict:
     label rides the diff (``from_label`` / ``to_label``) so the
     movement reads against the names the debate actually uses;
     a snapshot kept before labels existed reads as unlabelled.
+    The diff also carries the movement as one line of prose
+    (``movement``, see :func:`_calibration_movement_sentence`):
+    the tables are the evidence, but a debate opens with a
+    sentence, and "rows became ready: 3, 5" is not one.
     """
     def _tiers_by_name(snapshot: dict) -> dict[str, dict]:
         return {
@@ -1561,7 +1565,7 @@ def calibration_snapshot_diff(older: dict, newer: dict) -> dict:
             "proposal_ready_entered": sorted(new_ready - old_ready),
             "proposal_ready_cleared": sorted(old_ready - new_ready),
         }
-    return {
+    diff = {
         "from_snapshot": older.get("snapshot_id", ""),
         "to_snapshot": newer.get("snapshot_id", ""),
         "from_taken_at": older.get("taken_at", ""),
@@ -1573,6 +1577,71 @@ def calibration_snapshot_diff(older: dict, newer: dict) -> dict:
         ),
         "tiers": tiers,
     }
+    diff["movement"] = _calibration_movement_sentence(older, tiers)
+    return diff
+
+
+def _rows_phrase(values: list) -> str:
+    """Candidate rows named for prose: "3-day row", "2-day and
+    4-day rows" — the values are day budgets, spoken as the
+    rows the calibration report prints."""
+    if len(values) == 1:
+        return f"{values[0]}-day row"
+    return " and ".join(f"{value}-day" for value in values) + " rows"
+
+
+def _calibration_movement_sentence(older: dict, tiers: dict) -> str:
+    """The calibration diff as one line of prose, in the digest
+    headline's register: movement named by tier and row rather
+    than counted — "Since 'pre-budget-change': the high tier's
+    3-day row became proposal-ready as the budget held at 3
+    days." The anchor is the older report by the handle the
+    debate uses (its label, or its id when it has none). A
+    ready row that appeared while its tier's budget moved says
+    so — evidence growth and a budget change are different
+    arguments — and a tier whose budget moved with no row
+    movement still gets its clause. Nothing moved anywhere:
+    the line says the rows held, rather than going quiet."""
+    label = older.get("label") or ""
+    anchor = (
+        f"'{label}'" if label else older.get("snapshot_id", "")
+    ) or "the earlier report"
+    clauses: list[str] = []
+    for tier, row in tiers.items():
+        budget = row["budget_in_force"]
+        if budget["changed"]:
+            budget_clause = (
+                f" as its budget moved from {budget['from']} to "
+                f"{budget['to']} days"
+            )
+        elif budget["from"] is not None and budget["to"] is not None:
+            budget_clause = f" as the budget held at {budget['to']} days"
+        else:
+            budget_clause = ""
+        entered = row["proposal_ready_entered"]
+        cleared = row["proposal_ready_cleared"]
+        if entered:
+            clauses.append(
+                f"the {tier} tier's {_rows_phrase(entered)} became "
+                f"proposal-ready{budget_clause}"
+            )
+        if cleared:
+            clauses.append(
+                f"the {tier} tier's {_rows_phrase(cleared)} stopped "
+                "being proposal-ready"
+                + (budget_clause if not entered else "")
+            )
+        if not entered and not cleared and budget["changed"]:
+            clauses.append(
+                f"the {tier} tier's budget moved from "
+                f"{budget['from']} to {budget['to']} days"
+            )
+    if not clauses:
+        return (
+            f"Since {anchor}: no proposal-ready movement — every "
+            "tier's ready rows held."
+        )
+    return f"Since {anchor}: " + "; ".join(clauses) + "."
 
 
 def calibration_snapshot_labels(snapshots: list[dict]) -> list[str]:
