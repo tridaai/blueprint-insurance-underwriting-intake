@@ -1635,6 +1635,31 @@ class SubmissionService:
         restore_sla_budget_settings(self._get_store(), history_index, actor)
         return self.sla_budget_settings()
 
+    def preview_restore_diff_threshold_settings(
+        self, history_index: int
+    ) -> dict:
+        """Preview a threshold-settings restore
+        (``proposals.preview_restore_threshold_settings``): the
+        values in force now, the values as of the chosen history
+        entry, and exactly which dimensions would move — a dry
+        run that writes nothing and appends nothing."""
+        from .proposals import preview_restore_threshold_settings
+
+        return preview_restore_threshold_settings(
+            self._get_store(), history_index
+        )
+
+    def preview_restore_sla_budget_settings(
+        self, history_index: int
+    ) -> dict:
+        """Preview an SLA-budget settings restore, the same
+        dry-run way."""
+        from .proposals import preview_restore_sla_budget_settings
+
+        return preview_restore_sla_budget_settings(
+            self._get_store(), history_index
+        )
+
     def decide_calibration_proposal(
         self,
         proposal_id: str,

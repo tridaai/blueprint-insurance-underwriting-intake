@@ -314,6 +314,39 @@ def restore_sla_budget_settings(request: SettingsRestoreRequest) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.post("/calibration/settings/restore/preview", dependencies=_AUTH)
+def preview_restore_threshold_settings(
+    request: SettingsRestoreRequest,
+) -> dict:
+    """Preview a threshold-settings restore: the values in force
+    now, the values as of the chosen history entry, and exactly
+    which dimension values would change — a dry run. Nothing is
+    written and nothing is appended to the record; a preview of
+    a restore that would move nothing says so instead of
+    failing."""
+    try:
+        return service.preview_restore_diff_threshold_settings(
+            request.history_index
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/queue/sla/settings/restore/preview", dependencies=_AUTH)
+def preview_restore_sla_budget_settings(
+    request: SettingsRestoreRequest,
+) -> dict:
+    """Preview an SLA-budget settings restore, the same dry-run
+    way: which tier budgets would change, from what to what,
+    before the operator commits."""
+    try:
+        return service.preview_restore_sla_budget_settings(
+            request.history_index
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.get("/calibration/proposals", dependencies=_AUTH)
 def calibration_proposals() -> dict:
     """Every stored calibration proposal with the thresholds in

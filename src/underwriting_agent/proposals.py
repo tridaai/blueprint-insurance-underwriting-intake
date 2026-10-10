@@ -418,6 +418,57 @@ def _values_as_of(base: dict, history: list[dict], index: int, cast) -> dict:
     return values
 
 
+def _restore_plan(
+    store: Store,
+    *,
+    key: str,
+    label: str,
+    base_values: dict,
+    current_values: dict,
+    history_index: int,
+    cast,
+) -> dict:
+    """The dry run of a restore: the values in force as of the
+    chosen history entry, and exactly which dimensions a restore
+    to it would move — computed without writing anything. The
+    restore itself and its preview share this plan, so a preview
+    cannot promise a different restore than the one that lands.
+    Raises the same no-history / out-of-range errors the restore
+    raises; a restore that would move nothing is NOT an error
+    here — ``would_change`` says so, and the preview exists
+    precisely to surface that before anyone commits to it.
+    """
+    document = store.get_document(key)
+    history = list((document or {}).get("history") or [])
+    if not document or not history:
+        raise ValueError(
+            f"Nothing to restore — the {label} settings record has no "
+            "accepted change in its history"
+        )
+    if not 0 <= history_index < len(history):
+        raise ValueError(
+            f"History index {history_index} is out of range — the "
+            f"{label} settings record has {len(history)} history "
+            f"entries (0 to {len(history) - 1})"
+        )
+    target = _values_as_of(base_values, history, history_index, cast)
+    changes = [
+        {"dimension": dimension, "from": current_values[dimension], "to": target[dimension]}
+        for dimension in target
+        if current_values.get(dimension) != target[dimension]
+    ]
+    return {
+        "label": label,
+        "history_index": history_index,
+        "restores_proposal_id": history[history_index].get("proposal_id"),
+        "current_values": dict(current_values),
+        "target_values": target,
+        "changes": changes,
+        "would_change": bool(changes),
+        "history": history,
+    }
+
+
 def _restore_settings_to_entry(
     store: Store,
     *,
@@ -444,31 +495,23 @@ def _restore_settings_to_entry(
     and the restore itself can be reverted like any other entry.
     Returns the updated document.
     """
-    document = store.get_document(key)
-    history = list((document or {}).get("history") or [])
-    if not document or not history:
-        raise ValueError(
-            f"Nothing to restore — the {label} settings record has no "
-            "accepted change in its history"
-        )
-    if not 0 <= history_index < len(history):
-        raise ValueError(
-            f"History index {history_index} is out of range — the "
-            f"{label} settings record has {len(history)} history "
-            f"entries (0 to {len(history) - 1})"
-        )
-    target = _values_as_of(base_values, history, history_index, cast)
-    changes = [
-        {"dimension": dimension, "from": current_values[dimension], "to": target[dimension]}
-        for dimension in target
-        if current_values.get(dimension) != target[dimension]
-    ]
+    plan = _restore_plan(
+        store,
+        key=key,
+        label=label,
+        base_values=base_values,
+        current_values=current_values,
+        history_index=history_index,
+        cast=cast,
+    )
+    changes = plan["changes"]
     if not changes:
         raise ValueError(
             f"The {label} settings already match history entry "
             f"{history_index} — restoring it would change nothing"
         )
-    restored_entry = history[history_index]
+    target = plan["target_values"]
+    restored_entry = plan["history"][history_index]
     at = _fmt(_now_dt(now))
     entry = {
         "proposal_id": restored_entry.get("proposal_id"),
@@ -484,10 +527,81 @@ def _restore_settings_to_entry(
         "updated_by": actor,
         "updated_at": at,
         "proposal_id": restored_entry.get("proposal_id"),
-        "history": [*history, entry],
+        "history": [*plan["history"], entry],
     }
     store.save_document(key, updated)
     return updated
+
+
+def _preview_restore(
+    store: Store,
+    *,
+    key: str,
+    label: str,
+    base_values: dict,
+    current_values: dict,
+    history_index: int,
+    cast,
+) -> dict:
+    """A restore preview: the shared plan (see
+    :func:`_restore_plan`) with the internal replay state left
+    out — what an operator reads before committing to a restore.
+    Nothing is written, and nothing is appended: previewing a
+    restore is not itself a change on the record."""
+    plan = _restore_plan(
+        store,
+        key=key,
+        label=label,
+        base_values=base_values,
+        current_values=current_values,
+        history_index=history_index,
+        cast=cast,
+    )
+    return {
+        field: plan[field]
+        for field in (
+            "label",
+            "history_index",
+            "restores_proposal_id",
+            "current_values",
+            "target_values",
+            "changes",
+            "would_change",
+        )
+    }
+
+
+def preview_restore_threshold_settings(
+    store: Store, history_index: int
+) -> dict:
+    """Preview restoring the threshold settings record to a
+    chosen history entry's state: which dimensions would move,
+    from what to what — before anything is written."""
+    return _preview_restore(
+        store,
+        key=SETTINGS_KEY,
+        label="thresholds",
+        base_values=current_thresholds(),
+        current_values=effective_thresholds(store),
+        history_index=history_index,
+        cast=float,
+    )
+
+
+def preview_restore_sla_budget_settings(
+    store: Store, history_index: int
+) -> dict:
+    """Preview restoring the SLA-budget settings record to a
+    chosen history entry's state, the same dry-run way."""
+    return _preview_restore(
+        store,
+        key=SLA_SETTINGS_KEY,
+        label="budgets",
+        base_values=sla_budgets(),
+        current_values=effective_sla_budgets(store),
+        history_index=history_index,
+        cast=lambda v: max(0, int(v)),
+    )
 
 
 def restore_threshold_settings(
