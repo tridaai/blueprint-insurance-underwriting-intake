@@ -101,7 +101,10 @@ extract → ingest → screen → classify → retrieve ∥ discrepancies ∥ hi
    highly confident — and flagged when adopted).
 5. **Retrieve** — the synthetic underwriting guidelines behind a
    retriever interface: keyword, semantic, or **hybrid with RRF
-   reranking** (Chroma optional; in-memory cosine otherwise).
+   reranking**. Semantic vectors live in **pgvector** in the same
+   PostgreSQL as everything else when `DATABASE_URL` is set (a
+   Chroma server is a supported alternative; in-memory cosine serves
+   offline runs).
 6. **Diagnose** — a risk summary over evidence assembled in code:
    facts, discrepancies, triage signals, guideline citations, and —
    when the store has history — **memory** (prior submissions for the
@@ -178,10 +181,13 @@ The seams are the product:
 - **Rules** — appetite classes, authority limits, referral triggers,
   and required elements live in `triage.py` / `facts.py`, in code,
   with tests.
-- **Outputs** — decisions record in the store (SQLite default);
-  `ACTION_WEBHOOK_URL` routes an approved packet to your policy admin
-  system, work queue, or automation endpoint. Nothing else leaves the
-  process, ever.
+- **Outputs** — decisions record in the store (**PostgreSQL** when
+  `DATABASE_URL` is set — the same database holds the gate's
+  checkpoints and the pgvector guideline embeddings; in-memory test
+  doubles otherwise). Submission documents live in **object
+  storage** (S3-compatible) behind a port. `ACTION_WEBHOOK_URL`
+  routes an approved packet to your policy admin system, work queue,
+  or automation endpoint. Nothing else leaves the process, ever.
 
 ### The intake contract
 
@@ -212,7 +218,10 @@ The seams are the product:
 - [uv](https://docs.astral.sh/uv/) (primary) or pip with
   `constraints.txt` (fallback)
 - Optional: a provider API key for the real LLM paths, or Ollama for
-  a fully local run; the `vectordb` extra for Chroma
+  a fully local run
+- For the production persistence shape: PostgreSQL with the
+  pgvector extension (or just Docker — the compose stack brings one
+  up) and any S3-compatible bucket
 
 ## Quickstart
 
@@ -234,6 +243,16 @@ make evals   # golden-dataset gate (28 cases)
 Without any key configured, everything above still runs — on the
 offline template fallback, labelled as such in every surface.
 
+Against a real database, the gated integration tests exercise the
+production persistence path (Postgres store, the official LangGraph
+Postgres checkpointer, pgvector retrieval) and skip cleanly without
+the variable:
+
+```bash
+DATABASE_URL=postgresql://user:pass@host:5432/underwriting \
+  uv run pytest tests/test_postgres_integration.py
+```
+
 ## Configuration
 
 All configuration is environment variables (`.env` supported; real
@@ -254,8 +273,10 @@ load-bearing ones:
 | `DIAGNOSIS_MAX_TOOL_CALLS` | 0–6 | `4` |
 | `ACTION_WEBHOOK_URL` | approval dispatch endpoint | off |
 | `API_KEY` | optional `X-API-Key` gate for the API | off |
-| `STATE_DB_PATH` | SQLite path, or `:memory:` | `.data/` |
-| `CHECKPOINTS` / `CHECKPOINT_DB_PATH` | gate checkpointing | on |
+| `DATABASE_URL` | PostgreSQL DSN — store, checkpoints, pgvector | unset → in-memory test doubles |
+| `S3_BUCKET` / `S3_ENDPOINT_URL` / `S3_REGION` | document object storage (S3-compatible) | unset → documents inline only |
+| `CHECKPOINTS` | gate checkpointing `on`/`off` | `on` |
+| `LOG_LEVEL` | API JSON log level | `INFO` |
 
 **NVIDIA NIM** works through the OpenAI-compatible profile, the same
 way NVIDIA's own blueprints deploy: hosted —
@@ -270,17 +291,38 @@ model (`claude-haiku-4-5`) exercises every path.
 
 ## Deployment options
 
-- **Local** — `uv run uvicorn underwriting_agent.api:app --port 8000`.
-- **Local real stack** — agent + Ollama + Chroma in one compose
-  command:
-  `docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local up`
-  (then pull `llama3.1` and `nomic-embed-text` once).
-- **Docker** — `docker compose up` (agent only, offline fallback).
+The runtime is **production-shaped**: the API process is stateless
+and keeps nothing on local disk. Records, gate checkpoints, and
+guideline vectors live in **PostgreSQL + pgvector**; submission
+documents live in **S3-compatible object storage**; schema ships as
+numbered SQL migrations applied at startup; the API emits
+**structured JSON logs with request IDs** and exposes `/health`
+(liveness) and `/readiness` (database ping).
 
-> The Dockerfiles and compose stacks are carefully reviewed against
+- **Compose stack (the production shape)** — `docker compose up --build`
+  brings up the api + PostgreSQL (pgvector image) + MinIO, wired by
+  `DATABASE_URL` / `S3_*`. Add
+  `-f docker-compose.local.yml --profile local-llm` for a fully
+  local Ollama model and host-published db/MinIO ports for tooling.
+- **Your own infrastructure** — run the image (multi-stage
+  Dockerfile, non-root, healthcheck) anywhere and point
+  `DATABASE_URL` at a managed Postgres with pgvector and `S3_BUCKET`
+  at your bucket. Scale the api horizontally; the state is all in
+  Postgres and the bucket.
+- **Local dev** — `uv run uvicorn underwriting_agent.api:app --port 8000`.
+  With no `DATABASE_URL` this runs on in-memory **test doubles** —
+  nothing persists, and `/readiness` says so. (SQLite/InMemory
+  implementations remain in the codebase as test doubles only;
+  there is no local-file runtime mode.)
+
+> The Dockerfile and compose stacks are carefully reviewed against
 > the services' documented configuration, but they have **not been
-> build-verified** in the environment this blueprint was developed in
-> (no Docker daemon there). First `docker compose up` is the test.
+> build-verified** in the environment this blueprint was developed
+> in (no Docker daemon there). The Python paths — including the
+> Postgres store, the official Postgres checkpointer, and pgvector
+> retrieval — are verified by the gated integration tests
+> (`tests/test_postgres_integration.py`) against a real PostgreSQL.
+> First `docker compose up` is the stack's first full exercise.
 
 ## Architecture
 
@@ -325,27 +367,39 @@ src/underwriting_agent/
   autonomy.py       auto-triage recommendation (never acted on)
   clarify.py        information-request flow
   graph.py          the LangGraph pipeline + checkpointed gate
-  checkpoints.py    SQLite checkpointer (stdlib)
-  store.py          approval store: SQLite / in-memory
+  checkpoints.py    checkpointer selection: official Postgres saver /
+                    in-memory double; stdlib-SQLite saver for tests
+  store.py          approval store: PostgreSQL (system of record) /
+                    SQLite + in-memory test doubles
+  db.py             DATABASE_URL handling + the migration runner
+  object_store.py   submission documents: S3-compatible / in-memory
+  observability.py  JSON logs + request IDs
   service.py        run + decision bookkeeping, batch, webhook
   wiring.py         composition root
   ports.py          the seams, as protocols
   api.py / cli.py / demo.py / static/   surfaces
+migrations/         numbered SQL schema (extensions, approvals,
+                    guideline embeddings), applied at startup
 evals/              golden.jsonl + runners (deterministic + LLM-judge)
 data/sample/        sample submissions + guidelines (mirrors)
-tests/              the pytest suite
+tests/              the pytest suite (hermetic) + DATABASE_URL-gated
+                    Postgres integration tests
 ```
 
 ## Production hardening — what changes for a real deployment
 
-This is a reference prototype. A production deployment adds: real
-identity and per-broker access control (the optional `API_KEY` is a
-demo gate, not auth), document ingestion from email/portal systems
-with malware scanning, PII handling and retention policies for real
-submission data, your real appetite guide and authority matrix behind
-the rules seam, human-review queueing with SLAs, full audit export,
-and monitoring on the telemetry the pipeline already emits. Section 9
-of the architecture doc lists the full set.
+The infrastructure shape is already the production one (Postgres
+system of record, pgvector, object storage, migrations, stateless
+API, JSON logs, readiness). What a real deployment still adds:
+secrets management and TLS on every hop, database backups, real
+identity (SSO) and per-broker access control (the optional `API_KEY`
+is a demo gate, not auth), document ingestion from email/portal
+systems with malware scanning and OCR, PII handling and retention
+policies for real submission data, your real appetite guide and
+authority matrix behind the rules seam, human-review queueing with
+SLAs, full audit export, and monitoring on the telemetry the
+pipeline already emits. Section 9 of the architecture doc gives the
+honest full list.
 
 ## Limitations
 

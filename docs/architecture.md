@@ -5,6 +5,16 @@ the split between code and model, the cross-check policy, the
 guardrails, the checkpointed gate, and the path to production. It is
 written for the engineer who will take this core and adapt it.
 
+> **Provenance.** The structural approach of this blueprint — NIM
+> endpoint profiles, an eval harness in the repo, guardrails as a
+> first-class component, observability, and decomposable components
+> behind interfaces — follows the conventions NVIDIA's blueprint
+> programme popularised. The implementation and content are original
+> Trida AI work: every line of code, prose, and sample data in this
+> repository was written for this blueprint, and nothing is copied
+> from NVIDIA (or any other) repositories, regardless of what their
+> licences would allow.
+
 ---
 
 ## 1. Problem framing
@@ -37,13 +47,48 @@ submission →│ extract → ingest → screen → classify → ┌ retrieve �
             │ → gate → approval_gate (interrupt)                              │
             └──────────────────────────────────────────────────────────────┘
                                         │ decision (service layer)
-                                 store (SQLite) ──→ optional webhook
+                                 store (PostgreSQL) ──→ optional webhook
 ```
 
-Four replaceable collaborators sit behind protocols (`ports.py`):
-the **model backend**, the **retriever**, the **store**, and the
-**checkpointer**, plus an **event sink** for streaming. `wiring.py`
-is the composition root; everything else programs against the seams.
+Six replaceable collaborators sit behind protocols (`ports.py`):
+the **model backend**, the **retriever**, the **store**, the
+**checkpointer**, the **object store**, and an **event sink** for
+streaming. `wiring.py` is the composition root; everything else
+programs against the seams.
+
+### Production topology
+
+The API process is stateless; every durable thing lives in one
+database and one bucket. This is what the compose stack runs, and
+what a managed-services deployment maps onto directly:
+
+```
+                        ┌─────────────────────────────────────────────┐
+  underwriter / broker  │  api  (stateless, N replicas)               │
+  systems ─── HTTPS ───▶│  FastAPI + LangGraph pipeline               │
+                        │  JSON logs · X-Request-ID · /readiness      │
+                        └──────┬───────────────┬──────────────┬───────┘
+                               │               │              │
+                     DATABASE_URL        S3_*          provider env
+                               ▼               ▼              ▼
+                  ┌──────────────────┐ ┌───────────────┐ ┌────────────┐
+                  │ PostgreSQL       │ │ S3-compatible │ │ model      │
+                  │ + pgvector       │ │ bucket        │ │ provider / │
+                  │ · approval store │ │ (MinIO in     │ │ Ollama /   │
+                  │ · checkpoints    │ │  compose)     │ │ NVIDIA NIM │
+                  │ · guideline      │ │ submission    │ │            │
+                  │   embeddings     │ │ documents     │ │            │
+                  └──────────────────┘ └───────────────┘ └────────────┘
+```
+
+Schema ships as numbered SQL files in `migrations/` and is applied
+at startup by a small runner (`db.py`, recorded in
+`schema_migrations`); the checkpointer's tables are created by the
+official Postgres saver's own `setup()`. The SQLite and in-memory
+store/checkpointer implementations that remain in the codebase are
+**test doubles** — the hermetic suite injects them explicitly, and a
+run without `DATABASE_URL` uses the in-memory pair and persists
+nothing. Local files are not a runtime mode.
 
 The split of responsibilities is the architecture:
 
@@ -209,12 +254,19 @@ from any auto-triage recommendation, but the decision stays human.
 ### 4.8 The gate is checkpointed; the store is the record
 
 With checkpoints on (default), the graph *pauses* at
-`approval_gate` via LangGraph `interrupt()`, its state persisted by a
-stdlib-SQLite checkpointer under the submission id. Approve/reject
-in the service layer record the decision in the store, then resume
-the thread with the decision payload. The store is the decision of
-record; the checkpointer holds graph state. A missing or finished
-thread never blocks a decision — resume is best-effort by design.
+`approval_gate` via LangGraph `interrupt()`, its state persisted
+under the submission id. In the production configuration the
+checkpointer is the **official LangGraph Postgres saver**
+(`langgraph-checkpoint-postgres`) over a psycopg 3 pool, in the same
+PostgreSQL as the store — so one database holds decisions, graph
+state, and (via pgvector, Section 2) the guideline embeddings.
+Approve/reject in the service layer record the decision in the
+store, then resume the thread with the decision payload. The store
+is the decision of record; the checkpointer holds graph state. A
+missing or finished thread never blocks a decision — resume is
+best-effort by design. The stdlib-SQLite saver implementation is
+retained for the test suite, which exercises the same
+pause/resume contract without a server.
 
 ### 4.9 Memory and the feedback loop
 
@@ -273,12 +325,17 @@ numbers on the submission and its loss records. Line aliases fold too
 | Bad submission in a batch | That item carries the error; the batch completes |
 | Webhook down after approval | Approval stands; `dispatch_status=failed` records the follow-up |
 | Checkpoint thread missing at decision time | Decision records in the store anyway; resume is best-effort |
+| Database unreachable | `/readiness` returns 503 so the orchestrator drains the replica; analyses fail loudly rather than falling back to local state |
+| Document fetch from object storage fails | The document's text stays empty; completeness scoring surfaces the gap instead of the run crashing |
+| Document archive write fails | The analysis stands; that document simply carries no `object_key` on the stored payload |
 
 ## 7. Security notes
 
-- **No credentials in the repo.** Keys come from the environment /
-  `.env` (git-ignored); construction and provider errors are
-  translated so a key never appears in a message.
+- **No credentials in the repo.** Keys, `DATABASE_URL`, and bucket
+  credentials come from the environment / `.env` (git-ignored);
+  construction and provider errors are translated so a key never
+  appears in a message. In production these arrive from a secrets
+  manager, not a file (Section 9).
 - **Untrusted text discipline.** Broker text is screened, fenced,
   and never interpolated into system prompts; the guardrails — not
   the model — police what leaves in a letter.
@@ -305,22 +362,53 @@ numbers on the submission and its loss records. Line aliases fold too
 5. **Your provider** — set `MODEL_BACKEND`; run `make llm-evals` and
    read the cross-check agreement before trusting the LLM paths.
 
-## 9. How you would productionise this
+## 9. Production: what is in the blueprint, and what is not
 
-- Real identity (SSO) and per-broker/per-team authorisation; the
-  decision endpoints record *who* — production must prove it.
-- Email/portal ingestion with attachment handling, malware scanning,
-  and OCR/document AI behind the intake contract.
-- Data governance for real submission PII: encryption at rest,
-  retention, redaction in logs and traces.
-- A review queue UI with assignment, SLAs, and bulk actions — the
-  console here is a demo surface.
-- Audit export of decisions, traces, and guardrail verdicts.
-- Monitoring and alerting on the emitted telemetry (provider latency,
-  budget degradations, repair rates, reviewer blocks).
-- Load and soak testing of the batch path; the checkpointer and
-  store move to Postgres behind the same protocols.
-- A real eval program: golden cases grown from (anonymised,
+Already the production shape, in this repo:
+
+- PostgreSQL as the system of record for decisions/history, the
+  official LangGraph Postgres checkpointer for gate state, and
+  pgvector for guideline embeddings — one database, schema owned by
+  numbered migrations applied at startup.
+- Submission documents in S3-compatible object storage behind a
+  port; submissions reference object keys.
+- A stateless API (multi-stage image, non-root, healthcheck),
+  structured JSON logs with request IDs, `/health` + `/readiness`,
+  env-only configuration, graceful shutdown via the lifespan.
+
+What a production deploy still needs beyond the blueprint — the
+honest list:
+
+- **Secrets management.** Compose defaults and `.env` are for
+  reference runs; production injects `DATABASE_URL`, provider keys,
+  and bucket credentials from a secrets manager / workload identity.
+- **TLS everywhere.** API ingress, api→Postgres, and api→object
+  storage are plaintext in the reference stack.
+- **Backups and recovery.** Point-in-time recovery for Postgres and
+  versioning/replication for the documents bucket; the blueprint
+  ships neither policies nor restore drills.
+- **Real identity and authorisation.** SSO plus per-broker/per-team
+  access control; the decision endpoints record *who* — production
+  must prove it. The optional `API_KEY` is a demo gate.
+- **Database HA and connection management at scale.** The app opens
+  short-lived connections per store call and one pool for the
+  checkpointer; a fleet deployment adds a pooler (PgBouncer) and a
+  replicated Postgres.
+- **Ingestion hardening.** Email/portal adapters with attachment
+  handling, malware scanning, and OCR/document AI behind the intake
+  contract.
+- **Data governance for real submission PII.** Encryption at rest,
+  retention schedules, redaction in logs and traces.
+- **A review queue product.** Assignment, SLAs, and bulk actions —
+  the console here is a demo surface.
+- **Audit export** of decisions, traces, and guardrail verdicts.
+- **Monitoring and alerting** on the emitted telemetry and JSON logs
+  (provider latency, budget degradations, repair rates, reviewer
+  blocks, readiness flaps) — the signals exist; the dashboards and
+  paging do not.
+- **Load and soak testing** of the batch path and the gate, and an
+  ANN index (HNSW) once the guideline corpus outgrows exact scans.
+- **A real eval program**: golden cases grown from (anonymised,
   consented) historical submissions, reviewed by underwriters.
 
 ## 10. Limitations of this prototype
@@ -331,7 +419,7 @@ numbers on the submission and its loss records. Line aliases fold too
   guardrails, not language quality.
 - Extraction consumes document text only; scanned-document OCR is
   out of scope (adapter concern).
-- The checkpointer is stdlib SQLite — adequate for a prototype's
-  concurrency, not a production queue.
 - Docker stacks are reviewed but not build-verified in the
-  development environment (no Docker daemon there).
+  development environment (no Docker daemon there). The Postgres,
+  checkpointer, and pgvector paths *are* verified against a real
+  PostgreSQL by the gated integration tests.
