@@ -639,7 +639,7 @@ load-bearing ones:
 **NVIDIA NIM** works through the OpenAI-compatible profile, the same
 way NVIDIA's own blueprints deploy: hosted —
 `OPENAI_BASE_URL=https://integrate.api.nvidia.com/v1`,
-`OPENAI_MODEL=nvidia/llama-3.1-nemotron-70b-instruct`, and your
+`OPENAI_MODEL=nvidia/nemotron-3-super-120b-a12b`, and your
 `nvapi-` key as `OPENAI_API_KEY`; self-hosted —
 `OPENAI_BASE_URL=http://localhost:8000/v1` with the model your NIM
 container serves.
