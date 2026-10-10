@@ -210,6 +210,10 @@ def test_mark_worked_records_the_touch_and_quiets_every_surface():
     digest_view = ops_digest([record], now=NOW)
     assert digest_view["counts"]["follow_through_escalated"] == 0
     assert digest_view["follow_through_escalated"] == []
+    # The ops digest's worked section is what the console renders.
+    worked = digest_view["follow_through_worked"]
+    assert [e["submission_id"] for e in worked] == ["OLD-1"]
+    assert worked[0]["worked"]["worked_by"] == "Uma"
 
 
 def test_mark_worked_refuses_a_second_touch_while_quieted():

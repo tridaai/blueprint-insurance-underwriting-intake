@@ -190,6 +190,20 @@ def test_only_the_second_rung_fires(sink):
     assert sink == []
 
 
+def test_the_queue_entry_carries_the_escalation_notice_state(sink):
+    from underwriting_agent.insights import queue_aging
+
+    service = _service(_rung_record("ESC-1"))
+    record = service._get_store().get("ESC-1")
+    before = queue_aging([record], now=NOW)
+    (entry,) = before["escalated_acknowledgements"]
+    assert entry["escalation_notice"] is None
+    service.notify_acknowledged_escalations(now=NOW)
+    after = queue_aging([record], now=NOW)
+    (entry,) = after["escalated_acknowledgements"]
+    assert entry["escalation_notice"]["dispatch_status"] == "sent"
+
+
 def test_no_webhook_configured_records_nothing(monkeypatch):
     service = _service(_rung_record("ESC-1"))
     out = service.notify_acknowledged_escalations(now=NOW)

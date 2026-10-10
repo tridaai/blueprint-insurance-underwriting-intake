@@ -882,6 +882,7 @@ def queue_aging(
         if follow_escalation_days is not None
         else follow_through_escalation_days()
     )
+    record_by_id = {r.result.submission_id: r for r in records}
     escalated_ack_by_id: dict[str, dict] = {}
     for entry in _exhausted_breach_notices(
         records,
@@ -895,10 +896,16 @@ def queue_aging(
             continue
         ack_age = max(0, (now.date() - acked_at.date()).days)
         if ack_age >= 2 * ack_window:
+            record = record_by_id.get(entry["submission_id"])
             escalated_ack_by_id[entry["submission_id"]] = {
                 **entry,
                 "acknowledged_age_days": ack_age,
                 "escalation_days": 2 * ack_window,
+                # The escalation webhook's state for this case —
+                # null until the escalation check has fired.
+                "escalation_notice": (
+                    record.escalation_notice if record is not None else None
+                ),
             }
     ack_flagged = 0
     for item in all_items:
@@ -2355,6 +2362,7 @@ def ops_digest(
         "breached_queue": queue["breaches"],
         "follow_through_outstanding": outstanding,
         "follow_through_escalated": follow["escalated"],
+        "follow_through_worked": follow["worked"],
         "proposals_expiring_soon": expiring_soon,
         "proposals_expired": expired,
     }
