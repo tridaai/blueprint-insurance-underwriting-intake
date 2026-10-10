@@ -563,7 +563,9 @@ def snapshot_sla_calibration(request: CalibrationSnapshotRequest) -> dict:
     beyond the snapshot id, kept verbatim on the snapshot, its
     list, and its diffs. A label is an address, so a keep whose
     label a kept snapshot already carries is refused (422),
-    naming the holder and the labels in use. Operator-kept,
+    naming the holder and the labels in use — and the label
+    "current" is refused outright: it is reserved for the live
+    side of a diff. Operator-kept,
     never on a timer; snapshots are what the calibration diff
     compares."""
     actor = _decision_actor(request)
@@ -653,9 +655,13 @@ def sla_calibration_snapshot_diff(
     the two latest kept; ``from_label`` / ``to_label`` name a
     side by the label the debate cites (an unnamed side
     defaults to its positional partner, and the pair walks in
-    keep order). An unknown label is a 422 naming the labels in
-    use. Fewer than two snapshots kept is reported as no diff,
-    not as no movement."""
+    keep order). ``to_label=current`` instead diffs a kept
+    report (the ``from_label`` one, or the latest kept) against
+    the live report as it stands now — cited as ``current``,
+    nothing stored; ``current`` as the ``from_label`` is a 422,
+    as is an unknown label, naming the labels in use. Fewer
+    than two snapshots kept is reported as no diff, not as no
+    movement (a lone kept report still diffs against current)."""
     try:
         return service.sla_calibration_snapshot_diff(
             from_label=from_label, to_label=to_label

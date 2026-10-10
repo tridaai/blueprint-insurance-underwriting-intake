@@ -1443,6 +1443,14 @@ def sla_budget_calibration(
 #: one appended document per operator-kept report.
 CALIBRATION_SNAPSHOTS_KEY = "sla_calibration_snapshots"
 
+#: The reserved label for the live side of a calibration diff:
+#: ``to_label=current`` diffs a kept report against the report
+#: as it stands now, shaped in memory and never stored (see
+#: :func:`live_calibration_snapshot`). It is refused as a
+#: keepable label — a label is an address for a kept report,
+#: and "current" names a moving target, not a kept one.
+CURRENT_CALIBRATION_LABEL = "current"
+
 
 def build_calibration_snapshot(
     report: dict,
@@ -1502,6 +1510,28 @@ def build_calibration_snapshot(
     }
 
 
+def live_calibration_snapshot(report: dict) -> dict:
+    """The calibration report as it stands now, in snapshot
+    shape — the newer side of a diff against the live report.
+
+    The debates' commonest question is "what moved since
+    'march'?" against the report as it stands, not against
+    another kept report. This shapes the live report with the
+    same builder the keeps use, under the reserved id and label
+    ``current``, so :func:`calibration_snapshot_diff` reads it
+    exactly as it reads a kept report and the diff cites the
+    side as ``current``. Nothing is stored and nothing is
+    stamped with a taker: the current side is not a kept
+    report, and keeping it remains the operator's separate act.
+    """
+    return build_calibration_snapshot(
+        report,
+        CURRENT_CALIBRATION_LABEL,
+        "",
+        label=CURRENT_CALIBRATION_LABEL,
+    )
+
+
 def calibration_snapshot_diff(older: dict, newer: dict) -> dict:
     """Two kept calibration reports read against each other.
 
@@ -1524,6 +1554,13 @@ def calibration_snapshot_diff(older: dict, newer: dict) -> dict:
     (``movement``, see :func:`_calibration_movement_sentence`):
     the tables are the evidence, but a debate opens with a
     sentence, and "rows became ready: 3, 5" is not one.
+
+    The newer side may be the live report itself, shaped by
+    :func:`live_calibration_snapshot`: the diff then cites it
+    as ``current`` in ``to_snapshot`` / ``to_label``, and the
+    movement sentence anchors on the kept side exactly as it
+    does between two keeps — "what moved since 'march'" is
+    answered against now, with nothing stored to answer it.
     """
     def _tiers_by_name(snapshot: dict) -> dict[str, dict]:
         return {

@@ -1985,9 +1985,14 @@ class SubmissionService:
         which is sound for a display string and unsound for a
         citation; addressing is what changed. Unlabelled keeps
         are unlimited, and a prune that removes the holder frees
-        its label, as it frees the id range it pruned."""
+        its label, as it frees the id range it pruned. The label
+        ``current`` is refused outright: it is reserved for the
+        live side of a diff (see
+        :meth:`sla_calibration_snapshot_diff`), and a kept report
+        wearing it would make the citation name a moving target."""
         from .proposals import (
             CALIBRATION_SNAPSHOTS_KEY,
+            CURRENT_CALIBRATION_LABEL,
             build_calibration_snapshot,
             calibration_snapshot_by_label,
             calibration_snapshot_labels,
@@ -1996,6 +2001,13 @@ class SubmissionService:
         store = self._get_store()
         document = store.get_document(CALIBRATION_SNAPSHOTS_KEY) or {}
         snapshots = list(document.get("snapshots") or [])
+        if label == CURRENT_CALIBRATION_LABEL:
+            raise ValueError(
+                "The label 'current' is reserved for the live "
+                "side of a calibration diff — it names the "
+                "report as it stands now, so no kept snapshot "
+                "may carry it."
+            )
         if label:
             holder = calibration_snapshot_by_label(snapshots, label)
             if holder is not None:
@@ -2101,14 +2113,65 @@ class SubmissionService:
         named them: the diff's older side is the one kept first.
         Both selectors naming the same snapshot is refused; a
         lone selector resolving to the only side there is reads
-        as no diff, the same honesty as fewer than two kept."""
+        as no diff, the same honesty as fewer than two kept.
+
+        ``to_label="current"`` is the reserved selector for the
+        debates' commonest question — what moved since a kept
+        report, against the report as it stands *now*: the newer
+        side is the live calibration report shaped in memory
+        (``proposals.live_calibration_snapshot``), cited in the
+        diff as ``current``, and nothing is stored to answer it.
+        The kept side is the ``from_label`` report, or the
+        latest kept when unnamed; with nothing kept there is no
+        diff, exactly as with fewer than two kept. ``current``
+        can only be the newer side — it names the report as it
+        stands, the newest thing there is — so a
+        ``from_label="current"`` is refused."""
         from .proposals import (
+            CURRENT_CALIBRATION_LABEL,
             calibration_snapshot_by_label,
             calibration_snapshot_diff,
             calibration_snapshot_labels,
+            live_calibration_snapshot,
         )
 
         snapshots = self.sla_calibration_snapshots()
+        if from_label == CURRENT_CALIBRATION_LABEL:
+            raise ValueError(
+                "The label 'current' names the live calibration "
+                "report — the newest side there is — so it can "
+                "only be a diff's 'to' side, never its 'from'."
+            )
+        if to_label == CURRENT_CALIBRATION_LABEL:
+            if not snapshots:
+                return {"snapshot_count": 0, "diff": None}
+            if from_label:
+                older = calibration_snapshot_by_label(
+                    snapshots, from_label
+                )
+                if older is None:
+                    in_use = calibration_snapshot_labels(snapshots)
+                    names = (
+                        ", ".join(f"'{name}'" for name in in_use)
+                        if in_use
+                        else "none"
+                    )
+                    raise ValueError(
+                        f"No kept calibration snapshot carries "
+                        f"the from label '{from_label}'. Labels "
+                        f"in use: {names}."
+                    )
+            else:
+                older = snapshots[-1]
+            return {
+                "snapshot_count": len(snapshots),
+                "diff": calibration_snapshot_diff(
+                    older,
+                    live_calibration_snapshot(
+                        self.sla_budget_calibration()
+                    ),
+                ),
+            }
         if not from_label and not to_label:
             if len(snapshots) < 2:
                 return {"snapshot_count": len(snapshots), "diff": None}
