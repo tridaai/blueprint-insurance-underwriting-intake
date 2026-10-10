@@ -1559,11 +1559,21 @@ def follow_through_digest(
     this says how fast. A note answered only after it
     re-escalated carries the whole wait: the first touch is the
     response the escalation got, whenever it finally came.
+
+    The aggregate also reads its own tail: ``p90_days`` (the
+    nearest-rank 90th percentile) beside the median, and the
+    digest's ``slowest_responses`` names the slowest measured
+    notes — slowest first, capped at five — with the author of
+    each one's first touch. A median can look healthy while a
+    handful of notes waited weeks; the tail is the part of the
+    distribution an underwriter can actually work, and it is
+    only workable named.
     """
     now = now or datetime.now(timezone.utc)
     if escalation_days is None:
         escalation_days = follow_through_escalation_days()
     entries: list[dict] = []
+    measured: list[dict] = []
     for record in records:
         note = record.status_note
         if not note:
@@ -1634,6 +1644,23 @@ def follow_through_digest(
             and worked_age_days is not None
             and worked_age_days < escalation_days
         )
+        if response_days is not None:
+            measured.append(
+                {
+                    "submission_id": result.submission_id,
+                    "insured_name": party["insured_name"],
+                    "broker_name": party["broker_name"],
+                    "response_days": response_days,
+                    "first_touch_at": (first_touch or {}).get(
+                        "worked_at"
+                    )
+                    or "",
+                    "first_touch_by": (first_touch or {}).get(
+                        "worked_by"
+                    )
+                    or "",
+                }
+            )
         entries.append(
             {
                 "submission_id": result.submission_id,
@@ -1689,6 +1716,13 @@ def follow_through_digest(
             if len(response_values) % 2
             else (response_values[mid - 1] + response_values[mid]) / 2
         )
+        # Nearest-rank p90: the value nine tenths of the
+        # measured responses sit at or below — the tail's edge,
+        # read beside the median so a healthy middle cannot
+        # hide a slow fringe.
+        p90_rank = max(
+            1, -(-len(response_values) * 9 // 10)
+        )
         response_latency = {
             "notes_measured": len(response_values),
             "median_days": round(median_days, 1),
@@ -1696,6 +1730,7 @@ def follow_through_digest(
                 sum(response_values) / len(response_values), 1
             ),
             "max_days": response_values[-1],
+            "p90_days": response_values[p90_rank - 1],
         }
     else:
         response_latency = {
@@ -1703,7 +1738,15 @@ def follow_through_digest(
             "median_days": None,
             "mean_days": None,
             "max_days": None,
+            "p90_days": None,
         }
+    # The tail, named: the slowest measured responses, slowest
+    # first (ties by submission id, so the read is stable),
+    # capped at five — a worklist, not a distribution dump.
+    slowest_responses = sorted(
+        measured,
+        key=lambda m: (-m["response_days"], m["submission_id"]),
+    )[:5]
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "total_notes": len(entries),
@@ -1717,6 +1760,7 @@ def follow_through_digest(
         "quieted_count": len(quieted),
         "quieted": quieted,
         "response_latency": response_latency,
+        "slowest_responses": slowest_responses,
     }
 
 
@@ -2960,6 +3004,9 @@ def ops_digest(
         "status_note_repairs": note_repairs,
         "broker_quality_repairs": broker,
         "follow_through_response_latency": follow["response_latency"],
+        "follow_through_slowest_responses": follow[
+            "slowest_responses"
+        ],
         "acknowledged_wait_days": acknowledged_wait_days,
         "unannounced_gap_days": unannounced_gap_days,
         "proposal_warning_days": proposal_warning_days,

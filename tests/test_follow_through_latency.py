@@ -135,6 +135,7 @@ def test_an_untouched_note_has_no_response_to_measure():
         "median_days": None,
         "mean_days": None,
         "max_days": None,
+        "p90_days": None,
     }
 
 
@@ -166,6 +167,7 @@ def test_the_aggregate_reports_median_mean_and_max():
         "median_days": 2.0,
         "mean_days": 4.0,
         "max_days": 10,
+        "p90_days": 10,
     }
 
 
@@ -187,6 +189,7 @@ def test_the_ops_digest_counts_responses_and_carries_the_aggregate():
         "median_days": 2.0,
         "mean_days": 4.0,
         "max_days": 10,
+        "p90_days": 10,
     }
     # Effort timing is not attention, exactly as effort is not.
     worklist_keys = (
