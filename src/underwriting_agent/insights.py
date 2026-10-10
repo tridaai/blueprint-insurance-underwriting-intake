@@ -25,7 +25,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from .config import env_float, env_int
-from .facts import _parse_date
+from .facts import _parse_date, normalize_line
 from .store import ApprovalRecord, history_entry
 
 
@@ -516,8 +516,83 @@ QUEUE_AGE_BUCKETS = [
 ]
 
 
+# SLA budgets by risk tier, in days an awaiting submission may sit
+# before the queue flags it breached. The budget SHRINKS as the tier
+# rises: an elevated-risk file needs a senior underwriter's eyes
+# soonest, and the longer a hard case sits the worse its options
+# get; a low-tier file that triaged clean can wait out the week.
+# Every budget is tunable per deployment (QUEUE_SLA_DAYS_<TIER>)
+# without touching code; a tier the map does not know falls back to
+# the moderate budget rather than to no budget at all.
+QUEUE_SLA_DEFAULTS = {"elevated": 2, "high": 3, "moderate": 5, "low": 7}
+
+
+def sla_budgets() -> dict[str, int]:
+    """The queue SLA budgets by risk tier, from the environment."""
+    return {
+        tier: max(0, env_int(f"QUEUE_SLA_DAYS_{tier.upper()}", default))
+        for tier, default in QUEUE_SLA_DEFAULTS.items()
+    }
+
+
+def _sla_for(item: dict, budgets: dict[str, int]) -> dict:
+    """One queue item's SLA state against its tier's budget.
+
+    ``within`` / ``breached`` once the age is known; ``unknown``
+    when the submitted date cannot be parsed — an unparseable date
+    is already surfaced by the aging view, and inventing an SLA
+    state for it would hide that.
+    """
+    budget = budgets.get(item["risk_tier"], budgets["moderate"])
+    age = item.get("age_days")
+    if age is None:
+        return {"sla_budget_days": budget, "sla_state": "unknown", "sla_days_over": None}
+    over = age - budget
+    return {
+        "sla_budget_days": budget,
+        "sla_state": "breached" if over > 0 else "within",
+        "sla_days_over": max(0, over),
+    }
+
+
+def queue_item_for(
+    record: ApprovalRecord,
+    now: datetime | None = None,
+    budgets: dict[str, int] | None = None,
+) -> dict | None:
+    """The queue-view item for one record, or None when the record
+    is not awaiting an underwriter. The single-item builder behind
+    :func:`queue_aging` — the status-note drafting reads the same
+    projection, so the note and the queue can never disagree about
+    a case's age or SLA state."""
+    result = record.result
+    if result.status != "awaiting_underwriter":
+        return None
+    now = now or datetime.now(timezone.utc)
+    budgets = budgets if budgets is not None else sla_budgets()
+    entry = history_entry(record)
+    raw = (record.submission or {}).get("submitted_at", "")
+    submitted = _parse_date(raw)
+    item = {
+        "submission_id": result.submission_id,
+        "insured_name": entry["insured_name"],
+        "broker_name": entry["broker_name"],
+        "outcome": result.triage.outcome,
+        "risk_tier": result.triage.risk_tier,
+        "submitted_at": raw,
+        "age_days": None,
+    }
+    if submitted is not None:
+        item["age_days"] = max(0, (now.date() - submitted).days)
+    item.update(_sla_for(item, budgets))
+    return item
+
+
 def queue_aging(
-    records: list[ApprovalRecord], now: datetime | None = None
+    records: list[ApprovalRecord],
+    now: datetime | None = None,
+    *,
+    sla_budgets_map: dict[str, int] | None = None,
 ) -> dict:
     """The awaiting queue by age — the stranded-queue early warning.
 
@@ -526,13 +601,21 @@ def queue_aging(
     uses). Every awaiting submission lands in exactly one bucket —
     or in ``unknown_age`` when its submitted date cannot be parsed,
     which is itself worth seeing. Decided records are not queue.
+
+    Every item also carries its **SLA state**: the budget for its
+    risk tier (see :data:`QUEUE_SLA_DEFAULTS`), whether it is within
+    or past it, and by how many days. Breached items are listed
+    again in ``breaches``, worst overrun first — that list is the
+    queue's worklist, and it is what the drafted status note (see
+    :func:`compose_status_note`) is for.
     """
     now = now or datetime.now(timezone.utc)
-    today = now.date()
+    budgets = sla_budgets_map if sla_budgets_map is not None else sla_budgets()
     buckets: dict[str, list[dict]] = {label: [] for label, _, _ in QUEUE_AGE_BUCKETS}
     unknown: list[str] = []
     by_outcome: Counter = Counter()
     oldest: dict | None = None
+    breaches: list[dict] = []
     total = 0
     for record in records:
         result = record.result
@@ -540,29 +623,21 @@ def queue_aging(
             continue
         total += 1
         by_outcome[result.triage.outcome] += 1
-        entry = history_entry(record)
-        raw = (record.submission or {}).get("submitted_at", "")
-        submitted = _parse_date(raw)
-        item = {
-            "submission_id": result.submission_id,
-            "insured_name": entry["insured_name"],
-            "broker_name": entry["broker_name"],
-            "outcome": result.triage.outcome,
-            "risk_tier": result.triage.risk_tier,
-            "submitted_at": raw,
-            "age_days": None,
-        }
-        if submitted is None:
+        item = queue_item_for(record, now, budgets)
+        assert item is not None  # status checked above
+        if item["age_days"] is None:
             unknown.append(result.submission_id)
             continue
-        age = max(0, (today - submitted).days)
-        item["age_days"] = age
+        age = item["age_days"]
         for label, low, high in QUEUE_AGE_BUCKETS:
             if age >= low and (high is None or age <= high):
                 buckets[label].append(item)
                 break
+        if item["sla_state"] == "breached":
+            breaches.append(item)
         if oldest is None or age > oldest["age_days"]:
             oldest = item
+    breaches.sort(key=lambda i: (-(i["sla_days_over"] or 0), -i["age_days"], i["submission_id"]))
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "total_awaiting": total,
@@ -573,6 +648,9 @@ def queue_aging(
         "unknown_age": unknown,
         "by_outcome": dict(sorted(by_outcome.items())),
         "oldest": oldest,
+        "sla_budgets": budgets,
+        "breach_count": len(breaches),
+        "breaches": breaches,
     }
 
 
