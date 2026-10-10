@@ -2260,6 +2260,96 @@ class SubmissionService:
         store.save_document(CALIBRATION_SNAPSHOTS_KEY, document)
         return snapshot
 
+    def rename_sla_calibration_snapshot_label(
+        self, from_label: str, to_label: str, actor: str
+    ) -> dict:
+        """Rename a kept calibration report's label, on the
+        snapshot itself.
+
+        Labels are addresses (round 17), and a debate that
+        renames its milestone — "pre-change" becomes
+        "pre-budget-change" once the team settles its words —
+        used to have two bad options: cite the wrong name, or
+        re-keep the report under the new label and fork the
+        citation (two kept reports, one evidence base, and the
+        diff reading a keep against itself). The rename is the
+        third: the snapshot's ``label`` changes in place and
+        the move is appended to its ``label_history`` (from, to,
+        who, when), so the report's evidence — budgets, ready
+        rows, its keeper and moment — is untouched and its
+        addressing history is auditable. The old label is freed
+        at once: a by-label read of it names nothing (404), a
+        keep may take it, and the new label resolves to this
+        report in the list, the by-label read, and the diff.
+
+        The refusals are the addressing discipline's: the
+        ``from`` label must name a kept report (an unknown one
+        is refused naming the labels in use); the ``to`` label
+        must be a label — renaming to nothing would un-address
+        the report, a different act this endpoint does not
+        perform; renaming to the label already carried changes
+        nothing and is refused as such; and the new label
+        answers to every keep's rules
+        (:meth:`_check_calibration_label`): ``current`` refused
+        as reserved, a label another kept report carries refused
+        naming the holder."""
+        from .proposals import (
+            CALIBRATION_SNAPSHOTS_KEY,
+            calibration_snapshot_by_label,
+            calibration_snapshot_labels,
+        )
+
+        store = self._get_store()
+        document = store.get_document(CALIBRATION_SNAPSHOTS_KEY) or {}
+        snapshots = list(document.get("snapshots") or [])
+        if not from_label:
+            raise ValueError(
+                "A rename names the label the kept report "
+                "carries now — an unlabelled report is cited by "
+                "its snapshot id and has no address to move."
+            )
+        holder = calibration_snapshot_by_label(snapshots, from_label)
+        if holder is None:
+            in_use = calibration_snapshot_labels(snapshots)
+            names = (
+                ", ".join(f"'{name}'" for name in in_use)
+                if in_use
+                else "none"
+            )
+            raise ValueError(
+                f"No kept calibration snapshot carries the "
+                f"label '{from_label}'. Labels in use: {names}."
+            )
+        if not to_label:
+            raise ValueError(
+                "A rename lands on a new label — renaming "
+                f"'{from_label}' to nothing would un-address "
+                "the report, and un-addressing is not a rename."
+            )
+        if to_label == from_label:
+            raise ValueError(
+                f"{holder.get('snapshot_id', '')} already "
+                f"carries the label '{to_label}' — a rename "
+                "changes the address, and this one would not."
+            )
+        self._check_calibration_label(snapshots, to_label)
+        holder["label"] = to_label
+        history = list(holder.get("label_history") or [])
+        history.append(
+            {
+                "from": from_label,
+                "to": to_label,
+                "renamed_by": actor,
+                "renamed_at": datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                ),
+            }
+        )
+        holder["label_history"] = history
+        document["snapshots"] = snapshots
+        store.save_document(CALIBRATION_SNAPSHOTS_KEY, document)
+        return holder
+
     def sla_calibration_snapshots(
         self, label: str | None = None
     ) -> list[dict]:

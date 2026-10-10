@@ -661,6 +661,27 @@ class CalibrationSnapshotRequest(BaseModel):
         return self.actor or self.approver or self.reviewer
 
 
+class CalibrationLabelRenameRequest(BaseModel):
+    """An operator's rename of a kept calibration report's
+    label (see ``service.rename_sla_calibration_snapshot_label``):
+    who is renaming, the label the report carries now, and the
+    label it should carry. A label is an address, so the rename
+    moves the address on the kept snapshot itself — recorded in
+    its label history — instead of re-keeping the report and
+    forking the citation. The new label answers to every keep's
+    rules: not ``current`` (reserved), not a label another kept
+    report already carries."""
+
+    actor: Optional[str] = None
+    approver: Optional[str] = None
+    reviewer: Optional[str] = None
+    from_label: Optional[str] = None
+    to_label: Optional[str] = None
+
+    def actor_name(self) -> Optional[str]:
+        return self.actor or self.approver or self.reviewer
+
+
 class SlaCalibrationDraftRequest(BaseModel):
     """An operator's draft-from-a-calibration-row request (see
     ``proposals.draft_sla_proposal_from_row``): who is drafting,

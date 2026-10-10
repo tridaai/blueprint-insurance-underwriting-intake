@@ -41,6 +41,7 @@ from .schemas import (
     AgentResult,
     BreachAcknowledgementRequest,
     FollowThroughWorkedRequest,
+    CalibrationLabelRenameRequest,
     CalibrationSnapshotRequest,
     DecisionRequest,
     ProposalDecisionRequest,
@@ -629,6 +630,33 @@ def keep_calibration_current(request: CalibrationSnapshotRequest) -> dict:
     try:
         return service.keep_calibration_current(
             actor, label=request.label or ""
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post(
+    "/queue/sla/calibration/snapshots/rename", dependencies=_AUTH
+)
+def rename_sla_calibration_snapshot_label(
+    request: CalibrationLabelRenameRequest,
+) -> dict:
+    """Rename a kept calibration report's label, on the snapshot
+    itself: the address moves, the evidence does not — the move
+    is recorded in the snapshot's label history (from, to, who,
+    when), the old label is freed at once, and citations by it
+    answer 404 like any label that names nothing. Refused
+    (422): an unknown ``from_label`` (naming the labels in use),
+    an empty or unchanged ``to_label``, the reserved
+    ``current``, and a ``to_label`` another kept report already
+    carries (naming the holder) — the keep rules, applied to
+    the move."""
+    actor = _decision_actor(request)
+    try:
+        return service.rename_sla_calibration_snapshot_label(
+            request.from_label or "",
+            request.to_label or "",
+            actor,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
