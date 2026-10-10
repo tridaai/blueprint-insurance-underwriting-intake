@@ -62,6 +62,7 @@ from .insights import (
     follow_through_digest,
     inbox_groups,
     insured_loss_timeline,
+    ops_digest,
     queue_aging,
     queue_item_for,
     scorecard,
@@ -1345,6 +1346,19 @@ class SubmissionService:
         )
         view["sla_budgets_source"] = self.sla_budget_settings()["source"]
         return view
+
+    def ops_digest(self) -> dict:
+        """The operator digest (``insights.ops_digest``): stuck
+        dispatches, breached queue cases, outstanding/escalated
+        follow-through, and calibration proposals nearing or past
+        expiry — one composed read over the store, measured
+        against the SLA budgets in force. Computed, never sent;
+        reading it changes nothing."""
+        return ops_digest(
+            self._get_store().all_records(),
+            self.calibration_proposals(),
+            sla_budgets_map=self.effective_sla_budgets(),
+        )
 
     def effective_sla_budgets(self) -> dict:
         """The queue SLA budgets in force: the environment budgets,

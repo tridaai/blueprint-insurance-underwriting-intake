@@ -1565,3 +1565,162 @@ def dispatch_overview(
         "stuck_age_hours": stuck_age_hours,
         "attempt_budget": attempt_budget,
     }
+
+
+# ---------------------------------------------------------------------------
+# Ops digest — the rotting-quietly surfaces, in one worklist
+# ---------------------------------------------------------------------------
+
+#: Days before a live proposal's evidence expiry at which the
+#: ops digest starts listing it as nearing expiry
+#: (OPS_DIGEST_PROPOSAL_EXPIRY_WARNING_DAYS overrides).
+DEFAULT_OPS_PROPOSAL_EXPIRY_WARNING_DAYS = 3
+
+
+def ops_proposal_expiry_warning_days() -> int:
+    return max(
+        0,
+        env_int(
+            "OPS_DIGEST_PROPOSAL_EXPIRY_WARNING_DAYS",
+            DEFAULT_OPS_PROPOSAL_EXPIRY_WARNING_DAYS,
+        ),
+    )
+
+
+def ops_digest(
+    records: list[ApprovalRecord],
+    proposals: list[dict] | None = None,
+    now: datetime | None = None,
+    *,
+    sla_budgets_map: dict[str, int] | None = None,
+    follow_escalation_days: int | None = None,
+    proposal_warning_days: int | None = None,
+) -> dict:
+    """One operator digest over the surfaces that rot quietly.
+
+    Four worklists that used to live on four different screens,
+    composed into a single read: **stuck dispatches** (approval
+    webhooks failing past the stuck age with retries still left —
+    :func:`dispatch_overview`), **breached queue cases** (awaiting
+    submissions past their tier's SLA budget — :func:`queue_aging`,
+    measured against the budgets in force), **outstanding
+    follow-through** (status notes whose loop is still open, the
+    aged ones flagged escalated — :func:`follow_through_digest`),
+    and **calibration proposals nearing expiry** (live drafts
+    whose evidence window closes within the warning days, plus
+    the expired drafts awaiting a refresh — the caller passes the
+    proposals annotated by ``proposals.annotate_proposal``).
+
+    The digest is computed, never sent: it carries the composed
+    ``headline`` an operator reads first and the section entries
+    behind it. Pure projection — reading it writes nothing,
+    retries nothing, and refreshes nothing.
+    """
+    now = now or datetime.now(timezone.utc)
+    if proposal_warning_days is None:
+        proposal_warning_days = ops_proposal_expiry_warning_days()
+
+    dispatch = dispatch_overview(records, now)
+    queue = queue_aging(records, now, sla_budgets_map=sla_budgets_map)
+    follow = follow_through_digest(
+        records, now, escalation_days=follow_escalation_days
+    )
+
+    outstanding = [
+        e for e in follow["entries"] if e["state"] in _FOLLOW_OPEN_STATES
+    ]
+    expiring_soon: list[dict] = []
+    expired: list[dict] = []
+    for proposal in proposals or []:
+        if proposal.get("status") != "draft":
+            continue
+        expires = _parse_timestamp(proposal.get("expires_at"))
+        entry = {
+            "proposal_id": proposal.get("proposal_id", ""),
+            "kind": proposal.get("kind", ""),
+            "dimension": proposal.get("dimension", ""),
+            "current_value": proposal.get("current_value"),
+            "proposed_value": proposal.get("proposed_value"),
+            "expires_at": proposal.get("expires_at"),
+            "days_until_expiry": (
+                max(0, (expires.date() - now.date()).days)
+                if expires is not None
+                else None
+            ),
+        }
+        is_expired = proposal.get("expired")
+        if is_expired is None:
+            # Un-annotated input: resolve expiry from the stamp.
+            is_expired = expires is not None and now > expires
+        if is_expired:
+            expired.append(entry)
+        elif (
+            entry["days_until_expiry"] is not None
+            and entry["days_until_expiry"] <= proposal_warning_days
+        ):
+            expiring_soon.append(entry)
+    expiring_soon.sort(
+        key=lambda e: (e["days_until_expiry"], e["proposal_id"])
+    )
+    expired.sort(key=lambda e: e["proposal_id"])
+
+    counts = {
+        "stuck_dispatches": dispatch["stuck_count"],
+        "breached_queue": queue["breach_count"],
+        "follow_through_outstanding": len(outstanding),
+        "follow_through_escalated": follow["escalated_count"],
+        "proposals_expiring_soon": len(expiring_soon),
+        "proposals_expired": len(expired),
+    }
+    counts["total_attention"] = (
+        counts["stuck_dispatches"]
+        + counts["breached_queue"]
+        + counts["follow_through_escalated"]
+        + counts["proposals_expired"]
+    )
+    parts = []
+    if counts["stuck_dispatches"]:
+        parts.append(
+            f"{counts['stuck_dispatches']} stuck dispatch(es)"
+        )
+    if counts["breached_queue"]:
+        parts.append(f"{counts['breached_queue']} breached queue case(s)")
+    if counts["follow_through_escalated"]:
+        parts.append(
+            f"{counts['follow_through_escalated']} escalated "
+            "follow-through note(s)"
+        )
+    elif counts["follow_through_outstanding"]:
+        parts.append(
+            f"{counts['follow_through_outstanding']} follow-through "
+            "note(s) still outstanding"
+        )
+    if counts["proposals_expired"]:
+        parts.append(
+            f"{counts['proposals_expired']} expired proposal(s) "
+            "awaiting refresh"
+        )
+    if counts["proposals_expiring_soon"]:
+        parts.append(
+            f"{counts['proposals_expiring_soon']} proposal(s) nearing "
+            "expiry"
+        )
+    headline = (
+        "Ops digest: " + "; ".join(parts) + "."
+        if parts
+        else "Ops digest: nothing needs attention — no stuck "
+        "dispatches, no breached cases, no escalated notes, no "
+        "proposals nearing expiry."
+    )
+    return {
+        "generated_at": now.isoformat(timespec="seconds"),
+        "headline": headline,
+        "counts": counts,
+        "stuck_dispatches": dispatch["stuck_failures"],
+        "breached_queue": queue["breaches"],
+        "follow_through_outstanding": outstanding,
+        "follow_through_escalated": follow["escalated"],
+        "proposals_expiring_soon": expiring_soon,
+        "proposals_expired": expired,
+        "proposal_warning_days": proposal_warning_days,
+    }

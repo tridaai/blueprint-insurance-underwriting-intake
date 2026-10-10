@@ -431,6 +431,17 @@ def metrics() -> dict:
     return service.metrics()
 
 
+@app.get("/ops/digest", dependencies=_AUTH)
+def ops_digest_view() -> dict:
+    """The operator digest: one composed read over the surfaces
+    that rot quietly — stuck approval-webhook dispatches, queue
+    cases past their SLA budget, status-note follow-through still
+    outstanding (aged ones escalated), and calibration proposals
+    nearing or past their evidence expiry. Computed at read time
+    and never sent; reading it changes nothing."""
+    return service.ops_digest()
+
+
 @app.get("/dispatch", dependencies=_AUTH)
 def dispatch_ops() -> dict:
     """Dispatch operations: the approval-webhook ledgers across all
