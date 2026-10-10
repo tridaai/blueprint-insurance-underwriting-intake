@@ -499,6 +499,18 @@ class AgentResult(BaseModel):
     repaired: bool = False
     repair_attempts: int = 0
     original_validation: Optional[Validation] = None
+    # Borderline broker-letter phrasings found on the drafted
+    # letter (see letter_repair.py): forms the blocking guardrails
+    # deliberately do not catch but that still read as commitments
+    # ("will now move through review", "you will hear from us in
+    # the coming days"). Advisory only — they never fail a
+    # validation and never reach the gate; the validate node gives
+    # the drafter one steered redraft against them, and
+    # ``advisory_repaired`` records whether the shipped letter
+    # cleared them. The advisories stay on the result either way:
+    # what the drafter produced is part of the run's audit.
+    letter_advisories: list[dict] = Field(default_factory=list)
+    advisory_repaired: bool = False
     information_request: Optional[InformationRequest] = None
     needs_information: bool = False
     autonomy: AutonomyRecommendation = Field(default_factory=AutonomyRecommendation)

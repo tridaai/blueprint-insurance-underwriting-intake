@@ -164,6 +164,60 @@ def _find_card(text: str) -> str | None:
     return None
 
 
+def letter_wording_hits(letter: str) -> dict[str, str | None]:
+    """The letter-scoped wording families' first hits in a letter.
+
+    The single computation behind the
+    ``no_forward_motion_in_letter`` check: forward-motion
+    commitments, review commitments, soft time commitments, and
+    internal authority references, each family's first offending
+    phrase or ``None``. The check fails on any hit; the drafting
+    repair steering (see ``letter_repair.py``) reads the same hits
+    to tell the drafter exactly which phrasings to rewrite. One
+    source of truth for what the letter may not say, shared by the
+    gate and the steering — the patterns live here and nowhere
+    else, and this function changes no verdict: it only names
+    what the check already finds.
+    """
+    text = letter or ""
+    return {
+        "forward_motion": next(
+            (
+                hit
+                for hit in (_affirmative(p, text) for p in _FORWARD_MOTION_PATTERNS)
+                if hit
+            ),
+            None,
+        ),
+        "review_commitment": next(
+            (
+                hit
+                for hit in (
+                    _affirmative(p, text) for p in _REVIEW_COMMITMENT_PATTERNS
+                )
+                if hit
+            ),
+            None,
+        ),
+        "soft_time": next(
+            (
+                hit
+                for hit in (_affirmative(p, text) for p in _SOFT_TIME_PATTERNS)
+                if hit
+            ),
+            None,
+        ),
+        "authority": next(
+            (
+                m.group(0)
+                for p in _AUTHORITY_PATTERNS
+                if (m := re.search(p, text, re.IGNORECASE))
+            ),
+            None,
+        ),
+    }
+
+
 def validate_drafts(
     submission: SubmissionInput,
     drafts: Drafts,
@@ -241,22 +295,11 @@ def validate_drafts(
     # commitments, soft time commitments, and internal authority
     # references. The packet is deliberately NOT scanned — it keeps
     # the facts, authority figures included.
-    motion_hit = next(
-        (hit for hit in (_affirmative(p, letter) for p in _FORWARD_MOTION_PATTERNS) if hit),
-        None,
-    )
-    review_hit = next(
-        (hit for hit in (_affirmative(p, letter) for p in _REVIEW_COMMITMENT_PATTERNS) if hit),
-        None,
-    )
-    soft_time_hit = next(
-        (hit for hit in (_affirmative(p, letter) for p in _SOFT_TIME_PATTERNS) if hit),
-        None,
-    )
-    authority_hit = next(
-        (m.group(0) for p in _AUTHORITY_PATTERNS if (m := re.search(p, letter, re.IGNORECASE))),
-        None,
-    )
+    wording = letter_wording_hits(letter)
+    motion_hit = wording["forward_motion"]
+    review_hit = wording["review_commitment"]
+    soft_time_hit = wording["soft_time"]
+    authority_hit = wording["authority"]
     letter_problems = []
     if motion_hit:
         letter_problems.append(

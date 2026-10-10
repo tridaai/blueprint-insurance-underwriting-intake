@@ -69,6 +69,11 @@ from .insights import (
     loss_timeline_packet_lines,
     status_note_follow_through,
 )
+from .letter_repair import (
+    advisory_repair_guidance,
+    letter_advisories,
+    letter_repair_guidance,
+)
 from .model_backends import DraftContext, estimate_cost_usd
 from .options import build_options
 from .resilience import ResilientBackend
@@ -225,6 +230,9 @@ class AgentState(TypedDict, total=False):
     repaired: bool
     repair_attempts: int
     original_validation: Optional[dict[str, Any]]
+    letter_advisories: list
+    advisory_repair_attempted: bool
+    advisory_repaired: bool
     autonomy: dict[str, Any]
     needs_information: bool
     information_request: Optional[dict[str, Any]]
@@ -582,35 +590,87 @@ def _build_graph(backend, retriever, sink, checkpointer=None):
             "repaired": False,
             "repair_attempts": 0,
             "original_validation": None,
+            "letter_advisories": [],
+            "advisory_repair_attempted": False,
+            "advisory_repaired": False,
         }
-        if validation.passed or not _guardrail_repair_enabled():
+        if not _guardrail_repair_enabled():
+            update["letter_advisories"] = letter_advisories(
+                drafts.broker_letter
+            )
             return update
-        max_attempts = _guardrail_repair_max_attempts()
-        original = validation
-        attempts = 0
-        while attempts < max_attempts and not validation.passed:
-            attempts += 1
-            feedback = _failed_checks_text(validation)
-            try:
-                subject, letter, packet = backend.draft_documents(
-                    _draft_context(state, sub, repair_feedback=feedback)
-                )
-            except Exception:
-                break  # a failed redraft keeps the original drafts + failures
-            candidate = Drafts(subject=subject, broker_letter=letter, underwriter_packet=packet)
-            candidate_validation = validate_drafts(sub, candidate, citations)
-            if candidate_validation.passed or _failed_count(candidate_validation) < _failed_count(validation):
-                drafts, validation = candidate, candidate_validation
-        update.update(
-            {
-                "drafts": drafts.model_dump(),
-                "validation": validation.model_dump(),
-                "repair_attempted": attempts > 0,
-                "repaired": validation.passed,
-                "repair_attempts": attempts,
-                "original_validation": original.model_dump(),
-            }
-        )
+        if not validation.passed:
+            max_attempts = _guardrail_repair_max_attempts()
+            original = validation
+            attempts = 0
+            while attempts < max_attempts and not validation.passed:
+                attempts += 1
+                feedback = _failed_checks_text(validation)
+                guidance = letter_repair_guidance(validation, drafts)
+                if guidance:
+                    # The failed-check names alone restate the rule;
+                    # the guidance quotes the offending sentence and
+                    # names the approved rewrite (letter_repair.py).
+                    feedback = f"{feedback}\n\n{guidance}"
+                try:
+                    subject, letter, packet = backend.draft_documents(
+                        _draft_context(state, sub, repair_feedback=feedback)
+                    )
+                except Exception:
+                    break  # a failed redraft keeps the original drafts + failures
+                candidate = Drafts(subject=subject, broker_letter=letter, underwriter_packet=packet)
+                candidate_validation = validate_drafts(sub, candidate, citations)
+                if candidate_validation.passed or _failed_count(candidate_validation) < _failed_count(validation):
+                    drafts, validation = candidate, candidate_validation
+            update.update(
+                {
+                    "drafts": drafts.model_dump(),
+                    "validation": validation.model_dump(),
+                    "repair_attempted": attempts > 0,
+                    "repaired": validation.passed,
+                    "repair_attempts": attempts,
+                    "original_validation": original.model_dump(),
+                }
+            )
+        # Advisory pass: drafts that pass the gate can still *read*
+        # as commitments — the borderline phrasings of
+        # letter_repair.letter_advisories. One steered redraft; the
+        # gate re-judges the candidate exactly as before, and it
+        # ships only if it still passes with fewer advisories.
+        # Advisories never block: a redraft that fails, errors, or
+        # changes nothing leaves the passing drafts untouched, with
+        # the advisories on the record for the underwriter to see.
+        if validation.passed:
+            advisories = letter_advisories(drafts.broker_letter)
+            update["letter_advisories"] = advisories
+            if advisories:
+                update["advisory_repair_attempted"] = True
+                try:
+                    subject, letter, packet = backend.draft_documents(
+                        _draft_context(
+                            state,
+                            sub,
+                            repair_feedback=advisory_repair_guidance(
+                                advisories
+                            ),
+                        )
+                    )
+                    candidate = Drafts(
+                        subject=subject,
+                        broker_letter=letter,
+                        underwriter_packet=packet,
+                    )
+                    candidate_validation = validate_drafts(
+                        sub, candidate, citations
+                    )
+                    remaining = letter_advisories(candidate.broker_letter)
+                    if candidate_validation.passed and len(remaining) < len(
+                        advisories
+                    ):
+                        update["drafts"] = candidate.model_dump()
+                        update["advisory_repaired"] = not remaining
+                except Exception:
+                    pass  # a failed advisory redraft keeps the passing drafts
         return update
 
     @node("gate", "Autonomy recommendation + information request")
@@ -1073,6 +1133,8 @@ def run_submission(
         repair_attempted=bool(state.get("repair_attempted")),
         repaired=bool(state.get("repaired")),
         repair_attempts=int(state.get("repair_attempts", 0)),
+        letter_advisories=list(state.get("letter_advisories") or []),
+        advisory_repaired=bool(state.get("advisory_repaired")),
         original_validation=(
             Validation.model_validate(state["original_validation"])
             if state.get("original_validation")
