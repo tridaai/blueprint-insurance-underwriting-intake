@@ -88,6 +88,75 @@ def test_postgres_store_survives_reopen(clean_approvals):
     assert feedback and feedback[0]["reason"] == "clean"
 
 
+class _FakeEmbeddingsClient:
+    """Deterministic stand-in for the provider embeddings client:
+    bag-of-words hashing into 16 dimensions, so texts that share
+    words land close together — enough to prove the pgvector path
+    ranks by meaning-of-sorts, not by insertion order."""
+
+    def __init__(self) -> None:
+        self.corpus_embed_calls = 0
+
+    def _embed_one(self, text: str) -> list[float]:
+        import hashlib
+
+        vector = [0.0] * 16
+        for token in text.lower().split():
+            digest = hashlib.sha256(token.encode()).digest()
+            vector[digest[0] % 16] += 1.0
+        return vector
+
+    @property
+    def embeddings(self):
+        return self
+
+    def create(self, model=None, input=None):
+        from types import SimpleNamespace
+
+        texts = list(input or [])
+        if len(texts) > 1:
+            self.corpus_embed_calls += 1
+        return SimpleNamespace(
+            data=[
+                SimpleNamespace(embedding=self._embed_one(t), index=i)
+                for i, t in enumerate(texts)
+            ]
+        )
+
+
+def test_pgvector_retrieval_round_trip(pg_env, monkeypatch):
+    from underwriting_agent.db import connect, run_migrations
+    from underwriting_agent.retriever import SemanticRetriever
+
+    run_migrations(pg_env)
+    guidelines = [
+        {"id": "GL-CYBER", "title": "Cyber appetite", "text": "cyber ransomware controls and backups"},
+        {"id": "GL-PROP", "title": "Property appetite", "text": "property sprinklers roof construction occupancy"},
+        {"id": "GL-MARINE", "title": "Marine appetite", "text": "marine cargo vessel transit warehouse"},
+    ]
+    fake = _FakeEmbeddingsClient()
+    monkeypatch.setattr(
+        SemanticRetriever,
+        "_build_embeddings_client",
+        lambda self: (fake, "fake-embed-16", "fake", "http://fake"),
+    )
+    with connect(pg_env) as conn:
+        conn.execute("DELETE FROM guideline_embeddings WHERE model = 'fake-embed-16'")
+        conn.commit()
+
+    retriever = SemanticRetriever(guidelines)
+    results = retriever.retrieve("cyber ransomware backups", top_k=2)
+    assert retriever.vector_store == "pgvector"
+    assert results and results[0].guideline_id == "GL-CYBER"
+
+    # Second retrieval: corpus vectors come from the table, not a
+    # re-embed — the fake's corpus batch counter must not move.
+    calls_after_first = fake.corpus_embed_calls
+    again = retriever.retrieve("property sprinklers roof", top_k=1)
+    assert again and again[0].guideline_id == "GL-PROP"
+    assert fake.corpus_embed_calls == calls_after_first
+
+
 def test_postgres_checkpointer_pauses_and_resumes_across_instances(pg_env):
     from underwriting_agent.checkpoints import get_checkpointer
     from underwriting_agent.samples import sample_submission_models

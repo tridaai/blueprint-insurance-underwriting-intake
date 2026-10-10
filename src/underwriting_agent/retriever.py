@@ -16,10 +16,16 @@ environment variable (see :func:`get_retriever`):
   :func:`rerank_fused`). This is score-fusion reranking, not a
   cross-encoder — the repo ships no cross-encoder and claims none.
 
-Production deployments would swap any of these for LlamaIndex over a
-vector store (pgvector, Qdrant, …) fed by the client's document
-systems. The agent only depends on the ``Retriever`` protocol, so that
-swap touches one file, not the graph.
+The semantic store is selected by deployment, behind the same code:
+**pgvector** in the application's PostgreSQL when ``DATABASE_URL``
+is set (embeddings persist in the ``guideline_embeddings`` table,
+migration ``0003``, and ranking is the database's cosine distance);
+otherwise a Chroma server when one is configured (``CHROMA_HOST`` —
+a supported alternative behind this interface); otherwise in-memory
+cosine, which keeps offline runs and tests hermetic. Production
+deployments can still swap the whole retriever for LlamaIndex over
+their own store — the agent only depends on the ``Retriever``
+protocol, so that swap touches one file, not the graph.
 """
 
 from __future__ import annotations
@@ -92,6 +98,16 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / norm if norm else 0.0
 
 
+def _vector_literal(vector: list[float]) -> str:
+    """A pgvector text literal (``[0.1,0.2,...]``) for a Python vector.
+
+    Embeddings cross the SQL boundary as literals cast with
+    ``::vector`` — deliberately no driver-level type registration, so
+    any psycopg connection serves the pgvector path unchanged.
+    """
+    return "[" + ",".join(repr(float(v)) for v in vector) + "]"
+
+
 class SemanticRetriever:
     """Cosine-similarity retriever over the guideline corpus, via embeddings.
 
@@ -120,12 +136,16 @@ class SemanticRetriever:
             self._embeddings_base_url,
         ) = self._build_embeddings_client()
         self._corpus_vectors: list[list[float]] | None = None
-        # Which store actually serves queries: "chroma" when the optional
-        # vectordb extra is installed (local persistent store), else
-        # "memory" (in-repo cosine over freshly embedded vectors).
+        # Which store actually serves queries: "pgvector" when the
+        # application's PostgreSQL is configured (DATABASE_URL — the
+        # production path), else "chroma" when a Chroma server is
+        # configured / the vectordb extra is installed, else "memory"
+        # (in-repo cosine over freshly embedded vectors).
         self.vector_store = "memory"
         self._chroma_collection = None
         self._chroma_checked = False
+        self._pgvector_checked = False
+        self._pgvector_ready = False
 
     def _build_embeddings_client(self):
         """Resolve the embeddings client, failing loudly when unusable.
@@ -215,16 +235,117 @@ class SemanticRetriever:
         ordered = sorted(response.data, key=lambda d: getattr(d, "index", 0))
         return [list(d.embedding) for d in ordered]
 
-    def _get_chroma_collection(self):
-        """Lazily open the local Chroma store, indexing the corpus once.
+    # -- pgvector (the production store: the application's Postgres) --
 
-        Returns the collection, or ``None`` when chromadb is not
-        installed (the in-memory fallback then serves queries). The
-        store is either a Chroma server (``CHROMA_HOST`` set — the
-        docker-compose local stack runs one) or an embedded persistent
-        directory (``CHROMA_DIR``, default ``<repo>/.chroma``,
-        git-ignored): the guideline corpus is embedded and added on first
-        use, and survives restarts after that. Embeddings are always
+    def _pgvector_available(self) -> bool:
+        """True when DATABASE_URL points at a migrated Postgres.
+
+        Checked once; on any failure the retriever falls through to
+        the Chroma / in-memory paths rather than breaking retrieval —
+        the same posture as the Chroma path below.
+        """
+        if self._pgvector_checked:
+            return self._pgvector_ready
+        self._pgvector_checked = True
+        try:
+            from .db import connect, database_url, ensure_migrated
+
+            if not database_url():
+                return False
+            ensure_migrated()
+            with connect() as conn:
+                conn.execute("SELECT 1 FROM guideline_embeddings LIMIT 1")
+            self._pgvector_ready = True
+            self.vector_store = "pgvector"
+        except Exception:
+            self._pgvector_ready = False
+        return self._pgvector_ready
+
+    def _pg_ensure_corpus(self, conn) -> None:
+        """Embed any missing/stale guidelines into the pgvector table.
+
+        Rows are keyed by (guideline_id, model) and carry a content
+        hash: an edited guideline is re-embedded, an unchanged corpus
+        costs one SELECT per retrieval.
+        """
+        import hashlib
+
+        def content_hash(guideline: dict) -> str:
+            return hashlib.sha256(
+                f"{guideline['id']}|{guideline['title']}|{guideline['text']}".encode(
+                    "utf-8"
+                )
+            ).hexdigest()
+
+        existing = {
+            row[0]: row[1]
+            for row in conn.execute(
+                "SELECT guideline_id, content_hash FROM guideline_embeddings "
+                "WHERE model = %s",
+                (self._model,),
+            )
+        }
+        stale = [g for g in self._guidelines if existing.get(g["id"]) != content_hash(g)]
+        if not stale:
+            return
+        vectors = self._embed([f"{g['title']} {g['text']}" for g in stale])
+        for guideline, vector in zip(stale, vectors):
+            conn.execute(
+                "INSERT INTO guideline_embeddings "
+                "(guideline_id, model, content_hash, embedding) "
+                "VALUES (%s, %s, %s, %s::vector) "
+                "ON CONFLICT (guideline_id, model) DO UPDATE SET "
+                "content_hash = EXCLUDED.content_hash, "
+                "embedding = EXCLUDED.embedding",
+                (
+                    guideline["id"],
+                    self._model,
+                    content_hash(guideline),
+                    _vector_literal(vector),
+                ),
+            )
+        conn.commit()
+
+    def _retrieve_pgvector(self, query: str, top_k: int) -> list[RetrievedGuideline]:
+        from .db import connect
+
+        query_vector = _vector_literal(self._embed([query])[0])
+        with connect() as conn:
+            self._pg_ensure_corpus(conn)
+            rows = conn.execute(
+                "SELECT guideline_id, 1 - (embedding <=> %s::vector) AS score "
+                "FROM guideline_embeddings WHERE model = %s "
+                "ORDER BY embedding <=> %s::vector LIMIT %s",
+                (query_vector, self._model, query_vector, top_k),
+            ).fetchall()
+        by_id = {g["id"]: g for g in self._guidelines}
+        retrieved: list[RetrievedGuideline] = []
+        for guideline_id, score in rows:
+            guideline = by_id.get(guideline_id)
+            if guideline is None:  # row from a different corpus — skip it
+                continue
+            retrieved.append(
+                RetrievedGuideline(
+                    guideline_id=guideline_id,
+                    title=guideline["title"],
+                    text=guideline["text"],
+                    score=round(float(score), 4),
+                    sources=["semantic"],
+                )
+            )
+        return retrieved
+
+    def _get_chroma_collection(self):
+        """Lazily open a Chroma store, indexing the corpus once.
+
+        The supported alternative to pgvector, kept behind this
+        interface for deployments that standardise on Chroma: a
+        Chroma **server** (``CHROMA_HOST`` / ``CHROMA_PORT``). An
+        embedded persistent directory (``CHROMA_DIR``) also works and
+        is used by older tests, but local vector files are not the
+        production story — pgvector is. Returns the collection, or
+        ``None`` when chromadb is not installed (the in-memory
+        fallback then serves queries). Embeddings are always
         computed by our configured provider client and passed in
         explicitly — Chroma's own default embedding function (which
         downloads a model) is never used.
@@ -305,6 +426,8 @@ class SemanticRetriever:
         return retrieved
 
     def retrieve(self, query: str, top_k: int = 3) -> list[RetrievedGuideline]:
+        if self._pgvector_available():
+            return self._retrieve_pgvector(query, top_k)
         collection = self._get_chroma_collection()
         if collection is not None:
             return self._retrieve_chroma(collection, query, top_k)
