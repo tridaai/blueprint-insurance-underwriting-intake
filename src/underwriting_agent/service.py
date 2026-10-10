@@ -40,6 +40,7 @@ from .graph import resume_approval, run_submission
 from .insights import (
     all_scorecards,
     audit_rows,
+    broker_quality_report,
     compute_metrics,
     inbox_groups,
     scorecard,
@@ -656,6 +657,12 @@ class SubmissionService:
     def scorecard(self, kind: str, name: str) -> dict | None:
         """One party's scorecard (``kind`` is "insured" or "broker")."""
         return scorecard(self._get_store().all_records(), kind, name)
+
+    def broker_quality_report(self, broker_name: str) -> dict | None:
+        """The broker submission-quality report (trend, discrepancy
+        rate, top missing elements) with its drafted text — composed
+        from the store, never sent."""
+        return broker_quality_report(self._get_store().all_records(), broker_name)
 
     def metrics(self) -> dict:
         """Operational aggregates over the store: run/decision counts,

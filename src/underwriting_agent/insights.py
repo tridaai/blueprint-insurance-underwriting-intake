@@ -168,6 +168,120 @@ def format_scorecard_line(card: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Broker submission-quality report
+# ---------------------------------------------------------------------------
+
+
+def broker_quality_report(records: list[ApprovalRecord], broker_name: str) -> dict | None:
+    """A per-broker quality report, composed from the scorecard data.
+
+    Where the scorecard is the aggregate, this is the feedback view:
+    is the broker's submission quality moving (completeness of their
+    recent submissions against their earlier ones), how often do
+    their documents disagree with their forms (the extraction
+    discrepancy rate), and which required elements do they most
+    often leave out. Returns None for an unknown broker. The report
+    carries its own drafted text (``draft``) — composed here, and,
+    like every draft in this system, never sent by the agent.
+    """
+    hits = [r for r in records if broker_name and _party_name(r, "broker") == broker_name]
+    if not hits:
+        return None
+    card = scorecard(records, "broker", broker_name)
+    completeness = [r.result.facts.completeness_score for r in hits]
+    count = len(hits)
+    if count >= 2:
+        split = count // 2
+        earlier_avg = round(sum(completeness[:split]) / split, 3)
+        recent_avg = round(sum(completeness[split:]) / (count - split), 3)
+        delta = round(recent_avg - earlier_avg, 3)
+        direction = (
+            "improving" if delta > 0.02 else "declining" if delta < -0.02 else "flat"
+        )
+        trend = {
+            "direction": direction,
+            "delta": delta,
+            "earlier_avg": earlier_avg,
+            "recent_avg": recent_avg,
+        }
+    else:
+        trend = {
+            "direction": "single_submission",
+            "delta": None,
+            "earlier_avg": None,
+            "recent_avg": None,
+        }
+    discrepancy_counts = [r.result.facts.discrepancy_count for r in hits]
+    missing: Counter = Counter()
+    for record in hits:
+        missing.update(record.result.facts.missing_elements)
+    report = {
+        "broker": broker_name,
+        "submissions": count,
+        "avg_completeness": card["avg_completeness"] if card else None,
+        "approval_rate": card["approval_rate"] if card else None,
+        "outcome_mix": card["outcome_mix"] if card else {},
+        "completeness_trend": trend,
+        "discrepancy_total": sum(discrepancy_counts),
+        "discrepancy_rate": round(sum(discrepancy_counts) / count, 3),
+        "discrepancy_share": round(
+            sum(1 for c in discrepancy_counts if c > 0) / count, 3
+        ),
+        "top_missing_elements": [
+            {"element": element, "count": hits_count}
+            for element, hits_count in missing.most_common(5)
+        ],
+    }
+    report["draft"] = compose_broker_quality_draft(report)
+    return report
+
+
+def compose_broker_quality_draft(report: dict) -> str:
+    """The quality report as a drafted document.
+
+    Written the way the packet is written — facts from the record,
+    no promises, no timelines — and headed as what it is: an
+    internal draft a human may choose to share. It is never sent.
+    """
+    trend = report["completeness_trend"]
+    if trend["direction"] == "single_submission":
+        trend_line = (
+            "Completeness trend: only one submission on record — "
+            "no trend can be read yet."
+        )
+    else:
+        trend_line = (
+            f"Completeness trend: {trend['direction']} — earlier submissions "
+            f"averaged {trend['earlier_avg']}, recent submissions "
+            f"{trend['recent_avg']} (delta {trend['delta']:+.3f})."
+        )
+    if report["top_missing_elements"]:
+        missing_line = "Most often missing: " + ", ".join(
+            f"{entry['element']} (×{entry['count']})"
+            for entry in report["top_missing_elements"]
+        ) + "."
+    else:
+        missing_line = "No required elements were missing across these submissions."
+    lines = [
+        f"DRAFT — submission quality report for {report['broker']} (internal draft; not sent)",
+        "",
+        f"Submissions on record: {report['submissions']} · average computed "
+        f"completeness {report['avg_completeness']}",
+        trend_line,
+        f"Extraction discrepancies: {report['discrepancy_total']} across "
+        f"{report['submissions']} submission(s) — "
+        f"{report['discrepancy_rate']} per submission; "
+        f"{report['discrepancy_share']} of submissions carried at least one.",
+        missing_line,
+        "",
+        "This draft was composed from the submission records for internal "
+        "review. It is shared with the broker only if a human reviews and "
+        "sends it — the agent never sends it.",
+    ]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Metrics + audit export
 # ---------------------------------------------------------------------------
 

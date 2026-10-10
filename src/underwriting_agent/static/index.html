@@ -74,6 +74,7 @@
     <section>
       <h2>Inbox &amp; scorecards</h2>
       <div id="inbox" class="empty">Loading…</div>
+      <div id="quality" style="margin-top:10px"></div>
       <div class="row" style="margin-top:10px"><button id="refresh-inbox">Refresh</button>
       <span class="note">From the store of record — analyze submissions to populate.</span></div>
     </section>
@@ -162,17 +163,34 @@ async function loadInbox() {
     const cards = await cardsRes.json();
     const cardByName = {};
     [...(cards.brokers || []), ...(cards.insureds || [])].forEach(c => { cardByName[c.kind + ':' + c.name] = c; });
-    const groupTable = (groups, kind) => groups.length ? `<table><thead><tr><th>${kind === 'broker' ? 'Broker' : 'Insured'}</th><th>#</th><th>Latest</th><th>Approval rate</th><th>Avg completeness</th></tr></thead><tbody>
+    const groupTable = (groups, kind) => groups.length ? `<table><thead><tr><th>${kind === 'broker' ? 'Broker' : 'Insured'}</th><th>#</th><th>Latest</th><th>Approval rate</th><th>Avg completeness</th>${kind === 'broker' ? '<th></th>' : ''}</tr></thead><tbody>
       ${groups.map(g => { const c = cardByName[kind + ':' + g.name];
-        return `<tr><td>${esc(g.name)}</td><td>${esc(g.submission_count)}</td><td>${esc(g.latest_outcome)} / ${esc(g.latest_risk_tier)} · ${esc(g.latest_readiness)}</td><td>${c && c.approval_rate !== null && c.approval_rate !== undefined ? esc(c.approval_rate) : '—'}</td><td>${c ? esc(c.avg_completeness) : '—'}</td></tr>`; }).join('')}
+        return `<tr><td>${esc(g.name)}</td><td>${esc(g.submission_count)}</td><td>${esc(g.latest_outcome)} / ${esc(g.latest_risk_tier)} · ${esc(g.latest_readiness)}</td><td>${c && c.approval_rate !== null && c.approval_rate !== undefined ? esc(c.approval_rate) : '—'}</td><td>${c ? esc(c.avg_completeness) : '—'}</td>${kind === 'broker' ? `<td><button data-quality="${esc(g.name)}">Quality draft</button></td>` : ''}</tr>`; }).join('')}
       </tbody></table>` : '<p class="empty">none yet</p>';
     const topReasons = c => c && c.top_referral_reasons && c.top_referral_reasons.length
       ? `<p class="note">${esc(c.name)} — top referral reasons: ${c.top_referral_reasons.map(r => esc(r.reason) + ' ×' + esc(r.count)).join(', ')}</p>` : '';
     $('inbox').innerHTML =
       `<h3>Brokers</h3>${groupTable(inbox.brokers || [], 'broker')}${(cards.brokers || []).map(topReasons).join('')}
        <h3>Insureds</h3>${groupTable(inbox.insureds || [], 'insured')}`;
+    document.querySelectorAll('[data-quality]').forEach(btn =>
+      btn.addEventListener('click', () => showQuality(btn.getAttribute('data-quality'))));
   } catch (e) {
     $('inbox').innerHTML = '<span class="empty">Inbox unavailable.</span>';
+  }
+}
+
+async function showQuality(broker) {
+  const box = $('quality');
+  box.innerHTML = '<span class="empty">Composing the quality draft…</span>';
+  try {
+    const res = await fetch('/reports/brokers/' + encodeURIComponent(broker) + '/quality', {headers: headers()});
+    if (!res.ok) throw new Error('none');
+    const report = await res.json();
+    box.innerHTML = `<h3>Submission-quality draft — ${esc(report.broker)}</h3>
+      <p class="note">Trend ${esc(report.completeness_trend.direction)} · discrepancy rate ${esc(report.discrepancy_rate)}/submission · drafted from the record, never sent.</p>
+      <pre>${esc(report.draft)}</pre>`;
+  } catch (e) {
+    box.innerHTML = '<span class="empty">Quality report unavailable.</span>';
   }
 }
 

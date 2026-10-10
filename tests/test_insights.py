@@ -157,3 +157,78 @@ def test_inbox_and_scorecard_endpoints(client):
     assert one.json()["kind"] == "broker"
     assert client.get("/scorecards/brokers/No Such Broker").status_code == 404
     assert client.get("/scorecards/insureds/No Such Insured").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Round 4: broker submission-quality report
+# ---------------------------------------------------------------------------
+
+from underwriting_agent.insights import broker_quality_report
+from underwriting_agent.schemas import AgentResult, SubmissionFacts
+from underwriting_agent.store import ApprovalRecord
+
+
+def _record(sid: str, broker: str, completeness: float, missing=(), discrepancies: int = 0):
+    return ApprovalRecord(
+        result=AgentResult(
+            submission_id=sid,
+            insured_name=f"Insured {sid}",
+            facts=SubmissionFacts(
+                completeness_score=completeness,
+                missing_elements=list(missing),
+                discrepancy_count=discrepancies,
+                readiness="ready" if completeness >= 1.0 else "ready_with_gaps",
+            ),
+        ),
+        submission={"broker_name": broker, "insured_name": f"Insured {sid}"},
+    )
+
+
+def test_quality_report_computes_trend_discrepancies_and_missing():
+    records = [
+        _record("Q1", "Broker Q", 0.6, missing=("mfa_attestation",), discrepancies=2),
+        _record("Q2", "Broker Q", 0.8, missing=("mfa_attestation",), discrepancies=1),
+        _record("Q3", "Broker Q", 0.9, missing=("revenue",), discrepancies=0),
+        _record("Q4", "Broker Q", 1.0, discrepancies=0),
+        _record("Q5", "Other Broker", 0.5, missing=("application",), discrepancies=3),
+    ]
+    report = broker_quality_report(records, "Broker Q")
+    assert report is not None
+    assert report["submissions"] == 4
+    trend = report["completeness_trend"]
+    assert trend["direction"] == "improving"
+    assert trend["earlier_avg"] == 0.7 and trend["recent_avg"] == 0.95
+    assert trend["delta"] == 0.25
+    assert report["discrepancy_total"] == 3
+    assert report["discrepancy_rate"] == 0.75
+    assert report["discrepancy_share"] == 0.5
+    assert report["top_missing_elements"][0] == {"element": "mfa_attestation", "count": 2}
+    draft = report["draft"]
+    assert "not sent" in draft and "never sends it" in draft
+    assert "mfa_attestation" in draft
+
+
+def test_quality_report_declining_and_single_submission():
+    records = [_record("Q1", "Broker D", 1.0), _record("Q2", "Broker D", 0.7)]
+    report = broker_quality_report(records, "Broker D")
+    assert report["completeness_trend"]["direction"] == "declining"
+    single = broker_quality_report([_record("Q1", "Broker S", 0.9)], "Broker S")
+    assert single["completeness_trend"]["direction"] == "single_submission"
+    assert "no trend can be read yet" in single["draft"]
+    assert broker_quality_report(records, "Nobody") is None
+
+
+def test_quality_report_service_and_endpoint(service, client):
+    service.analyze(make_submission("SUB-G1", "Insured A", "Broker One"))
+    service.analyze(make_submission("SUB-G2", "Insured B", "Broker One"))
+    report = service.broker_quality_report("Broker One")
+    assert report is not None and report["submissions"] == 2
+    assert service.broker_quality_report("Nobody") is None
+
+    client.post("/submissions/analyze", json=SAMPLES["SUB-1002"])
+    response = client.get("/reports/brokers/Meridian Wholesale Brokers/quality")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["broker"] == "Meridian Wholesale Brokers"
+    assert "draft" in body and body["submissions"] >= 1
+    assert client.get("/reports/brokers/Nobody/quality").status_code == 404

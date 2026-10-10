@@ -307,6 +307,18 @@ def broker_scorecard(name: str) -> dict:
     return card
 
 
+@app.get("/reports/brokers/{name}/quality", dependencies=_AUTH)
+def broker_quality(name: str) -> dict:
+    """Broker submission-quality report: completeness trend,
+    extraction discrepancy rate, and top missing elements over the
+    broker's stored history — with the drafted report text. A draft
+    artifact for internal review; nothing is sent to the broker."""
+    report = service.broker_quality_report(name)
+    if report is None:
+        raise HTTPException(status_code=404, detail=f"No stored submissions from broker {name!r}.")
+    return report
+
+
 @app.post("/submissions/analyze", response_model=AgentResult, dependencies=_AUTH)
 def analyze(submission: SubmissionInput) -> AgentResult:
     return service.analyze(submission)
