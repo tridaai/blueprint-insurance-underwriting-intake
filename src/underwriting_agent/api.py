@@ -336,7 +336,10 @@ def list_samples() -> list[dict]:
 @app.get("/inbox", dependencies=_AUTH)
 def inbox() -> dict:
     """The intake queue grouped by insured and by broker — counts,
-    and each party's latest outcome, risk tier, and readiness."""
+    and each party's latest outcome, risk tier, and readiness —
+    plus the status-note follow-through digest: notes answered,
+    partially answered, and still outstanding across insureds,
+    oldest outstanding first."""
     return service.inbox()
 
 

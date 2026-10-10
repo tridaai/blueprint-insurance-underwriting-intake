@@ -59,6 +59,7 @@ from .insights import (
     compose_status_note,
     compute_metrics,
     dispatch_overview,
+    follow_through_digest,
     inbox_groups,
     insured_loss_timeline,
     queue_aging,
@@ -1292,12 +1293,18 @@ class SubmissionService:
         Each group carries its submission count and the latest
         submission's outcome, risk tier, readiness, and status —
         the scan an intake lead does to spot repeat insureds and
-        brokers with several cases in flight.
+        brokers with several cases in flight. The inbox also
+        carries the **follow-through digest**: every drafted
+        status note by state (answered / partially / still
+        outstanding, oldest outstanding first), so a resubmission
+        visibly closes — or fails to close — the loop a breached
+        case's note opened.
         """
         records = self._get_store().all_records()
         return {
             "insureds": inbox_groups(records, "insured"),
             "brokers": inbox_groups(records, "broker"),
+            "follow_through": follow_through_digest(records),
         }
 
     def scorecards(self) -> dict:

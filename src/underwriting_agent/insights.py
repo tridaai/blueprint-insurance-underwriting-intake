@@ -824,15 +824,7 @@ def status_note_follow_through(
             "answered": [],
             "still_outstanding": [],
         }
-    entries: list[dict] = [
-        {"line": "", "item": item}
-        for item in outstanding.get("missing_elements") or []
-    ]
-    for entry in outstanding.get("blocking_lines") or []:
-        entries += [
-            {"line": entry.get("line_of_business", ""), "item": item}
-            for item in entry.get("missing_items") or []
-        ]
+    entries = _outstanding_entries(note)
     if line_of_business:
         target = normalize_line(line_of_business)
         entries = [
@@ -878,6 +870,25 @@ def status_note_follow_through(
         "answered": answered,
         "still_outstanding": still,
     }
+
+
+def _outstanding_entries(note: dict) -> list[dict]:
+    """A note's outstanding snapshot as flat ``{line, item}``
+    entries — the note-level missing elements plus each blocking
+    line's missing items. The follow-through check and the inbox
+    digest read the same flattening, so they cannot disagree
+    about what a note was waiting on."""
+    outstanding = (note or {}).get("outstanding") or {}
+    entries: list[dict] = [
+        {"line": "", "item": item}
+        for item in outstanding.get("missing_elements") or []
+    ]
+    for entry in outstanding.get("blocking_lines") or []:
+        entries += [
+            {"line": entry.get("line_of_business", ""), "item": item}
+            for item in entry.get("missing_items") or []
+        ]
+    return entries
 
 
 def _follow_items_text(entries: list[dict]) -> str:
@@ -942,6 +953,107 @@ def follow_through_packet_lines(note: dict, follow: dict) -> list[str]:
         }[follow["state"]]
     )
     return lines
+
+
+# ---------------------------------------------------------------------------
+# Follow-through digest — every status note, and where its loop stands
+# ---------------------------------------------------------------------------
+
+#: Digest ordering: unresolved notes first (a loop nobody has
+#: closed), then partial answers, then answered ones.
+_FOLLOW_STATE_RANK = {
+    "still_outstanding": 0,
+    "awaiting_resubmission": 0,
+    "not_recorded": 0,
+    "partially_answered": 1,
+    "answered": 2,
+}
+
+
+def follow_through_digest(
+    records: list[ApprovalRecord], now: datetime | None = None
+) -> dict:
+    """Every drafted status note, digested by follow-through state.
+
+    The follow-through marking lives on the old note's record
+    (written when a resubmission from the same insured was
+    checked against the note's snapshot); until now it was only
+    visible by opening that record. The digest is the inbox-level
+    scan: which notes a resubmission **answered**, which it
+    answered **partially**, and which are **still outstanding** —
+    including the notes no resubmission has reached yet
+    (``awaiting_resubmission``: everything the note snapshot is
+    still outstanding, by definition). Oldest outstanding first,
+    so the loop that has been open longest is the one the
+    underwriter sees first. Pure projection — nothing is written,
+    and a note's text is never touched.
+    """
+    now = now or datetime.now(timezone.utc)
+    entries: list[dict] = []
+    for record in records:
+        note = record.status_note
+        if not note:
+            continue
+        result = record.result
+        party = history_entry(record)
+        follow = note.get("follow_through") or {}
+        drafted_raw = note.get("drafted_at", "")
+        drafted = _parse_timestamp(drafted_raw)
+        if follow:
+            raw_state = follow.get("state", "")
+            if not follow.get("recorded", True) or raw_state == "not_recorded":
+                state = "not_recorded"
+            elif raw_state in ("answered", "nothing_outstanding"):
+                state = "answered"
+            elif raw_state == "partially_answered":
+                state = "partially_answered"
+            else:
+                state = "still_outstanding"
+            answered = list(follow.get("answered") or [])
+            still = list(follow.get("still_outstanding") or [])
+            by_submission_id = follow.get("by_submission_id", "")
+            checked_at = follow.get("checked_at", "")
+        else:
+            state = "awaiting_resubmission"
+            answered = []
+            still = _outstanding_entries(note)
+            by_submission_id = ""
+            checked_at = ""
+        entries.append(
+            {
+                "submission_id": result.submission_id,
+                "insured_name": party["insured_name"],
+                "broker_name": party["broker_name"],
+                "drafted_at": drafted_raw,
+                "note_age_days": (
+                    max(0, (now.date() - drafted.date()).days)
+                    if drafted is not None
+                    else None
+                ),
+                "state": state,
+                "outstanding_at_drafting": len(_outstanding_entries(note)),
+                "answered_items": answered,
+                "still_outstanding_items": still,
+                "by_submission_id": by_submission_id,
+                "checked_at": checked_at,
+            }
+        )
+    entries.sort(
+        key=lambda e: (
+            _FOLLOW_STATE_RANK.get(e["state"], 0),
+            e["drafted_at"],
+            e["submission_id"],
+        )
+    )
+    counts: dict[str, int] = {}
+    for entry in entries:
+        counts[entry["state"]] = counts.get(entry["state"], 0) + 1
+    return {
+        "generated_at": now.isoformat(timespec="seconds"),
+        "total_notes": len(entries),
+        "counts": counts,
+        "entries": entries,
+    }
 
 
 # ---------------------------------------------------------------------------
