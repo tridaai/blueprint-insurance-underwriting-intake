@@ -883,6 +883,49 @@ numbers on the submission and its loss records. Line aliases fold too
   plain keeps have none, and an empty line is the honest
   value, as a missing movement baseline is a None, not an
   invention.
+- **Round 21 names the consequences of governed forgetting,
+  reads the response's tail, explains the trend's steps, and
+  lets an address move.** (1) A pruned rejection is the one
+  piece of forgotten history with a downstream consequence —
+  the scans may re-ask its direction — so the proposals
+  prune record keeps pruned rejections whole (kind,
+  dimension, direction, decider, decision date), and a draft
+  that re-asks one carries the decision as
+  `previously_decided` with a rationale sentence naming the
+  refusal and the prune: the forgetting stays governed, and
+  its consequence is visible at the moment it matters, on
+  the question itself — not in a metrics aggregate the
+  decider may never open. The marker is recomputed on
+  refresh against the direction the renewed draft actually
+  asks, and proposal ids run one past the highest number in
+  the document (the snapshot discipline), because a re-ask
+  that reissued a pruned proposal's id would corrupt every
+  citation of both. (2) The latency aggregate's max was a
+  number with no names behind it; the tail is now read as
+  `p90_days` beside the median and as the five slowest
+  measured notes, named with their first-touch authors —
+  the distribution's edge is a worklist, and a worklist
+  needs names. It rides the digest body, not the counts:
+  a percentile is a statistic, and the slowest list is a
+  reading, neither a thing snapshots subtract. (3) The
+  digest trend annotates broker-count steps a drafting-event
+  prune inside the step's window explains: the counts are
+  computed from the events as they stand, so retention moves
+  them backwards, and an unannotated step down reads as a
+  drafting collapse that never happened. The annotation is
+  cross-document explanation — the trend consulting another
+  document's record — and it annotates only: the deltas are
+  never rewritten, and a step no prune explains is left to
+  speak for itself. (4) A kept calibration label can be
+  renamed on the snapshot itself, the move recorded in
+  `label_history`: labels are addresses, and re-keeping a
+  report to rename it forks one evidence base into two
+  citations — the same dishonesty the by-label read exists
+  to prevent. The rename frees the old label at once (its
+  citations 404 honestly, as a label naming nothing should)
+  and answers to every keep's label rules through the one
+  shared check, so a rename cannot mint an address a keep
+  would refuse.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 

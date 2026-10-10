@@ -368,7 +368,15 @@ under the digest) compares the kept snapshots: the headline counts
 as a series, each count's change from the first snapshot to the
 latest and since the previous one, and — between the latest two —
 which ids **entered** and which **cleared** each section, so a
-count that moved reads apart from the churn underneath it. And
+count that moved reads apart from the churn underneath it. The
+trend also **annotates the steps retention explains**: the
+broker drafting counts are computed from the drafting events
+as they stand, so a drafting-event prune between two
+snapshots steps them *down* with no report going undrafted —
+each such step carries an annotation naming the prune inside
+its window (who, when, how many events left), so the step
+reads as retention, not a drafting collapse; a step down no
+prune explains is left unannotated. And
 once a snapshot exists the digest itself is **trend-aware**: it
 carries a `movement` block reading the live counts and section
 membership against the latest snapshot's (change and direction
@@ -411,7 +419,17 @@ an open question is not history. And because the drafting
 scans read that history (a rejected direction is never
 re-asked), its prune entry names the ids that left and the
 statuses they closed with, so what the scans stop remembering
-is itself on the record. And the still-waiting
+is itself on the record. The forgetting's consequence is
+named now, too: the prune entry keeps each pruned
+**rejection** whole (kind, dimension, direction, who refused
+it, when), and when a drafting scan later re-asks a direction
+whose refusal retention removed, the new draft carries that
+decision on its face — `previously_decided`, and a rationale
+sentence naming the earlier refusal and the prune that took
+its record — so a re-ask never reads as a first ask. Proposal
+ids run one past the highest number in the document for the
+same reason snapshot ids do: a re-asked direction never
+reissues a pruned proposal's number. And the still-waiting
 surface has a **second rung**: at twice the window a still-
 waiting case is flagged `escalated` in the digest, counted in
 `acknowledged_escalated` (a subset of still-waiting — never a
@@ -494,7 +512,13 @@ carries the whole wait), the digest aggregates it as
 `follow_through_response_latency` (notes measured, median /
 mean / max days), and the count of measured responses rides
 the snapshot counts as `follow_through_responses` — the pace
-beside the volume, on the same effort discipline.
+beside the volume, on the same effort discipline. The
+aggregate reads its **tail** now: `p90_days` beside the
+median, and the digest names the **slowest responses**
+(`follow_through_slowest_responses` — the five slowest
+measured notes, slowest first, each with the author of its
+first touch), because a healthy median can hide a handful of
+notes that waited weeks, and a tail is only workable named.
 
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:
@@ -660,7 +684,18 @@ plain keeps have no provenance to state, and say so by saying
 nothing). The line rides *beside* the `movement` sentence,
 never inside it: the cited diff's movement is the sentence
 the operator read, and annotating a side's origin must not
-rewrite it.
+rewrite it. A kept label can also be **renamed**
+(`POST /queue/sla/calibration/snapshots/rename`, console
+row): a debate that renames its milestone moves the address
+on the kept snapshot itself — the move recorded in the
+snapshot's `label_history` (from, to, who, when) — instead of
+re-keeping the report and forking the citation. The old
+label is freed at once (a by-label read of it answers 404,
+and a later keep may take it), the evidence is untouched,
+and the new label answers to every keep's rules: `current`
+refused as reserved, a label another kept report carries
+refused naming the holder, an empty or unchanged target
+refused as no rename at all.
 
 Two disciplines keep the proposals honest over time. A draft's
 evidence is a snapshot, so drafts **expire** (`PROPOSAL_EXPIRY_DAYS`,
