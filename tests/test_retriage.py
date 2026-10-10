@@ -110,6 +110,100 @@ def test_unversioned_records_are_named_as_such():
     assert report["moved"][0]["triaged_under"] == "unversioned"
 
 
+# ---------------------------------------------------------------------------
+# Reasons: a move names the guideline line it rests on
+# ---------------------------------------------------------------------------
+
+
+def _severity_referral(sub, facts) -> Triage:
+    """A simulated corpus change: severity now refers at any size."""
+    triage = classify_submission(sub, facts)
+    if triage.outcome == "in_appetite":
+        return triage.model_copy(
+            update={
+                "outcome": "borderline",
+                "referral_triggers": [
+                    "largest claim $310,000 exceeds 250,000 (referral trigger: severity)"
+                ],
+            }
+        )
+    return triage
+
+
+def test_a_move_names_the_guideline_line_behind_it():
+    store = InMemoryStore()
+    service = SubmissionService(store=store, checkpointer=False)
+    service.analyze(SAMPLES["SUB-1001"])
+    report = guideline_change_impact(store.all_records(), classifier=_severity_referral)
+    assert report["moved_count"] == 1
+    reasons = report["moved"][0]["reasons"]
+    assert reasons, "a move without a named guideline is just an alert"
+    reason = reasons[0]
+    assert reason["guideline_id"] == "UW-PROP-01"
+    assert "single claim above 250,000" in reason["guideline_line"]
+    assert "newly triggered" in reason["driver"]
+
+
+def test_a_removed_trigger_is_named_too():
+    store = InMemoryStore()
+    service = SubmissionService(store=store, checkpointer=False)
+    # Find a sample the live rules refer, then simulate the referral
+    # being lifted: the report must name the line that stopped firing.
+    borderline_id = None
+    for sid, payload in SAMPLES.items():
+        result = service.analyze(payload)
+        if result.triage.outcome == "borderline" and result.triage.referral_triggers:
+            borderline_id = sid
+            break
+    assert borderline_id, "the sample set needs a referred submission"
+
+    def _lifted(sub, facts):
+        triage = classify_submission(sub, facts)
+        if sub.submission_id == borderline_id:
+            return triage.model_copy(
+                update={"outcome": "in_appetite", "referral_triggers": []}
+            )
+        return triage
+
+    report = guideline_change_impact(store.all_records(), classifier=_lifted)
+    mover = next(m for m in report["moved"] if m["submission_id"] == borderline_id)
+    assert mover["from_outcome"] == "borderline"
+    assert mover["to_outcome"] == "in_appetite"
+    assert any(
+        "no longer triggered" in r["driver"] and r["guideline_id"]
+        for r in mover["reasons"]
+    )
+
+
+def test_a_tier_only_move_cites_the_loss_history_line():
+    store = InMemoryStore()
+    service = SubmissionService(store=store, checkpointer=False)
+    service.analyze(SAMPLES["SUB-1009"])
+
+    def _tier_shift(sub, facts):
+        triage = classify_submission(sub, facts)
+        if sub.submission_id == "SUB-1009":
+            return triage.model_copy(update={"risk_tier": "elevated"})
+        return triage
+
+    report = guideline_change_impact(store.all_records(), classifier=_tier_shift)
+    mover = report["moved"][0]
+    assert mover["from_outcome"] == mover["to_outcome"]
+    assert mover["from_tier"] != mover["to_tier"]
+    assert mover["reasons"][0]["guideline_id"] == "UW-PROP-01"
+    assert "loss history" in mover["reasons"][0]["driver"]
+
+
+def test_an_unexplained_move_still_names_the_governing_guideline():
+    store = InMemoryStore()
+    service = SubmissionService(store=store, checkpointer=False)
+    service.analyze(SAMPLES["SUB-1001"])  # cyber
+    report = guideline_change_impact(store.all_records(), classifier=_tightened_appetite)
+    reason = report["moved"][0]["reasons"][0]
+    assert reason["guideline_id"] == "UW-CYB-01"  # the cyber appetite doc
+    assert reason["guideline_line"]  # an actual line of that document
+
+
 def test_api_change_impact_endpoint(client):
     client.post("/submissions/analyze", json=SAMPLES["SUB-1001"])
     res = client.get("/guidelines/change-impact")
