@@ -101,8 +101,9 @@
       <button id="snapshot-digest">Snapshot this digest</button>
       <span class="note" id="digest-snapshot-status">One composed read over the surfaces that rot quietly — computed, never sent. A snapshot keeps it, dated and under your name, so the next one reports movement.</span></div>
       <div class="row" style="margin-top:6px"><label class="note">Keep newest <input id="digest-keep" type="number" min="1" value="12" style="width:56px"> snapshots</label>
+      <button id="preview-prune-digest">Preview prune</button>
       <button id="prune-digest">Prune snapshots</button>
-      <span class="note" id="digest-prune-status">A prune is the only way a kept snapshot leaves, and it is recorded on the document — who, when, what left, what survived.</span></div>
+      <span class="note" id="digest-prune-status">A prune is the only way a kept snapshot leaves, and it is recorded on the document — who, when, what left, what survived. Preview shows exactly that, first, and writes nothing.</span></div>
     </section>
     <section>
       <h2>Calibration &amp; proposals</h2>
@@ -303,11 +304,12 @@ async function loadQueue() {
        ${q.oldest ? `<p class="note">Oldest: ${esc(q.oldest.submission_id)} — ${esc(q.oldest.insured_name)}, ${esc(q.oldest.age_days)} day(s), ${esc(q.oldest.outcome)} / ${esc(q.oldest.risk_tier)}.</p>` : ''}
        <p class="note">SLA budgets by risk tier: ${esc(budgetText)} (source: ${q.sla_budgets_source === 'accepted_proposal' ? 'accepted proposal — settings record' : 'environment'}) — ${q.breach_count ? `<span class="flag">${esc(q.breach_count)} breached</span>` : 'no breaches'}${q.blocked_bundles ? ` · ${esc(q.blocked_bundles)} bundle(s) blocked on a line` : ''}.</p>
        ${q.breaches && q.breaches.length ? `<table><thead><tr><th>Breached</th><th>Tier</th><th>Age / budget</th><th>Breach webhook</th><th></th></tr></thead><tbody>
-       ${q.breaches.map(i => `<tr><td>${esc(i.submission_id)}<br><span class="note">${esc(i.insured_name)}</span>${i.escalated_note ? `<br><span class="flag">follow-through note open ${esc(i.escalated_note.note_age_days)}d</span>` : ''}${i.breach_since_snapshot === 'new' ? `<br><span class="flag">new breach since ${esc((q.breach_movement || {}).since_snapshot || 'the last snapshot')}</span>` : ''}</td><td>${esc(i.risk_tier)}</td><td>${esc(i.age_days)}d / ${esc(i.sla_budget_days)}d (${esc(i.sla_days_over)}d over)</td><td>${i.sla_breach_notice ? `fired ${esc(i.sla_breach_notice.first_observed_at)} · ${i.sla_breach_notice.dispatch_status === 'sent' ? pill('sent', 'good') : pill('failed', 'bad') + ` <button data-breach-retry="${esc(i.submission_id)}">Retry</button>`}` : '<span class="note">not notified</span>'}</td><td><button data-note="${esc(i.submission_id)}">Draft status note</button></td></tr>`).join('')}
+       ${q.breaches.map(i => `<tr><td>${esc(i.submission_id)}<br><span class="note">${esc(i.insured_name)}</span>${i.escalated_note ? `<br><span class="flag">follow-through note open ${esc(i.escalated_note.note_age_days)}d</span>` : ''}${i.acknowledged_escalation ? `<br><span class="flag">breach notice acknowledged ${esc(i.acknowledged_escalation.acknowledged_age_days)}d ago by ${esc(i.acknowledged_escalation.acknowledged_by)} — escalated: the broker was already called once</span>` : ''}${i.breach_since_snapshot === 'new' ? `<br><span class="flag">new breach since ${esc((q.breach_movement || {}).since_snapshot || 'the last snapshot')}</span>` : ''}</td><td>${esc(i.risk_tier)}</td><td>${esc(i.age_days)}d / ${esc(i.sla_budget_days)}d (${esc(i.sla_days_over)}d over)</td><td>${i.sla_breach_notice ? `fired ${esc(i.sla_breach_notice.first_observed_at)} · ${i.sla_breach_notice.dispatch_status === 'sent' ? pill('sent', 'good') : pill('failed', 'bad') + ` <button data-breach-retry="${esc(i.submission_id)}">Retry</button>`}` : '<span class="note">not notified</span>'}</td><td><button data-note="${esc(i.submission_id)}">Draft status note</button></td></tr>`).join('')}
        </tbody></table>` : ''}
        ${q.breach_movement ? `<p class="note">Breach movement since ${esc(q.breach_movement.since_snapshot)} (${esc(String(q.breach_movement.snapshot_taken_at).slice(0, 10))}, by ${esc(q.breach_movement.snapshot_taken_by)}): ${q.breach_movement.new_breaches.length ? `<span class="flag">${esc(q.breach_movement.new_breaches.length)} new</span> (${q.breach_movement.new_breaches.map(esc).join(', ')})` : 'no new breaches'} · ${esc(q.breach_movement.continuing_breaches.length)} continuing${q.breach_movement.cleared_breaches.length ? ` · cleared: ${q.breach_movement.cleared_breaches.map(esc).join(', ')}` : ''}.</p>` : ''}
        ${blockedItems.length ? `<p class="note">Blocked on lines:<br>${blockedItems.map(i => `${esc(i.submission_id)} — ` + i.blocking_lines.map(b => `${esc(b.line_of_business)} (${esc(b.age_days)}d waiting; missing: ${b.missing_items.map(esc).join(', ') || '—'})`).join('<br>')).join('<br>')}</p>` : ''}
        ${q.escalated_notes && q.escalated_notes.length ? `<p class="note">Escalated follow-through notes — loops only the underwriter can close:<br>${q.escalated_notes.map(e => `${esc(e.insured_name)} — note on ${esc(e.submission_id)} open ${esc(e.note_age_days)}d (${esc(e.state.replace(/_/g, ' '))})${e.awaiting_submission_ids && e.awaiting_submission_ids.length ? ' · awaiting here: ' + e.awaiting_submission_ids.map(esc).join(', ') : ' · nothing awaiting from this insured'}`).join('<br>')}</p>` : ''}
+       ${q.escalated_acknowledgements && q.escalated_acknowledgements.length ? `<p class="note">Escalated acknowledgements — the broker was already called once; the case still waits:<br>${q.escalated_acknowledgements.map(e => `${esc(e.insured_name)} — ${esc(e.submission_id)} acknowledged ${esc(e.acknowledged_age_days)}d ago by ${esc((e.acknowledgement || {}).acknowledged_by || '—')}${(e.acknowledgement || {}).note ? ' (“' + esc(e.acknowledgement.note) + '”)' : ''}`).join('<br>')}</p>` : ''}
        ${q.unknown_age && q.unknown_age.length ? `<p class="note">Unparseable submitted date: ${q.unknown_age.map(esc).join(', ')}</p>` : ''}`;
     document.querySelectorAll('[data-note]').forEach(btn =>
       btn.addEventListener('click', () => draftNote(btn.getAttribute('data-note'))));
@@ -349,7 +351,7 @@ async function draftNote(submissionId) {
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.detail || ('Error ' + res.status));
     box.innerHTML = `<h3>Status note — ${esc(body.submission_id)} (internal draft, not sent)</h3>
-      <p class="note">SLA at drafting: ${esc(body.sla.age_days)} day(s) in queue against a ${esc(body.sla.budget_days)}-day ${esc(body.sla.risk_tier)} budget · guardrails ${body.validation && body.validation.passed ? '<span class="check-pass">PASS</span>' : '<span class="check-fail">FAIL</span>'} · stored on the record.</p>
+      <p class="note">SLA at drafting: ${esc(body.sla.age_days)} day(s) in queue against a ${esc(body.sla.budget_days)}-day ${esc(body.sla.risk_tier)} budget · guardrails ${body.validation && body.validation.passed ? '<span class="check-pass">PASS</span>' : '<span class="check-fail">FAIL</span>'} · stored on the record.${body.repaired ? ' Steered repair applied: the first draft failed the wording check on record prose it interpolated; the stored text is the one bounded rewrite into the approved shapes, revalidated — the original validation and guidance are kept on the note.' : ''}</p>
       <pre>${esc(body.text)}</pre>`;
   } catch (e) {
     box.innerHTML = '<span class="empty">Status note unavailable: ' + esc(e.message || e) + '</span>';
@@ -404,7 +406,7 @@ async function loadSlaCalibration() {
       ? `<p class="note">Proposal-ready rows — candidate budgets whose moved cases are one-sided decided evidence. Drafting from a row stores a proposal carrying that row's evidence; the scan's best row is no longer the only door:</p><table><thead><tr><th>Tier</th><th>Row</th><th>Evidence</th><th></th></tr></thead><tbody>${readyRows.map(r => `<tr><td>${esc(r.tier)}</td><td>${esc(r.value)}d</td><td>${esc(r.moved)} decided case(s) would move (${esc(r.direction)} the budget)</td><td><button data-row-draft="${esc(r.tier)}:${esc(r.value)}">Draft proposal from this row</button></td></tr>`).join('')}</tbody></table>`
       : '<p class="note">No proposal-ready rows right now — no candidate budget carries a one-sided decided moved set.</p>';
     html += `<div class="row" style="margin-top:8px"><button id="snapshot-calibration">Snapshot this calibration report</button><span class="note" id="calibration-snapshot-status">A kept report is dated and under your name, so a budget debate can cite the evidence as of a date.</span></div>`;
-    html += `<div class="row" style="margin-top:6px"><label class="note">Keep newest <input id="calibration-keep" type="number" min="1" value="12" style="width:56px"> reports</label><button id="prune-calibration">Prune kept reports</button><span class="note" id="calibration-prune-status">Same discipline as the digest snapshots: a prune is recorded on the document — who, when, what left, what survived.</span></div>`;
+    html += `<div class="row" style="margin-top:6px"><label class="note">Keep newest <input id="calibration-keep" type="number" min="1" value="12" style="width:56px"> reports</label><button id="preview-prune-calibration">Preview prune</button><button id="prune-calibration">Prune kept reports</button><span class="note" id="calibration-prune-status">Same discipline as the digest snapshots: a prune is recorded on the document — who, when, what left, what survived. Preview shows exactly that, first, and writes nothing.</span></div>`;
     if (snaps.length) {
       html += `<p class="note">Kept reports:<br>${snaps.map(s => `${esc(s.snapshot_id)} by ${esc(s.taken_by)} at ${esc(String(s.taken_at).slice(0, 10))} — proposal-ready rows: ${(s.tiers || []).map(t => `${esc(t.tier)} [${(t.proposal_ready_rows || []).join(', ') || '—'}]`).join(' · ')}`).join('<br>')}</p>`;
     }
@@ -430,9 +432,24 @@ async function loadSlaCalibration() {
     if (sb) sb.addEventListener('click', snapshotCalibration);
     const pb = $('prune-calibration');
     if (pb) pb.addEventListener('click', pruneCalibrationSnapshots);
+    const pvb = $('preview-prune-calibration');
+    if (pvb) pvb.addEventListener('click', previewPruneCalibrationSnapshots);
   } catch (e) {
     box.innerHTML = '<span class="empty">SLA calibration unavailable.</span>';
   }
+}
+
+async function previewPruneCalibrationSnapshots() {
+  const keep = Number($('calibration-keep').value);
+  const res = await fetch('/queue/sla/calibration/snapshots/prune/preview', {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({keep})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('calibration-prune-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('calibration-prune-status').textContent = body.would_change
+    ? `Preview: would prune ${body.would_prune_count} report(s) (${body.would_prune_ids.join(', ')}) — surviving ${body.surviving_first} → ${body.surviving_last}. Nothing written.`
+    : `Preview: nothing would be pruned — ${body.surviving_count} report(s) kept, at or under the keep count.`;
 }
 
 async function pruneCalibrationSnapshots() {
@@ -718,7 +735,7 @@ async function loadOpsDigest() {
        <table><thead><tr><th>Surface</th><th>Needs attention</th><th>Detail</th></tr></thead><tbody>
        <tr><td>Stuck dispatches</td><td>${c.stuck_dispatches ? `<span class="flag">${esc(c.stuck_dispatches)}</span>` : '0'}</td><td><span class="note">${names(d.stuck_dispatches, 'submission_id') || '—'}</span></td></tr>
        <tr><td>Exhausted breach notices</td><td>${c.exhausted_breach_notices ? `<span class="flag">${esc(c.exhausted_breach_notices)}</span>` : '0'}</td><td><span class="note">${(d.exhausted_breach_notices || []).map(i => `${esc(i.submission_id)} (breach ${esc(i.notice_age_days)}d ago, ${esc(i.attempts)} attempt(s))`).join(', ') || '—'}${(d.acknowledged_breach_notices && d.acknowledged_breach_notices.length) ? `<br>acknowledged — a human called: ${d.acknowledged_breach_notices.map(i => esc(i.submission_id)).join(', ')}` : ''}</span></td></tr>
-       <tr><td>Acknowledged, still waiting</td><td>${c.acknowledged_still_waiting ? `<span class="flag">${esc(c.acknowledged_still_waiting)}</span>` : '0'}</td><td><span class="note">${(d.acknowledged_still_waiting || []).map(i => `${esc(i.submission_id)} (acknowledged ${esc(i.acknowledged_age_days)}d ago by ${esc((i.acknowledgement || {}).acknowledged_by || '—')} — the call happened; the file has not moved)`).join(', ') || '—'}</span></td></tr>
+       <tr><td>Acknowledged, still waiting</td><td>${c.acknowledged_still_waiting ? `<span class="flag">${esc(c.acknowledged_still_waiting)}</span>` : '0'}${c.acknowledged_escalated ? ` · <span class="flag">${esc(c.acknowledged_escalated)} escalated</span>` : ''}</td><td><span class="note">${(d.acknowledged_still_waiting || []).map(i => `${esc(i.submission_id)} (acknowledged ${esc(i.acknowledged_age_days)}d ago by ${esc((i.acknowledgement || {}).acknowledged_by || '—')} — the call happened; the file has not moved${i.escalated ? ' · ESCALATED — past the second window, on the queue with the first call on the record' : ''})`).join(', ') || '—'}</span></td></tr>
        <tr><td>Breached queue cases</td><td>${c.breached_queue ? `<span class="flag">${esc(c.breached_queue)}</span>` : '0'}</td><td><span class="note">${(d.breached_queue || []).map(i => `${esc(i.submission_id)} (${esc(i.sla_days_over)}d over)`).join(', ') || '—'}</span></td></tr>
        <tr><td>Follow-through outstanding</td><td>${esc(c.follow_through_outstanding || 0)}${c.follow_through_escalated ? ` · <span class="flag">${esc(c.follow_through_escalated)} escalated</span>` : ''}</td><td><span class="note">${names(d.follow_through_escalated, 'submission_id') ? 'escalated: ' + names(d.follow_through_escalated, 'submission_id') : '—'}</span></td></tr>
        <tr><td>Proposals</td><td>${esc(c.proposals_expired || 0)} expired${c.proposals_expiring_soon ? ` · ${esc(c.proposals_expiring_soon)} nearing expiry` : ''}</td><td><span class="note">${(d.proposals_expired || []).map(p => esc(p.proposal_id)).join(', ') || '—'}</span></td></tr>
@@ -781,6 +798,19 @@ async function snapshotDigest() {
   if (!res.ok) { $('digest-snapshot-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
   $('digest-snapshot-status').textContent = `Kept ${body.snapshot_id} — the trend now reads against it.`;
   loadOpsDigest();
+}
+
+async function previewPruneDigestSnapshots() {
+  const keep = Number($('digest-keep').value);
+  const res = await fetch('/ops/digest/snapshots/prune/preview', {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({keep})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('digest-prune-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('digest-prune-status').textContent = body.would_change
+    ? `Preview: would prune ${body.would_prune_count} snapshot(s) (${body.would_prune_ids.join(', ')}) — surviving ${body.surviving_first} → ${body.surviving_last}. Nothing written.`
+    : `Preview: nothing would be pruned — ${body.surviving_count} snapshot(s) kept, at or under the keep count.`;
 }
 
 async function pruneDigestSnapshots() {
@@ -1002,6 +1032,7 @@ $('refresh-inbox').addEventListener('click', () => { loadInbox(); loadQueue(); l
 $('refresh-digest').addEventListener('click', loadOpsDigest);
 $('snapshot-digest').addEventListener('click', snapshotDigest);
 $('prune-digest').addEventListener('click', pruneDigestSnapshots);
+$('preview-prune-digest').addEventListener('click', previewPruneDigestSnapshots);
 $('retry-due').addEventListener('click', retryDue);
 $('notify-breaches').addEventListener('click', notifyBreaches);
 loadSamples();
