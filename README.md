@@ -167,7 +167,15 @@ submission's packet cites its parties' scorecards as evidence),
 submission-quality report from the same records — completeness
 trend, extraction discrepancy rate, top missing elements — with a
 drafted report text (drafted, never sent; the console shows it from
-the inbox), **`/metrics`** totals runs, decisions, tokens, cost,
+the inbox). The draft is the third broker-facing text and now
+answers to the same drafting discipline as the letter and the
+status note: guardrail-checked (`validate_broker_quality_draft` —
+broker reference, bind language, premium figures, promises, the
+wording families, PII), steered once in the report's own shapes
+on a wording-only failure, and refused on substance, when the
+report serves its computed sections with the draft withheld and
+the refusal named — no premium or coverage language survives
+into a served draft. **`/metrics`** totals runs, decisions, tokens, cost,
 and latency — and aggregates the runs' recorded **letter
 advisories** (the borderline phrasings the blocking guardrails
 deliberately miss) into a drafting-quality trend: runs with
@@ -186,7 +194,18 @@ recorded on the record even though the note is never stored: a
 refused draft means record prose the composition interpolated
 carried a forbidden phrasing, and until it was kept it
 evaporated into the raised error — a rising repair or refusal
-count is an intake-data-quality signal, not a footnote — and
+count is an intake-data-quality signal, not a footnote. The
+refusal now also rides the case itself — the queue item for a
+breached case carries the latest refusal (when, which checks,
+steered or outright), and
+`GET /submissions/{id}/status-note/refusal` serves the refusal
+history on the case — because the underwriter who opens the
+case is the person who can fix the record prose that caused
+it, and until now they saw only that no note existed. The
+family also nests the broker quality report's own repairs and
+refusals (`broker_quality`, counted from the drafting event
+recorded per served report) as a third drafting surface named
+as its own source — and
 **`/audit/export`** emits the full decision trail
 as JSON or CSV. Decisions record **`decided_at`** alongside who
 decided and why — on the result, in the audit export, in the
@@ -411,6 +430,15 @@ landed, a different event from an exhausted breach notice,
 where nobody was told at all — and `unannounced_escalations`,
 the escalated cases no escalation check has ever fired for,
 so a sweep nobody ran is itself visible in the morning read.
+The unannounced are **aged**, too: each entry carries
+`unannounced_days` — the days since the case crossed the
+second rung with no telling — the headline names the oldest,
+and the cases unannounced past the gap threshold (one
+further window by default, `OPS_DIGEST_UNANNOUNCED_GAP_DAYS`)
+are counted as `stale_unannounced_escalations` on the same
+subset discipline: a sweep that has not run yet today and a
+sweep that stopped a month ago are the same count and
+different facts, and now the digest says which.
 
 The escalated follow-through notes have a **worked state** of
 their own (`POST /submissions/{id}/status-note/worked`, console
@@ -593,7 +621,16 @@ since 'march'?" is answered without keeping a throwaway
 snapshot to diff against, and nothing is stored to answer it.
 `current` is reserved for that side: keeping a snapshot under
 it is refused, and naming it as the `from_label` is refused —
-the live report is the newest side there is.
+the live report is the newest side there is. And a diff
+against `current` that shows movement worth citing can end
+with the keep itself
+(`POST /queue/sla/calibration/snapshots/keep-current`): the
+live side the operator just read — shaped once, not computed
+twice — is kept under the label they give at that moment
+(marked `kept_from: "current"`, uniqueness-checked like
+every keep, the label required because the act exists to
+make a citation), so the cited report is the one the diff
+showed, not a second computation that might have moved.
 
 Two disciplines keep the proposals honest over time. A draft's
 evidence is a snapshot, so drafts **expire** (`PROPOSAL_EXPIRY_DAYS`,

@@ -818,6 +818,38 @@ numbers on the submission and its loss records. Line aliases fold too
   so the diff reads it with no special case — and it is never
   stored, because a report kept to answer one question is a
   citation nobody made.
+- **Round 19 puts the refusal on the case, ages the gap, keeps
+  the diff, and disciplines the third draft.** (1) A recorded
+  refusal is projected where the work is: the queue item and a
+  case read carry the latest refusal (when, which checks,
+  steered or outright), because the underwriter who opens the
+  case is the person who can fix the record prose that caused
+  it — an aggregate in /metrics tells the team a signal
+  exists; the case is where it gets acted on. (2) The
+  unannounced count gains its age: `unannounced_days` is
+  measured from the rung's own definition (acknowledgement at
+  twice the window) so the digest's arithmetic can never
+  disagree with the escalation's, and the stale subset is
+  counted on the same subset discipline — it is a reading of
+  cases already counted, so the total cannot move when a gap
+  ages. (3) Keep-from-diff stores the live shape the shaper
+  built for the diff itself, re-stamped — never a recomputed
+  report — because a citation must name the evidence the
+  operator read; the label is required and the label checks
+  the plain keep and this one share live in one place, so the
+  two keeps cannot drift apart on what a label may be. (4)
+  The broker quality report joins the drafting discipline as
+  the third surface: one validator family, one steering
+  algorithm (the sentence rewrite is shared; only the
+  approved shapes differ per surface), refusal withholding
+  the draft while the computed sections serve — figures are
+  facts, prose is the draft — and one event per served
+  drafting, because the report is composed on read and a
+  repair nobody recorded would be a signal that evaporates
+  exactly as the note's refusals once did. Its counts nest in
+  the repair family as their own named source rather than
+  merging into the note's numbers: the surfaces share a
+  discipline, not a denominator.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 
