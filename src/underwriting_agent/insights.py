@@ -2555,6 +2555,7 @@ def ops_digest(
     acknowledged_wait_days: int | None = None,
     unannounced_gap_days: int | None = None,
     latest_snapshot: dict | None = None,
+    broker_drafting_events: list[dict] | None = None,
 ) -> dict:
     """One operator digest over the surfaces that rot quietly.
 
@@ -2625,7 +2626,13 @@ def ops_digest(
     steering repaired and status-note drafts refused, the full
     family along as ``status_note_repairs`` — so the kept
     history trends both broker-facing drafts, not only the
-    letter. The counts likewise
+    letter. The third drafting surface rides the same counts
+    too — the **broker quality report's** drafted / repaired /
+    refused counts, computed from the drafting events the
+    service passes in (``broker_drafting_events``), the full
+    aggregate along as ``broker_quality_repairs`` — so a kept
+    snapshot trends all three surfaces the drafting discipline
+    guards, each under its own source's numbers. The counts likewise
     carry the **worked follow-through response** (notes touched,
     and escalations a fresh touch is currently quieting —
     :func:`follow_through_digest`'s own counts): the problem
@@ -2751,6 +2758,7 @@ def ops_digest(
 
     advisory = _letter_advisory_aggregate(records)
     note_repairs = _status_note_repair_aggregate(records)
+    broker = _broker_quality_repair_aggregate(broker_drafting_events or [])
     counts = {
         "stuck_dispatches": dispatch["stuck_count"],
         "exhausted_breach_notices": dispatch["exhausted_breach_count"],
@@ -2816,6 +2824,18 @@ def ops_digest(
         # data-quality signal, not a worklist.
         "status_note_repaired": note_repairs["repaired_notes"],
         "status_note_refusals": note_repairs["refusals"],
+        # The third drafting surface rides the same counts on
+        # the same discipline: broker quality reports drafted,
+        # steered repairs among them, and drafts refused — the
+        # full family rides along below as
+        # ``broker_quality_repairs``, counted from the drafting
+        # events (the report is drafted on read, so the events
+        # are the count's only honest source). Neither enters
+        # total_attention — drafting quality is a signal, not a
+        # worklist, on this surface too.
+        "broker_quality_drafted": broker["reports_drafted"],
+        "broker_quality_repaired": broker["repaired_reports"],
+        "broker_quality_refusals": broker["refusals"],
         "proposals_expiring_soon": len(expiring_soon),
         "proposals_expired": len(expired),
     }
@@ -2938,6 +2958,7 @@ def ops_digest(
         ],
         "letter_advisories": advisory,
         "status_note_repairs": note_repairs,
+        "broker_quality_repairs": broker,
         "follow_through_response_latency": follow["response_latency"],
         "acknowledged_wait_days": acknowledged_wait_days,
         "unannounced_gap_days": unannounced_gap_days,
@@ -2975,6 +2996,9 @@ DIGEST_COUNT_KEYS = (
     "advisory_repaired_runs",
     "status_note_repaired",
     "status_note_refusals",
+    "broker_quality_drafted",
+    "broker_quality_repaired",
+    "broker_quality_refusals",
     "proposals_expiring_soon",
     "proposals_expired",
     "total_attention",
@@ -3017,6 +3041,9 @@ _COUNT_LABELS = {
     "advisory_repaired_runs": "advisory repairs",
     "status_note_repaired": "repaired status notes",
     "status_note_refusals": "refused status-note drafts",
+    "broker_quality_drafted": "broker quality reports drafted",
+    "broker_quality_repaired": "repaired broker quality drafts",
+    "broker_quality_refusals": "refused broker quality drafts",
     "proposals_expiring_soon": "proposals nearing expiry",
     "proposals_expired": "expired proposals",
     "total_attention": "total attention",

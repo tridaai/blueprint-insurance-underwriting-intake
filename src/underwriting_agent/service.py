@@ -1849,6 +1849,7 @@ class SubmissionService:
             self.calibration_proposals(),
             sla_budgets_map=self.effective_sla_budgets(),
             latest_snapshot=snapshots[-1] if snapshots else None,
+            broker_drafting_events=self.broker_quality_drafting_events(),
         )
 
     def snapshot_ops_digest(self, actor: str) -> dict:
