@@ -1149,7 +1149,14 @@ def queue_aging(
     owes a voice — then the exhausted, then the announced,
     then the delivered, whose cases wait on a decision rather
     than a telling; inside a band the oldest acknowledgement
-    still leads, as it always has.
+    still leads, as it always has. The view also **counts the
+    bands** (``telling_band_counts``, beside
+    ``items_with_escalated_acknowledgements``): the ordered
+    list shows the work, but its shape — how many cases nobody
+    has heard about against how many merely wait — is a number
+    an operator should read without scanning, composed from
+    the same entries the ordering reads so the two can never
+    disagree.
     """
     now = now or datetime.now(timezone.utc)
     budgets = sla_budgets_map if sla_budgets_map is not None else sla_budgets()
@@ -1356,6 +1363,22 @@ def queue_aging(
         escalated_ack_by_id.values(),
         key=_escalated_telling_order,
     )
+    # The bands, counted: the list is ordered by the telling
+    # (see _escalated_telling_order), and the counts state the
+    # worklist's shape in the same act of reading — how many
+    # cases nobody has heard about, against how many merely
+    # wait on a decision. Composed from the same entries the
+    # sort reads, in band order (the unannounced first, as the
+    # console header names them), zero-filled: a band with no
+    # cases in it is a fact about the queue, stated, not
+    # omitted.
+    telling_band_counts = {band: 0 for band in _TELLING_BANDS}
+    for entry in escalated_acknowledgements:
+        state = (entry.get("escalation_notice_state") or {}).get(
+            "state", ""
+        )
+        if state in telling_band_counts:
+            telling_band_counts[state] += 1
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "total_awaiting": total,
@@ -1375,6 +1398,7 @@ def queue_aging(
         "items_with_escalated_notes": flagged,
         "escalated_acknowledgements": escalated_acknowledgements,
         "items_with_escalated_acknowledgements": ack_flagged,
+        "telling_band_counts": telling_band_counts,
     }
 
 
