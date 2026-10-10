@@ -227,6 +227,47 @@ def list_samples() -> list[dict]:
     return load_sample_submissions()
 
 
+@app.get("/inbox", dependencies=_AUTH)
+def inbox() -> dict:
+    """The intake queue grouped by insured and by broker — counts,
+    and each party's latest outcome, risk tier, and readiness."""
+    return service.inbox()
+
+
+@app.get("/inbox/insureds", dependencies=_AUTH)
+def inbox_insureds() -> list[dict]:
+    return service.inbox()["insureds"]
+
+
+@app.get("/inbox/brokers", dependencies=_AUTH)
+def inbox_brokers() -> list[dict]:
+    return service.inbox()["brokers"]
+
+
+@app.get("/scorecards", dependencies=_AUTH)
+def scorecards() -> dict:
+    """History scorecards for every insured and broker in the store:
+    submissions, outcome mix, approval rate, average completeness,
+    top referral reasons."""
+    return service.scorecards()
+
+
+@app.get("/scorecards/insureds/{name}", dependencies=_AUTH)
+def insured_scorecard(name: str) -> dict:
+    card = service.scorecard("insured", name)
+    if card is None:
+        raise HTTPException(status_code=404, detail=f"No stored submissions for insured {name!r}.")
+    return card
+
+
+@app.get("/scorecards/brokers/{name}", dependencies=_AUTH)
+def broker_scorecard(name: str) -> dict:
+    card = service.scorecard("broker", name)
+    if card is None:
+        raise HTTPException(status_code=404, detail=f"No stored submissions from broker {name!r}.")
+    return card
+
+
 @app.post("/submissions/analyze", response_model=AgentResult, dependencies=_AUTH)
 def analyze(submission: SubmissionInput) -> AgentResult:
     return service.analyze(submission)

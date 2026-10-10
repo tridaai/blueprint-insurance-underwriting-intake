@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from .extractor import extraction_discrepancies
 from .facts import readiness_explanation
+from .insights import format_scorecard_line
 from .model_backends import DraftContext
 from .schemas import Diagnosis, DocumentExtraction, SubmissionInput
 from .screening import sanitized_notes
@@ -62,6 +63,10 @@ def memory_evidence_lines(history: dict | None) -> list[str]:
             f"this broker ({history.get('broker', '')}) in the stored history "
             f"(outcomes: {breakdown})"
         )
+    cards = history.get("scorecards") or {}
+    for kind in ("insured", "broker"):
+        if cards.get(kind):
+            lines.append(format_scorecard_line(cards[kind]))
     for index, feedback in enumerate(history.get("feedback", [])):
         scope = (
             "for this insured"

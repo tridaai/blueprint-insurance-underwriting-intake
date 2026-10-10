@@ -33,12 +33,13 @@ from dataclasses import dataclass, field
 from .checkpoints import get_checkpointer
 from .config import env_float, env_str, load_dotenv
 from .graph import resume_approval, run_submission
+from .insights import all_scorecards, inbox_groups, scorecard, scorecards_for
 from .model_backends import ModelBackend, get_backend
 from .object_store import get_object_store
 from .ports import Checkpointer, EventSink, ObjectStore
 from .retriever import Retriever, get_retriever
 from .schemas import AgentResult, SubmissionInput
-from .store import ApprovalRecord, broker_summary, default_store
+from .store import ApprovalRecord, broker_summary, default_store, history_entry
 
 __all__ = ["ApprovalRecord", "BatchItem", "SubmissionService", "Store"]
 
@@ -245,10 +246,24 @@ class SubmissionService:
         # this broker becomes diagnosis evidence for the new analysis.
         # The raw entries ride along too — the diagnosis tool loop
         # (provider mode) reads insured / broker history through them.
-        priors = self._get_store().prior_submissions(
-            exclude_submission_id=model.submission_id
-        )
+        prior_records = [
+            record
+            for record in self._get_store().all_records()
+            if record.result.submission_id != model.submission_id
+        ]
+        priors = [history_entry(record) for record in prior_records]
         history = self._history_summary(model, priors)
+        # Scorecards: the parties' whole track record (outcome mix,
+        # approval rate, average completeness, top referral reasons)
+        # joins the same evidence — the diagnosis cites it when the
+        # insured or broker has history in the store.
+        cards = scorecards_for(
+            prior_records,
+            insured_name=model.insured_name,
+            broker_name=model.broker_name,
+        )
+        if cards:
+            history = {**(history or {}), "scorecards": cards}
         # Feedback loop: what underwriters said about earlier cases
         # for this insured / broker (with their reasons) joins the
         # same evidence — the next diagnosis shows the pattern of
@@ -461,3 +476,25 @@ class SubmissionService:
     def get(self, submission_id: str) -> AgentResult | None:
         record = self._get_store().get(submission_id)
         return record.result if record else None
+
+    def inbox(self) -> dict:
+        """The intake queue grouped by insured and by broker.
+
+        Each group carries its submission count and the latest
+        submission's outcome, risk tier, readiness, and status —
+        the scan an intake lead does to spot repeat insureds and
+        brokers with several cases in flight.
+        """
+        records = self._get_store().all_records()
+        return {
+            "insureds": inbox_groups(records, "insured"),
+            "brokers": inbox_groups(records, "broker"),
+        }
+
+    def scorecards(self) -> dict:
+        """History scorecards for every insured and broker in the store."""
+        return all_scorecards(self._get_store().all_records())
+
+    def scorecard(self, kind: str, name: str) -> dict | None:
+        """One party's scorecard (``kind`` is "insured" or "broker")."""
+        return scorecard(self._get_store().all_records(), kind, name)

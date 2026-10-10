@@ -144,6 +144,9 @@ class InMemoryStore:
         with self._lock:
             return list(self._records.values())
 
+    def all_records(self) -> list[ApprovalRecord]:
+        return self._all()
+
     def prior_submissions(self, exclude_submission_id: str) -> list[dict]:
         return [
             history_entry(r)
@@ -226,6 +229,9 @@ class PostgresStore:
             ).fetchall()
         return [_record_from_dict(row[0]) for row in rows]
 
+    def all_records(self) -> list[ApprovalRecord]:
+        return self._all_records()
+
     def prior_submissions(self, exclude_submission_id: str) -> list[dict]:
         return [
             history_entry(record)
@@ -287,6 +293,9 @@ class SQLiteStore:
                 "SELECT payload FROM approvals ORDER BY rowid"
             ).fetchall()
         return [row[0] for row in rows]
+
+    def all_records(self) -> list[ApprovalRecord]:
+        return [_load_record(payload) for payload in self._all_payloads()]
 
     def prior_submissions(self, exclude_submission_id: str) -> list[dict]:
         return [
