@@ -2119,25 +2119,46 @@ def _digest_movement(
 
 
 def _movement_sentence(movement: dict) -> str:
-    """The movement block as one line in the digest's own voice:
-    each headline count that moved, named and directed — or the
-    plain statement that nothing did."""
+    """The movement block as prose in the digest's own voice:
+    each headline count that moved, named and directed, and the
+    membership behind the movement — which ids entered and which
+    cleared, woven into the same line — or the plain statement
+    that nothing did. Counts alone read as arithmetic on every
+    surface the headline reaches; an operator works ids, so the
+    headline names them. A count can sit flat while its
+    membership churns (one case cleared, another entered), and
+    the line says so rather than reporting no movement."""
     moved = [
         f"{_COUNT_LABELS[key]} {row['direction']} "
         f"{abs(row['change'])}"
         for key, row in movement["counts"].items()
         if row["change"]
     ]
-    if not moved:
+    membership = []
+    sections = movement.get("sections") or {}
+    for section in _DIGEST_SECTION_IDS:
+        row = sections.get(section) or {}
+        label = _COUNT_LABELS[section]
+        if row.get("entered"):
+            membership.append(
+                f"{', '.join(row['entered'])} entered {label}"
+            )
+        if row.get("cleared"):
+            membership.append(
+                f"{', '.join(row['cleared'])} cleared {label}"
+            )
+    if not moved and not membership:
         return (
             f"Since {movement['since_snapshot']}: no movement in "
             "the headline counts."
         )
-    return (
+    sentence = (
         f"Since {movement['since_snapshot']}: "
-        + ", ".join(moved)
-        + "."
+        + (", ".join(moved) if moved else "no movement in the headline counts")
     )
+    if membership:
+        sentence += " — " + "; ".join(membership)
+    return sentence + "."
 
 
 def build_digest_snapshot(
