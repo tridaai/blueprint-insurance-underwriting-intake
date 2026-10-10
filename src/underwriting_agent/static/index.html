@@ -94,6 +94,12 @@
       <span class="note" id="dispatch-status"></span></div>
     </section>
     <section>
+      <h2>Ops digest</h2>
+      <div id="opsdigest" class="empty">Loading…</div>
+      <div class="row" style="margin-top:10px"><button id="refresh-digest">Refresh digest</button>
+      <span class="note">One composed read over the surfaces that rot quietly — computed, never sent.</span></div>
+    </section>
+    <section>
       <h2>Calibration &amp; proposals</h2>
       <div id="calibration" class="empty">Loading…</div>
       <div id="proposals" style="margin-top:10px"></div>
@@ -212,9 +218,9 @@ async function loadInbox() {
       : pill(esc(st));
     $('followthrough').innerHTML = ft.total_notes
       ? `<h3>Status-note follow-through</h3>
-         <p class="note">${Object.keys(ft.counts || {}).map(k => `${esc(ft.counts[k])} ${esc(k.replace(/_/g, ' '))}`).join(' · ')} — oldest outstanding first. A note's loop closes when a resubmission from the same insured answers what it was waiting on.</p>
+         <p class="note">${Object.keys(ft.counts || {}).map(k => `${esc(ft.counts[k])} ${esc(k.replace(/_/g, ' '))}`).join(' · ')} — oldest outstanding first. A note's loop closes when a resubmission from the same insured answers what it was waiting on; a loop open ${esc(ft.escalation_days)}+ days escalates — the note's own flag, not an SLA breach.</p>
          <table><thead><tr><th>Note on</th><th>State</th><th>Outstanding</th><th></th></tr></thead><tbody>
-         ${ft.entries.map(e => `<tr><td>${esc(e.submission_id)}<br><span class="note">${esc(e.insured_name)} · noted ${esc(e.note_age_days)}d ago</span></td><td>${ftPill(e.state)}</td><td>${e.still_outstanding_items && e.still_outstanding_items.length ? e.still_outstanding_items.map(i => esc(i.item)).join(', ') : 'none'}</td><td>${e.by_submission_id ? `<span class="note">checked by ${esc(e.by_submission_id)}</span>` : ''}</td></tr>`).join('')}
+         ${ft.entries.map(e => `<tr><td>${esc(e.submission_id)}<br><span class="note">${esc(e.insured_name)} · noted ${esc(e.note_age_days)}d ago</span></td><td>${ftPill(e.state)}${e.escalated ? ' ' + pill('escalated', 'bad') : ''}</td><td>${e.still_outstanding_items && e.still_outstanding_items.length ? e.still_outstanding_items.map(i => esc(i.item)).join(', ') : 'none'}</td><td>${e.by_submission_id ? `<span class="note">checked by ${esc(e.by_submission_id)}</span>` : ''}</td></tr>`).join('')}
          </tbody></table>`
       : '';
     document.querySelectorAll('[data-quality]').forEach(btn =>
@@ -387,15 +393,27 @@ async function loadProposals() {
       : p.expired ? pill('expired', 'bad') : pill('draft', 'warn');
     const sourceText = v => v.source === 'accepted_proposal' ? 'accepted proposal (settings record)' : 'environment configuration';
     const canRevert = v => v.settings && v.settings.history && v.settings.history.length;
+    const expiredCount = proposals.filter(p => p.status === 'draft' && p.expired).length;
+    const histLine = (v, kind) => {
+      const h = (v.settings && v.settings.history) || [];
+      if (!h.length) return '';
+      const describe = e => e.changes
+        ? e.changes.map(ch => `${esc(ch.dimension)} ${esc(ch.from)} → ${esc(ch.to)}`).join(', ') + (e.restore ? ' (restore)' : ' (revert)')
+        : `${esc(e.dimension)} ${esc(e.from)} → ${esc(e.to)}${e.revert ? ' (revert)' : ''}`;
+      return `<p class="note">History: ${h.map((e, i) => `#${i} ${describe(e)} <button data-restore="${kind}:${i}">Restore to #${i}</button>`).join(' · ')}</p>`;
+    };
     $('proposals').innerHTML =
       `<h3>Calibration proposals</h3>
        <p class="note">Thresholds in force: limit jump ${esc(t.limit_jump_pct)}% · new-claim floor $${esc(t.new_claim_min_incurred)} · development floor $${esc(t.development_min_increase)} — source: ${sourceText(s)}.${canRevert(s) ? ` <button id="revert-thresholds">Revert last threshold change</button>` : ''}</p>
+       ${histLine(s, 'thresholds')}
        <p class="note">SLA budgets in force: ${Object.keys(b).map(tier => `${esc(tier)} ${esc(b[tier])}d`).join(' · ')} — source: ${sourceText(sla)}.${canRevert(sla) ? ` <button id="revert-sla">Revert last SLA-budget change</button>` : ''}</p>
+       ${histLine(sla, 'sla')}
        ${proposals.length ? `<table><thead><tr><th>Proposal</th><th>Move</th><th>Evidence</th><th>Status</th><th></th></tr></thead><tbody>
        ${proposals.map(p => `<tr><td>${esc(p.proposal_id)}<br><span class="note">${esc(dimName(p))}</span></td><td>${moveText(p)}</td><td><span class="note">${esc(p.rationale)}${p.status === 'withdrawn' && p.withdrawal_reason ? ' Withdrawn: ' + esc(p.withdrawal_reason) : ''}${p.refreshes && p.refreshes.length ? ` Refreshed ${esc(p.refreshes.length)}× (last: ${esc(p.refreshes[p.refreshes.length - 1].outcome)}).` : ''}</span></td><td>${statusPill(p)}${p.decided_by ? `<br><span class="note">by ${esc(p.decided_by)}</span>` : ''}${p.status === 'draft' && !p.expired && p.expires_at ? `<br><span class="note">evidence live until ${esc(String(p.expires_at).slice(0, 10))}</span>` : ''}</td><td>${p.status === 'draft' ? (p.expired ? `<button data-prop-refresh="${esc(p.proposal_id)}">Refresh evidence</button>` : `<button data-prop-accept="${esc(p.proposal_id)}">Accept</button> <button data-prop-reject="${esc(p.proposal_id)}">Reject</button>`) : ''}</td></tr>`).join('')}
        </tbody></table>` : '<p class="empty">No proposals drafted — draft from the stored renewals and decided waits when their evidence carries a one-sided move.</p>'}
        <div class="row" style="margin-top:8px"><button id="draft-proposals">Draft threshold proposals</button>
        <button id="draft-sla-proposals">Draft SLA-budget proposals</button>
+       ${expiredCount ? `<button id="refresh-expired">Refresh all expired (${expiredCount})</button>` : ''}
        <span class="note" id="proposal-status"></span></div>
        <p class="note">Accepting writes the value into the settings record the pipeline reads — the change, its evidence, and its decider stay on the record, and a revert restores the prior value as a new audited entry. A draft's evidence expires (14 days by default): an expired draft must be refreshed — its scan re-run against today's store — before it can be decided.</p>`;
     document.querySelectorAll('[data-prop-accept]').forEach(btn =>
@@ -406,6 +424,13 @@ async function loadProposals() {
       btn.addEventListener('click', () => refreshProposal(btn.getAttribute('data-prop-refresh'))));
     $('draft-proposals').addEventListener('click', draftProposals);
     $('draft-sla-proposals').addEventListener('click', draftSlaProposals);
+    const ra = $('refresh-expired');
+    if (ra) ra.addEventListener('click', refreshAllExpired);
+    document.querySelectorAll('[data-restore]').forEach(btn =>
+      btn.addEventListener('click', () => {
+        const parts = btn.getAttribute('data-restore').split(':');
+        restoreSettings(parts[0], Number(parts[1]));
+      }));
     const rt = $('revert-thresholds');
     if (rt) rt.addEventListener('click', () => revertSettings('/calibration/settings/revert', 'threshold'));
     const rs = $('revert-sla');
@@ -467,6 +492,37 @@ async function refreshProposal(proposalId) {
   loadProposals();
 }
 
+async function refreshAllExpired() {
+  const actor = $('actor').value.trim();
+  if (!actor) { $('proposal-status').textContent = 'Enter the underwriter name in the gate panel first — a refresh is audited under its actor.'; return; }
+  $('proposal-status').textContent = 'Refreshing every expired draft — each scan re-runs on its own…';
+  const res = await fetch('/calibration/proposals/refresh-expired', {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({actor})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('proposal-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  const ids = list => (list || []).map(p => p.proposal_id).join(', ') || 'none';
+  $('proposal-status').textContent = `Swept ${body.counts.swept} expired draft(s) — renewed: ${ids(body.renewed)}; withdrawn: ${ids(body.withdrawn)}. Nothing was decided.`;
+  loadProposals();
+  loadOpsDigest();
+}
+
+async function restoreSettings(kind, index) {
+  const actor = $('actor').value.trim();
+  if (!actor) { $('proposal-status').textContent = 'Enter the underwriter name in the gate panel first — a restore is audited under its actor.'; return; }
+  const path = kind === 'sla' ? '/queue/sla/settings/restore' : '/calibration/settings/restore';
+  const res = await fetch(path, {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({actor, history_index: index})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('proposal-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('proposal-status').textContent = `Restored the ${kind === 'sla' ? 'SLA-budget' : 'threshold'} settings to history entry #${index} — recorded as one new audited change.`;
+  loadCalibration();
+  loadQueue();
+}
+
 async function revertSettings(path, label) {
   const actor = $('actor').value.trim();
   if (!actor) { $('proposal-status').textContent = 'Enter the underwriter name in the gate panel first — a revert is audited under its actor.'; return; }
@@ -479,6 +535,26 @@ async function revertSettings(path, label) {
   $('proposal-status').textContent = `Reverted the last ${label} change — the prior value is back in force, recorded as a new history entry.`;
   loadCalibration();
   loadQueue();
+}
+
+async function loadOpsDigest() {
+  try {
+    const res = await fetch('/ops/digest', {headers: headers()});
+    if (!res.ok) throw new Error('none');
+    const d = await res.json();
+    const c = d.counts || {};
+    const names = (list, key) => (list || []).map(e => esc(e[key])).join(', ');
+    $('opsdigest').innerHTML =
+      `<p class="note">${esc(d.headline)}</p>
+       <table><thead><tr><th>Surface</th><th>Needs attention</th><th>Detail</th></tr></thead><tbody>
+       <tr><td>Stuck dispatches</td><td>${c.stuck_dispatches ? `<span class="flag">${esc(c.stuck_dispatches)}</span>` : '0'}</td><td><span class="note">${names(d.stuck_dispatches, 'submission_id') || '—'}</span></td></tr>
+       <tr><td>Breached queue cases</td><td>${c.breached_queue ? `<span class="flag">${esc(c.breached_queue)}</span>` : '0'}</td><td><span class="note">${(d.breached_queue || []).map(i => `${esc(i.submission_id)} (${esc(i.sla_days_over)}d over)`).join(', ') || '—'}</span></td></tr>
+       <tr><td>Follow-through outstanding</td><td>${esc(c.follow_through_outstanding || 0)}${c.follow_through_escalated ? ` · <span class="flag">${esc(c.follow_through_escalated)} escalated</span>` : ''}</td><td><span class="note">${names(d.follow_through_escalated, 'submission_id') ? 'escalated: ' + names(d.follow_through_escalated, 'submission_id') : '—'}</span></td></tr>
+       <tr><td>Proposals</td><td>${esc(c.proposals_expired || 0)} expired${c.proposals_expiring_soon ? ` · ${esc(c.proposals_expiring_soon)} nearing expiry` : ''}</td><td><span class="note">${(d.proposals_expired || []).map(p => esc(p.proposal_id)).join(', ') || '—'}</span></td></tr>
+       </tbody></table>`;
+  } catch (e) {
+    $('opsdigest').innerHTML = '<span class="empty">Ops digest unavailable.</span>';
+  }
 }
 
 async function loadDispatch() {
@@ -628,6 +704,7 @@ async function analyze() {
   loadInbox();
   loadQueue();
   loadDispatch();
+  loadOpsDigest();
   loadCalibration();
 }
 
@@ -645,6 +722,7 @@ async function decide(path) {
   loadInbox();
   loadQueue();
   loadDispatch();
+  loadOpsDigest();
   loadCalibration();
   $('gate-section').style.display = 'none';
 }
@@ -652,7 +730,8 @@ async function decide(path) {
 $('analyze').addEventListener('click', analyze);
 $('approve').addEventListener('click', () => decide('approve'));
 $('reject').addEventListener('click', () => decide('reject'));
-$('refresh-inbox').addEventListener('click', () => { loadInbox(); loadQueue(); loadDispatch(); loadCalibration(); });
+$('refresh-inbox').addEventListener('click', () => { loadInbox(); loadQueue(); loadDispatch(); loadOpsDigest(); loadCalibration(); });
+$('refresh-digest').addEventListener('click', loadOpsDigest);
 $('retry-due').addEventListener('click', retryDue);
 $('notify-breaches').addEventListener('click', notifyBreaches);
 loadSamples();
@@ -660,6 +739,7 @@ loadEvals();
 loadInbox();
 loadQueue();
 loadDispatch();
+loadOpsDigest();
 loadCalibration();
 </script>
 </body>
