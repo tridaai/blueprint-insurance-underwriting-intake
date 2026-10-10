@@ -105,6 +105,11 @@
       <button id="preview-prune-digest">Preview prune</button>
       <button id="prune-digest">Prune snapshots</button>
       <span class="note" id="digest-prune-status">A prune is the only way a kept snapshot leaves, and it is recorded on the document — who, when, what left, what survived. Preview shows exactly that, first, and writes nothing.</span></div>
+      <div class="row" style="margin-top:6px"><label class="note">Broker drafting events: keep newest <input id="drafting-keep" type="number" min="1" value="200" style="width:56px"></label>
+      <button id="preview-prune-drafting">Preview prune</button>
+      <button id="prune-drafting">Prune events</button>
+      <span class="note" id="drafting-prune-status">One event per served broker quality report, and the events are the broker drafting counts' only source — a prune is recorded on their document too.</span></div>
+      <div id="drafting-retention"></div>
     </section>
     <section>
       <h2>Calibration &amp; proposals</h2>
@@ -458,6 +463,7 @@ async function loadSlaCalibration() {
       html += d.movement
         ? `<p class="note">${esc(d.movement)}</p>`
         : `<p class="note">Diff ${esc(d.from_snapshot)}${d.from_label ? ' (“' + esc(d.from_label) + '”)' : ''} → ${esc(d.to_snapshot)}${d.to_label ? ' (“' + esc(d.to_label) + '”)' : ''}: ${moves.length ? moves.join(' · ') : 'no proposal-ready movement'}.</p>`;
+      if (d.provenance) html += `<p class="note">${esc(d.provenance)}</p>`;
     }
     box.innerHTML = html;
     document.querySelectorAll('[data-row-draft]').forEach(btn =>
@@ -533,6 +539,7 @@ async function diffCalibrationByLabel() {
   const d = body.diff;
   $('calibration-diff-status').textContent = `Diff ${d.from_snapshot}${d.from_label ? ' (“' + d.from_label + '”)' : ''} → ${d.to_snapshot}${d.to_label ? ' (“' + d.to_label + '”)' : ''}.`;
   box.innerHTML = d.movement ? `<p class="note">${esc(d.movement)}</p>` : '';
+  if (d.provenance) box.innerHTML += `<p class="note">${esc(d.provenance)}</p>`;
   if (d.to_label === 'current') {
     box.innerHTML += `<div class="row" style="margin-top:6px"><input id="calibration-keep-current-label" type="text" placeholder="Label for this current report — the citation handle" style="flex:1"><button id="keep-calibration-current">Keep this current report</button><span class="note" id="calibration-keep-current-status">Movement worth citing? Keep the live side you just read, under a label you give now — the very shape this diff showed, not a second computation. A label is required, “current” is refused, and a label already in use is refused.</span></div>`;
     $('keep-calibration-current').addEventListener('click', keepCalibrationCurrent);
@@ -577,6 +584,7 @@ async function loadProposals() {
     const sla = body.sla_settings || {};
     const b = sla.budgets || {};
     const proposals = body.proposals || [];
+    const propPrunes = body.prunes || [];
     const dimName = p => p.kind === 'sla_budget'
       ? `SLA budget · ${p.dimension} tier`
       : ({limit_jump_pct: 'Limit jump %', new_claim_min_incurred: 'New-claim floor $', development_min_increase: 'Development floor $'})[p.dimension] || p.dimension;
@@ -612,6 +620,11 @@ async function loadProposals() {
        <button id="draft-sla-proposals">Draft SLA-budget proposals</button>
        ${expiredCount ? `<button id="preview-refresh-expired">Preview sweep</button> <button id="refresh-expired">Refresh all expired (${expiredCount})</button>` : ''}
        <span class="note" id="proposal-status"></span></div>
+       <div class="row" style="margin-top:6px"><label class="note">Decided history: keep newest <input id="proposals-keep" type="number" min="1" value="50" style="width:56px"></label>
+       <button id="preview-prune-proposals">Preview prune</button>
+       <button id="prune-proposals">Prune decided history</button>
+       <span class="note" id="proposals-prune-status">Retention over the decided history only — a live draft is an open question and never leaves by prune. The prune is recorded on the document, because the drafting scans read the decided history: what they stop remembering is named.</span></div>
+       ${propPrunes.length ? `<p class="note">Last prune: ${esc(propPrunes[propPrunes.length - 1].pruned_count)} decided proposal(s) on ${esc(String(propPrunes[propPrunes.length - 1].pruned_at).slice(0, 10))} by ${esc(propPrunes[propPrunes.length - 1].pruned_by)} (${esc(propPrunes[propPrunes.length - 1].pruned_ids.join(', '))}) — surviving decided range ${esc(propPrunes[propPrunes.length - 1].surviving_first)} → ${esc(propPrunes[propPrunes.length - 1].surviving_last)}.</p>` : ''}
        <div class="row" style="margin-top:4px"><input id="restore-note" type="text" placeholder="Why restore? (optional — kept on the restore entry as its decision note)" style="flex:1"></div>
        <p class="note">Accepting writes the value into the settings record the pipeline reads — the change, its evidence, and its decider stay on the record, and a revert restores the prior value as a new audited entry. A draft's evidence expires (14 days by default): an expired draft must be refreshed — its scan re-run against today's store — before it can be decided.</p>`;
     document.querySelectorAll('[data-prop-accept]').forEach(btn =>
@@ -624,6 +637,10 @@ async function loadProposals() {
       btn.addEventListener('click', () => previewRefreshProposal(btn.getAttribute('data-prop-refresh-preview'))));
     $('draft-proposals').addEventListener('click', draftProposals);
     $('draft-sla-proposals').addEventListener('click', draftSlaProposals);
+    const ppb = $('prune-proposals');
+    if (ppb) ppb.addEventListener('click', pruneProposals);
+    const ppv = $('preview-prune-proposals');
+    if (ppv) ppv.addEventListener('click', previewPruneProposals);
     const ra = $('refresh-expired');
     if (ra) ra.addEventListener('click', refreshAllExpired);
     const rp = $('preview-refresh-expired');
@@ -811,7 +828,8 @@ async function loadOpsDigest() {
        <tr><td>Breached queue cases</td><td>${c.breached_queue ? `<span class="flag">${esc(c.breached_queue)}</span>` : '0'}</td><td><span class="note">${(d.breached_queue || []).map(i => `${esc(i.submission_id)} (${esc(i.sla_days_over)}d over)`).join(', ') || '—'}</span></td></tr>
        <tr><td>Follow-through outstanding</td><td>${esc(c.follow_through_outstanding || 0)}${c.follow_through_escalated ? ` · <span class="flag">${esc(c.follow_through_escalated)} escalated</span>` : ''}${c.follow_through_worked ? ` · ${esc(c.follow_through_worked)} worked` : ''}${c.follow_through_quieted ? ` · ${esc(c.follow_through_quieted)} quieted by work` : ''}${c.follow_through_responses ? ` · ${esc(c.follow_through_responses)} response(s) measured` : ''}</td><td><span class="note">${names(d.follow_through_escalated, 'submission_id') ? 'escalated: ' + names(d.follow_through_escalated, 'submission_id') : '—'}${(d.follow_through_worked && d.follow_through_worked.length) ? `<br>worked — a named operator acted: ${d.follow_through_worked.map(i => `${esc(i.submission_id)} by ${esc((i.worked || {}).worked_by || '—')}${i.quieted_by_work ? ' (quieting)' : ''}${i.response_days !== null && i.response_days !== undefined ? ` (first touch ${esc(i.response_days)}d after escalation)` : ''}`).join(', ')}` : ''}${(d.follow_through_response_latency && d.follow_through_response_latency.notes_measured) ? `<br>response latency — escalation to first touch: median ${esc(d.follow_through_response_latency.median_days)}d · mean ${esc(d.follow_through_response_latency.mean_days)}d · max ${esc(d.follow_through_response_latency.max_days)}d over ${esc(d.follow_through_response_latency.notes_measured)} note(s)` : ''}</span></td></tr>
        <tr><td>Letter advisories</td><td>${esc(c.advisory_runs_with || 0)} run(s)${c.advisory_repaired_runs ? ` · ${esc(c.advisory_repaired_runs)} repaired` : ''}</td><td><span class="note">${(d.letter_advisories && Object.keys(d.letter_advisories.by_family || {}).length) ? Object.keys(d.letter_advisories.by_family).map(f => `${esc(f)} × ${esc(d.letter_advisories.by_family[f])}`).join(', ') + ' — the counts ride the digest snapshots, so the kept history trends drafting quality' : 'no advisories drafted'}</span></td></tr>
-       <tr><td>Status-note repairs</td><td>${esc(c.status_note_repaired || 0)} repaired${c.status_note_refusals ? ` · <span class="flag">${esc(c.status_note_refusals)} refused</span>` : ''}</td><td><span class="note">${(d.status_note_repairs && (d.status_note_repairs.repaired_notes || d.status_note_repairs.refusals)) ? [Object.keys(d.status_note_repairs.by_family || {}).length ? Object.keys(d.status_note_repairs.by_family).map(f => `${esc(f)} × ${esc(d.status_note_repairs.by_family[f])}`).join(', ') : '', d.status_note_repairs.steer_attempts ? `steer success ${esc(Math.round((d.status_note_repairs.steer_success_rate || 0) * 100))}% over ${esc(d.status_note_repairs.steer_attempts)} attempt(s)` : '', d.status_note_repairs.refusals ? `refusals: ${esc(d.status_note_repairs.refusals_after_steering)} after steering · ${esc(d.status_note_repairs.refusals_unsteered)} refused outright on substance` : ''].filter(Boolean).join(' · ') : 'no status-note repairs or refusals recorded'}${(d.status_note_repairs && d.status_note_repairs.broker_quality && d.status_note_repairs.broker_quality.reports_drafted) ? `<br>broker quality reports — the same discipline, their own source: ${esc(d.status_note_repairs.broker_quality.repaired_reports)} repaired · ${esc(d.status_note_repairs.broker_quality.refusals)} refused over ${esc(d.status_note_repairs.broker_quality.reports_drafted)} drafting(s)` : ''}</span></td></tr>
+       <tr><td>Status-note repairs</td><td>${esc(c.status_note_repaired || 0)} repaired${c.status_note_refusals ? ` · <span class="flag">${esc(c.status_note_refusals)} refused</span>` : ''}</td><td><span class="note">${(d.status_note_repairs && (d.status_note_repairs.repaired_notes || d.status_note_repairs.refusals)) ? [Object.keys(d.status_note_repairs.by_family || {}).length ? Object.keys(d.status_note_repairs.by_family).map(f => `${esc(f)} × ${esc(d.status_note_repairs.by_family[f])}`).join(', ') : '', d.status_note_repairs.steer_attempts ? `steer success ${esc(Math.round((d.status_note_repairs.steer_success_rate || 0) * 100))}% over ${esc(d.status_note_repairs.steer_attempts)} attempt(s)` : '', d.status_note_repairs.refusals ? `refusals: ${esc(d.status_note_repairs.refusals_after_steering)} after steering · ${esc(d.status_note_repairs.refusals_unsteered)} refused outright on substance` : ''].filter(Boolean).join(' · ') : 'no status-note repairs or refusals recorded'}</span></td></tr>
+       <tr><td>Broker quality drafting</td><td>${esc(c.broker_quality_drafted || 0)} drafted${c.broker_quality_repaired ? ` · ${esc(c.broker_quality_repaired)} repaired` : ''}${c.broker_quality_refusals ? ` · <span class="flag">${esc(c.broker_quality_refusals)} refused</span>` : ''}</td><td><span class="note">${(d.broker_quality_repairs && d.broker_quality_repairs.reports_drafted) ? [Object.keys(d.broker_quality_repairs.by_family || {}).length ? Object.keys(d.broker_quality_repairs.by_family).map(f => `${esc(f)} × ${esc(d.broker_quality_repairs.by_family[f])}`).join(', ') : '', d.broker_quality_repairs.steer_attempts ? `steer success ${esc(Math.round((d.broker_quality_repairs.steer_success_rate || 0) * 100))}% over ${esc(d.broker_quality_repairs.steer_attempts)} attempt(s)` : '', d.broker_quality_repairs.refusals ? `refusals: ${esc(d.broker_quality_repairs.refusals_after_steering)} after steering · ${esc(d.broker_quality_repairs.refusals_unsteered)} refused outright on substance` : ''].filter(Boolean).join(' · ') : 'no broker quality reports drafted'} — the same discipline as the note, its own source; the counts ride the digest snapshots, so the kept history trends all three drafting surfaces</span></td></tr>
        <tr><td>Proposals</td><td>${esc(c.proposals_expired || 0)} expired${c.proposals_expiring_soon ? ` · ${esc(c.proposals_expiring_soon)} nearing expiry` : ''}</td><td><span class="note">${(d.proposals_expired || []).map(p => esc(p.proposal_id)).join(', ') || '—'}</span></td></tr>
        </tbody></table>
        ${movementLine}
@@ -901,6 +919,86 @@ async function pruneDigestSnapshots() {
     ? `Pruned ${body.pruned_count} snapshot(s) (${body.pruned_ids.join(', ')}) — surviving ${body.surviving_first} → ${body.surviving_last}, recorded on the document.`
     : `Nothing to prune — ${body.kept} snapshot(s) kept, at or under the keep count.`;
   loadOpsDigest();
+}
+
+async function loadDraftingRetention() {
+  const box = $('drafting-retention');
+  if (!box) return;
+  try {
+    const res = await fetch('/reports/broker-quality/drafting-events', {headers: headers()});
+    if (!res.ok) throw new Error('none');
+    const body = await res.json();
+    const events = body.events || [];
+    const prunes = body.prunes || [];
+    if (!events.length && !prunes.length) { box.innerHTML = ''; return; }
+    let html = `<p class="note">${esc(events.length)} drafting event(s) on the document — the broker drafting counts above are computed from these, nothing else.`;
+    if (prunes.length) {
+      const p = prunes[prunes.length - 1];
+      html += ` Last prune: ${esc(p.pruned_count)} event(s) on ${esc(String(p.pruned_at).slice(0, 10))} by ${esc(p.pruned_by)} (spanning ${esc(String(p.pruned_oldest).slice(0, 10))} → ${esc(String(p.pruned_newest).slice(0, 10))}) — surviving ${esc(String(p.surviving_first).slice(0, 10))} → ${esc(String(p.surviving_last).slice(0, 10))}.`;
+    }
+    box.innerHTML = html + '</p>';
+  } catch (e) {
+    box.innerHTML = '';
+  }
+}
+
+async function previewPruneDraftingEvents() {
+  const keep = Number($('drafting-keep').value);
+  const res = await fetch('/reports/broker-quality/drafting-events/prune/preview', {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({keep})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('drafting-prune-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('drafting-prune-status').textContent = body.would_change
+    ? `Preview: would prune ${body.would_prune_count} event(s) (drafted ${String(body.would_prune_oldest).slice(0, 10)} → ${String(body.would_prune_newest).slice(0, 10)}) — surviving ${String(body.surviving_first).slice(0, 10)} → ${String(body.surviving_last).slice(0, 10)}. Nothing written.`
+    : `Preview: nothing would be pruned — ${body.surviving_count} event(s) kept, at or under the keep count.`;
+}
+
+async function pruneDraftingEvents() {
+  const actor = $('actor').value.trim();
+  if (!actor) { $('drafting-prune-status').textContent = 'Enter the underwriter name in the gate panel first — a prune is recorded under its pruner.'; return; }
+  const keep = Number($('drafting-keep').value);
+  const res = await fetch('/reports/broker-quality/drafting-events/prune', {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({actor, keep})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('drafting-prune-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('drafting-prune-status').textContent = body.pruned_count
+    ? `Pruned ${body.pruned_count} event(s) (drafted ${String(body.pruned_oldest).slice(0, 10)} → ${String(body.pruned_newest).slice(0, 10)}) — surviving ${String(body.surviving_first).slice(0, 10)} → ${String(body.surviving_last).slice(0, 10)}, recorded on the document. The broker drafting counts now read the survivors.`
+    : `Nothing to prune — ${body.kept} event(s) kept, at or under the keep count.`;
+  loadOpsDigest();
+  loadDraftingRetention();
+}
+
+async function previewPruneProposals() {
+  const keep = Number($('proposals-keep').value);
+  const res = await fetch('/calibration/proposals/prune/preview', {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({keep})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('proposals-prune-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('proposals-prune-status').textContent = body.would_change
+    ? `Preview: would prune ${body.would_prune_count} decided proposal(s) (${body.would_prune_ids.join(', ')}) of ${body.history_count} decided — surviving decided range ${body.surviving_first} → ${body.surviving_last}; all ${body.draft_count} draft(s) untouched. Nothing written.`
+    : `Preview: nothing would be pruned — ${body.history_count} decided proposal(s) kept, at or under the keep count.`;
+}
+
+async function pruneProposals() {
+  const actor = $('actor').value.trim();
+  if (!actor) { $('proposals-prune-status').textContent = 'Enter the underwriter name in the gate panel first — a prune is recorded under its pruner.'; return; }
+  const keep = Number($('proposals-keep').value);
+  const res = await fetch('/calibration/proposals/prune', {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({actor, keep})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('proposals-prune-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('proposals-prune-status').textContent = body.pruned_count
+    ? `Pruned ${body.pruned_count} decided proposal(s) (${body.pruned_ids.join(', ')}) — surviving decided range ${body.surviving_first} → ${body.surviving_last}, recorded on the document.`
+    : `Nothing to prune — ${body.kept_history} decided proposal(s) kept, at or under the keep count.`;
+  loadProposals();
 }
 
 async function loadDispatch() {
@@ -1139,6 +1237,8 @@ $('refresh-digest').addEventListener('click', loadOpsDigest);
 $('snapshot-digest').addEventListener('click', snapshotDigest);
 $('prune-digest').addEventListener('click', pruneDigestSnapshots);
 $('preview-prune-digest').addEventListener('click', previewPruneDigestSnapshots);
+$('prune-drafting').addEventListener('click', pruneDraftingEvents);
+$('preview-prune-drafting').addEventListener('click', previewPruneDraftingEvents);
 $('retry-due').addEventListener('click', retryDue);
 $('notify-breaches').addEventListener('click', notifyBreaches);
 $('notify-escalations').addEventListener('click', notifyEscalations);
@@ -1148,6 +1248,7 @@ loadInbox();
 loadQueue();
 loadDispatch();
 loadOpsDigest();
+loadDraftingRetention();
 loadCalibration();
 </script>
 </body>
