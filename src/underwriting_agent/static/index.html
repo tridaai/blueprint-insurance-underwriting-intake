@@ -165,6 +165,7 @@ function render(result) {
   </dl>`;
   html += `<h3>Computed facts (code, never the model)</h3><dl class="kv">
     <dt>Completeness</dt><dd>${esc(f.completeness_score)} ${f.missing_elements.length ? '· missing: ' + f.missing_elements.map(esc).join(', ') : ''}</dd>
+    ${f.gap_sources && f.gap_sources.length ? `<dt>Readiness gaps</dt><dd>${f.gap_sources.map(esc).join('; ')}</dd>` : ''}
     <dt>Loss history</dt><dd>${esc(f.loss_summary.claim_count)} claim(s) · total incurred ${esc(f.loss_summary.total_incurred)} · largest ${esc(f.loss_summary.largest_claim)}</dd>
     <dt>Submission age</dt><dd>${esc(f.submission_age_days)} day(s)</dd>
     ${f.document_pair_warning ? `<dt>Warning</dt><dd>${esc(f.document_pair_warning)}</dd>` : ''}

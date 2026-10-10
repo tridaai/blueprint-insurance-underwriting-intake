@@ -186,6 +186,12 @@ class SubmissionFacts(BaseModel):
     submission_age_days: int = 0
     discrepancy_count: int = 0
     discrepancies: list[str] = Field(default_factory=list)
+    # Where the readiness gaps come from, itemised in code: one entry
+    # per missing required element and per extraction cross-check
+    # discrepancy. Empty exactly when readiness is "ready". This is
+    # what lets the packet/reviewer say "nothing is missing — the
+    # gaps are discrepancies" instead of implying missing documents.
+    gap_sources: list[str] = Field(default_factory=list)
     document_pair_warning: str = ""
 
 

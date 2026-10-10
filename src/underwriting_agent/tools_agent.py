@@ -22,6 +22,7 @@ the model is told to compose with what it has.
 from __future__ import annotations
 
 from .config import env_int, load_dotenv
+from .facts import readiness_explanation
 from .schemas import SubmissionInput
 from .store import broker_summary, format_outcome_counts
 
@@ -154,6 +155,13 @@ class DiagnosisToolBox:
             f"referral triggers: {'; '.join(t.get('referral_triggers') or []) or 'none'}",
             f"completeness: {f.get('completeness_score')} · readiness: {f.get('readiness')}",
             f"missing elements: {', '.join(f.get('missing_elements') or []) or 'none'}",
+            "readiness gaps: "
+            + readiness_explanation(
+                readiness=f.get("readiness") or "not_ready",
+                completeness=f.get("completeness_score"),
+                missing=f.get("missing_elements") or [],
+                discrepancies=f.get("discrepancies") or [],
+            ),
             (
                 f"loss history: {loss.get('claim_count', 0)} claim(s), total incurred "
                 f"{loss.get('total_incurred', 0)}, largest claim {loss.get('largest_claim', 0)}"

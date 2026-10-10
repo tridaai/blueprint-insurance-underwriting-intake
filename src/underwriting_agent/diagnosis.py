@@ -17,6 +17,7 @@ falls back to the template, with the reason recorded in ``note``.
 from __future__ import annotations
 
 from .extractor import extraction_discrepancies
+from .facts import readiness_explanation
 from .model_backends import DraftContext
 from .schemas import Diagnosis, DocumentExtraction, SubmissionInput
 from .screening import sanitized_notes
@@ -97,6 +98,15 @@ def build_evidence(
     evidence.append(
         f"computed completeness={facts.get('completeness_score')} "
         f"readiness={facts.get('readiness')} (tool: compute_submission_facts)"
+    )
+    evidence.append(
+        "readiness gaps (computed): "
+        + readiness_explanation(
+            readiness=facts.get("readiness") or "not_ready",
+            completeness=facts.get("completeness_score"),
+            missing=facts.get("missing_elements") or [],
+            discrepancies=facts.get("discrepancies") or [],
+        )
     )
     evidence.append(f"computed loss history: {format_loss_summary(facts.get('loss_summary') or {})}")
     if facts.get("missing_elements"):
@@ -188,6 +198,18 @@ def build_diagnosis(
             f"{facts.get('completeness_score')}, readiness "
             f"{facts.get('readiness')}; {format_loss_summary(facts.get('loss_summary') or {})}; "
             f"{len(guidelines)} governing guideline(s) retrieved."
+            + (
+                " Readiness gaps: "
+                + readiness_explanation(
+                    readiness=facts.get("readiness") or "not_ready",
+                    completeness=facts.get("completeness_score"),
+                    missing=facts.get("missing_elements") or [],
+                    discrepancies=facts.get("discrepancies") or [],
+                )
+                + "."
+                if facts.get("readiness") != "ready"
+                else ""
+            )
         ),
         risk_factors=risk_factors,
         evidence=evidence,

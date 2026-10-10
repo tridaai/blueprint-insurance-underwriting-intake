@@ -61,6 +61,45 @@ def _all_text(sub: SubmissionInput) -> str:
     return "\n".join(parts).lower()
 
 
+def readiness_explanation(
+    *,
+    readiness: str,
+    completeness: float | None,
+    missing: list[str],
+    discrepancies: list[str],
+) -> str:
+    """One canonical sentence naming WHERE the readiness gaps are.
+
+    The readiness flag alone invites a wrong inference — a reviewer
+    (human or model) sees ``ready_with_gaps`` next to completeness
+    1.0 and concludes "incomplete documentation", when in fact every
+    required element is present and the gaps are extraction
+    cross-check discrepancies. This sentence is computed wherever
+    facts are computed and quoted verbatim in the evidence, the
+    prompts, and the packet, so no surface has to guess.
+    """
+    if readiness == "ready":
+        return (
+            "all required elements are present and the extraction "
+            "cross-check found no discrepancies"
+        )
+    parts: list[str] = []
+    if missing:
+        parts.append(
+            "missing required element(s): " + ", ".join(missing)
+        )
+    else:
+        parts.append("no required element is missing")
+    if discrepancies:
+        parts.append(
+            f"{len(discrepancies)} extraction cross-check "
+            f"discrepanc{'y' if len(discrepancies) == 1 else 'ies'} "
+            "(extracted values that differ from the document text): "
+            + "; ".join(discrepancies)
+        )
+    return "; ".join(parts)
+
+
 def element_present(sub: SubmissionInput, element: str) -> bool:
     types = _doc_types(sub)
     text = _all_text(sub)
@@ -116,6 +155,11 @@ def compute_facts(
     else:
         readiness = "not_ready"
 
+    gap_sources = [f"missing required element: {e}" for e in missing]
+    gap_sources += [
+        f"extraction cross-check discrepancy: {d}" for d in discrepancies
+    ]
+
     losses = sub.losses
     years = sorted({int(str(l.date)[:4]) for l in losses if str(l.date)[:4].isdigit()})
     span = max(1, (max(years) - min(years) + 1)) if years else 1
@@ -146,5 +190,6 @@ def compute_facts(
         submission_age_days=max(0, age),
         discrepancy_count=len(discrepancies),
         discrepancies=discrepancies,
+        gap_sources=gap_sources,
         document_pair_warning=warning,
     )

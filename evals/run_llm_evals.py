@@ -41,6 +41,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from underwriting_agent.facts import readiness_explanation  # noqa: E402
 from underwriting_agent.graph import run_submission  # noqa: E402
 from underwriting_agent.model_backends import (  # noqa: E402
     estimate_cost_usd,
@@ -64,6 +65,12 @@ def judge_draft(backend, result, judge_model: str | None) -> dict:
         risk_tier=result.triage.risk_tier,
         completeness=result.facts.completeness_score,
         readiness=result.facts.readiness,
+        gap_sources=readiness_explanation(
+            readiness=result.facts.readiness,
+            completeness=result.facts.completeness_score,
+            missing=result.facts.missing_elements,
+            discrepancies=result.facts.discrepancies,
+        ),
         missing=", ".join(result.facts.missing_elements) or "none",
         loss_summary=(
             f"{result.facts.loss_summary.claim_count} claim(s), total incurred "

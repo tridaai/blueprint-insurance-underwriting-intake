@@ -37,6 +37,7 @@ import re
 
 from .config import env_float, env_str, load_dotenv
 from .errors import translate_construction_error, translate_provider_error
+from .facts import readiness_explanation
 from .prompts import (
     CLASSIFY_SYSTEM_PROMPT,
     CLASSIFY_USER_TEMPLATE,
@@ -187,6 +188,19 @@ class MockModelBackend:
             f"Referral triggers: {'; '.join(context.get('referral_triggers') or []) or 'none'}",
             f"Computed completeness: {context.get('completeness')} · Readiness: {context.get('readiness')}"
             f" · Missing: {', '.join(missing) if missing else 'none'}",
+            *(
+                [
+                    "Readiness gaps: "
+                    + readiness_explanation(
+                        readiness=context.get("readiness") or "not_ready",
+                        completeness=context.get("completeness"),
+                        missing=missing,
+                        discrepancies=context.get("discrepancies") or [],
+                    )
+                ]
+                if context.get("readiness") != "ready"
+                else []
+            ),
             f"Computed loss history: {context.get('loss_summary')}",
             f"Risk summary: {context.get('diagnosis_summary') or 'not recorded'}",
             "Risk factors:",
@@ -358,6 +372,12 @@ class _BaseLLMBackend:
             "completeness": context.get("completeness"),
             "readiness": context.get("readiness") or "not_ready",
             "missing": ", ".join(context.get("missing") or []) or "none",
+            "gap_sources": readiness_explanation(
+                readiness=context.get("readiness") or "not_ready",
+                completeness=context.get("completeness"),
+                missing=context.get("missing") or [],
+                discrepancies=context.get("discrepancies") or [],
+            ),
             "loss_summary": context.get("loss_summary") or "no loss history computed",
             "discrepancies": "; ".join(context.get("discrepancies", [])) or "none",
             "broker_text": context.get("broker_text") or "none recorded",

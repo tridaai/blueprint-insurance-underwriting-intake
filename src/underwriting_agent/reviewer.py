@@ -115,6 +115,7 @@ def review_drafts(
         completeness=facts.get("completeness_score"),
         readiness=facts.get("readiness"),
         missing=facts.get("missing_elements") or [],
+        discrepancies=facts.get("discrepancies") or [],
         loss_summary="",
         diagnosis_summary=diagnosis.summary if diagnosis else "",
         diagnosis_citations=contents["diagnosis_citations"],

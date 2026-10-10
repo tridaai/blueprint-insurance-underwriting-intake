@@ -55,6 +55,11 @@ def recommend_autonomy(
 
     if facts.readiness == "ready":
         reasons.append("data readiness is ready (complete, no discrepancies)")
+    elif facts.gap_sources:
+        blockers.append(
+            f"data readiness is {facts.readiness} — gaps: "
+            + "; ".join(facts.gap_sources)
+        )
     else:
         blockers.append(f"data readiness is {facts.readiness}")
 
