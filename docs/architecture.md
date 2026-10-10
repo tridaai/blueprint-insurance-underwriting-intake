@@ -850,6 +850,39 @@ numbers on the submission and its loss records. Line aliases fold too
   the repair family as their own named source rather than
   merging into the note's numbers: the surfaces share a
   discipline, not a denominator.
+- **Round 20 completes the drafting trend, extends retention
+  to every growing document, and sources the diff's sides.**
+  (1) The broker drafting counts ride the digest counts on the
+  advisory discipline — computed from the drafting events,
+  the only honest source there is (the report is drafted on
+  read; no records aggregate it) — so the kept history trends
+  all three drafting surfaces, each under its own source's
+  numbers, none entering total_attention. The digest body
+  carries the full aggregate as `broker_quality_repairs`,
+  beside `status_note_repairs`, not nested inside it: the
+  digest's note family is the note's, and a reader of the
+  digest should not have to know /metrics' nesting to find
+  the third surface. (2) Retention is one discipline over
+  four documents: the drafting events and the proposals'
+  decided history join the two snapshot documents —
+  keep-last-N, preview first, recorded on the document. The
+  proposals prune's unit is history, not the document: a
+  draft is an open question, and a prune that could remove
+  one would decide it by erasure. Its entry names what left
+  by id and closing status because the drafting scans read
+  that history — retention there is governed forgetting, and
+  the forgetting is on the record. Saving the proposals list
+  now preserves the document's other keys, so a later write
+  cannot erase the prune record it does not own. (3) A diff
+  carries its sides' provenance as data (`from_kept_from` /
+  `to_kept_from`) and as a prose line — beside the movement
+  sentence, never inside it: round 19 pinned the cited diff's
+  movement to the sentence the operator read, and annotating
+  a side's origin must not rewrite the sentence that was
+  read. Provenance is spoken only when there is some — two
+  plain keeps have none, and an empty line is the honest
+  value, as a missing movement baseline is a None, not an
+  invention.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 

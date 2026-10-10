@@ -397,7 +397,21 @@ now **preview** (`POST /ops/digest/snapshots/prune/preview`,
 buttons): the ids a keep-N would remove and the range that would
 survive, computed by the prune's own split, writing and
 recording nothing — the prune that follows on the same document
-produces exactly the previewed removals. And the still-waiting
+produces exactly the previewed removals. The discipline now
+reaches the two documents that grow without ever being kept:
+the **broker drafting events** (one per served quality report;
+`GET /reports/broker-quality/drafting-events` reads them, with
+`POST …/prune` and `POST …/prune/preview` beside it) and the
+**proposals document's decided history**
+(`POST /calibration/proposals/prune` and `…/prune/preview`) —
+each pruned keep-last-N, previewed first, and recorded on its
+own document. The proposals prune's unit is the decided
+history — accepted, rejected, withdrawn — never a live draft:
+an open question is not history. And because the drafting
+scans read that history (a rejected direction is never
+re-asked), its prune entry names the ids that left and the
+statuses they closed with, so what the scans stop remembering
+is itself on the record. And the still-waiting
 surface has a **second rung**: at twice the window a still-
 waiting case is flagged `escalated` in the digest, counted in
 `acknowledged_escalated` (a subset of still-waiting — never a
@@ -459,7 +473,13 @@ quality** across the kept mornings beside the operations
 movement. The note-side drafting quality rides the same counts
 (`status_note_repaired`, `status_note_refusals` — the full
 family along as `status_note_repairs`), so the kept history
-trends both drafts, not only the letter. A quality signal, not
+trends both drafts, not only the letter. The third drafting
+surface rides the same counts too (`broker_quality_drafted`,
+`broker_quality_repaired`, `broker_quality_refusals` — the
+full family along as `broker_quality_repairs`, counted from
+the drafting events the report's reads record), so the kept
+history trends all three surfaces the drafting discipline
+guards, each under its own source's numbers. A quality signal, not
 a worklist: the counts never
 enter `total_attention`. The counts likewise carry the
 **worked response** (`follow_through_worked`,
@@ -630,7 +650,17 @@ twice — is kept under the label they give at that moment
 (marked `kept_from: "current"`, uniqueness-checked like
 every keep, the label required because the act exists to
 make a citation), so the cited report is the one the diff
-showed, not a second computation that might have moved.
+showed, not a second computation that might have moved. A
+diff also **names that provenance**: `from_kept_from` /
+`to_kept_from` ride the diff as data, and a `provenance` line
+states it in prose — the newer side was kept from the live
+report by its keeper at its keep moment (a diff against
+`current` names that side as the live report itself; two
+plain keeps have no provenance to state, and say so by saying
+nothing). The line rides *beside* the `movement` sentence,
+never inside it: the cited diff's movement is the sentence
+the operator read, and annotating a side's origin must not
+rewrite it.
 
 Two disciplines keep the proposals honest over time. A draft's
 evidence is a snapshot, so drafts **expire** (`PROPOSAL_EXPIRY_DAYS`,
