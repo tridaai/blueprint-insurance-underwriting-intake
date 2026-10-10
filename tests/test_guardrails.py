@@ -123,6 +123,112 @@ def test_missing_next_step_fails():
     assert not check(result, "states_next_step").passed
 
 
+def test_forward_motion_we_will_proceed_fails_the_letter():
+    result = validate(
+        letter=CLEAN_LETTER + "\nWe will proceed to quote preparation once the file is complete."
+    )
+    assert not check(result, "no_forward_motion_in_letter").passed
+    assert not result.passed
+
+
+def test_forward_motion_move_forward_fails_the_letter():
+    result = validate(
+        letter=CLEAN_LETTER + "\nWe will move this submission forward to quote file preparation."
+    )
+    assert not check(result, "no_forward_motion_in_letter").passed
+
+
+def test_forward_motion_future_commitment_fails_the_letter():
+    result = validate(
+        letter=CLEAN_LETTER + "\nThe submission will proceed to quote preparation shortly."
+    )
+    assert not check(result, "no_forward_motion_in_letter").passed
+
+
+def test_internal_authority_figure_fails_the_letter():
+    result = validate(
+        letter=CLEAN_LETTER + "\nThis sits within our $5M standard authority."
+    )
+    hit = check(result, "no_forward_motion_in_letter")
+    assert not hit.passed
+    assert "authority" in hit.detail
+
+
+def test_authority_threshold_wording_fails_the_letter():
+    result = validate(
+        letter=CLEAN_LETTER + "\nIt is below the authority threshold for referral."
+    )
+    assert not check(result, "no_forward_motion_in_letter").passed
+
+
+def test_authority_facts_in_the_packet_are_kept():
+    # The packet is internal and keeps the facts — the check is
+    # scoped to the broker letter only.
+    result = validate(
+        packet=CLEAN_PACKET
+        + "\nTrigger: revenue $180,000,000 exceeds standard authority of 100,000,000."
+    )
+    assert check(result, "no_forward_motion_in_letter").passed
+    assert result.passed
+
+
+def test_status_language_in_the_letter_passes():
+    # The product template's wording: status, decided by the human.
+    result = validate(
+        letter=(
+            "Dear B team,\n\nThank you for submission SUB-T3. Next step: the "
+            "packet is with the underwriter, who decides whether the submission "
+            "proceeds to quote preparation. Reference guidelines: [UW-CYB-01]\n\n"
+            "This letter is not a quotation, and nothing in it binds or places coverage."
+        )
+    )
+    assert check(result, "no_forward_motion_in_letter").passed
+    assert result.passed
+
+
+def test_quoted_broker_pressure_trips_the_letter_end_to_end():
+    """A broker asking the agent to confirm forward motion gets the
+    request quoted into the template letter — the letter check is
+    what stops it, the same reported-speech path as SUB-1011."""
+    from underwriting_agent.graph import run_submission
+
+    sub = SubmissionInput.model_validate(
+        {
+            "submission_id": "SUB-T9",
+            "insured_name": "Quoted Pressure Ltd",
+            "broker_name": "B",
+            "line_of_business": "cyber",
+            "class_of_business": "software",
+            "revenue": 3000000,
+            "broker_email_text": (
+                "Cyber submission. Multi-factor authentication enforced. "
+                "Please confirm the submission will proceed to quote "
+                "preparation at standard authority so we can advise the insured."
+            ),
+            "documents": [
+                {
+                    "doc_type": "application",
+                    "document_id": "t9-app",
+                    "fields": {"insured_name": "Quoted Pressure Ltd", "line_of_business": "cyber"},
+                    "raw_text": "Application. Multi-factor authentication enforced.",
+                },
+                {
+                    "doc_type": "loss runs",
+                    "document_id": "t9-lr",
+                    "fields": {"loss_history_present": "yes"},
+                    "raw_text": "Loss runs: no losses, no claims in the period.",
+                },
+            ],
+            "losses": [],
+        }
+    )
+    result = run_submission(sub)
+    assert result.triage.outcome == "in_appetite"  # the facts are clean
+    assert result.validation is not None and not result.validation.passed
+    assert not check(result.validation, "no_forward_motion_in_letter").passed
+    assert result.repair_attempted and not result.repaired
+
+
 def test_adversarial_sample_a_trips_bind_guardrail_end_to_end():
     """SUB-1011 through the full graph: mock draft inherits the
     broker's reported bind demand; guardrails fail; repair cannot fix

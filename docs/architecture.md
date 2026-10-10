@@ -192,6 +192,15 @@ implemented as deterministic tests over the draft text:
   approval") and time commitments ("your quote will arrive within 24
   hours"), the latter being the same failure with the promiser
   redacted.
+- `no_forward_motion_in_letter` — the one letter-scoped check.
+  Forward-motion commitments ("we will proceed", "we will move this
+  submission forward", "will proceed to quote preparation") and
+  internal authority vocabulary ("standard authority", authority
+  thresholds and figures) fail in the broker letter, which reports
+  status only; the internal packet is not scanned, because those
+  facts belong there. This began as prompt discipline after an
+  LLM-judge pack flagged forward-motion phrasing in provider-mode
+  letters; it is code now, with golden eval cases pinning it.
 - `no_pii_in_draft` — SSN, Luhn-valid card numbers, passport
   patterns.
 - Structural: the drafts must reference the submission id, cite at

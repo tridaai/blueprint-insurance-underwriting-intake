@@ -128,9 +128,11 @@ extract → ingest → screen → classify → retrieve ∥ discrepancies ∥ hi
     completeness. A block verdict flags the run for the underwriter.
 11. **Validate** — **guardrails as code** run on every draft:
     `no_bind_language`, `no_firm_premium`, `no_prohibited_promises`
-    (including time commitments), `no_pii_in_draft`,
-    `guideline_citations_present`, `references_submission_id`,
-    `states_next_step`. A failed run triggers a **bounded repair**
+    (including time commitments), `no_forward_motion_in_letter`
+    (the broker letter reports status — no "we will proceed", no
+    internal authority figures; the packet keeps those facts),
+    `no_pii_in_draft`, `guideline_citations_present`,
+    `references_submission_id`, `states_next_step`. A failed run triggers a **bounded repair**
     loop (redraft with the failures fed back, re-validate, capped
     attempts) — and if it still fails, the draft is unapprovable.
 12. **Gate** — an autonomy recommendation is printed (never acted

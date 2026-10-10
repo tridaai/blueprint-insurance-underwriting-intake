@@ -12,6 +12,16 @@ them — a broker relaying a client's demand ("coverage must be in
 force from this morning") is reported speech, not an instruction,
 so the injection screen leaves it alone; when a drafter pastes it
 into a letter, these checks are what stop it. See sample SUB-1011.
+
+One check is scoped differently from the rest:
+``no_forward_motion_in_letter`` reads the broker letter only. The
+letter reports status — the submission is under review and the
+underwriter decides what happens next — so first-person
+forward-motion commitments ("we will proceed", "we will move this
+submission forward") and internal authority vocabulary (standard
+authority, authority thresholds and figures) fail there, while the
+internal underwriter packet keeps those same facts, because the
+packet is where they belong.
 """
 
 from __future__ import annotations
@@ -73,6 +83,30 @@ _PROMISE_PATTERNS = [
     r"\bwithin (the next )?\d+ (hours?|days?|weeks?)\b",
     r"\bby (tomorrow|end of day|eod|end of week|monday|tuesday|wednesday|thursday|friday)\b[^.]{0,30}\b(will|you|quote|decision|terms|premium)\b",
     r"\b(quote|decision|terms|premium|answer) (within|in|by)\b[^.]{0,20}\b(\d+|tomorrow|end of)",
+]
+
+# Forward-motion commitments — broker letter only. The letter
+# reports status; it never commits the file forward. First-person
+# forms are the core family; the future-tense "will proceed to
+# quote" is a commitment about the case whatever the subject, and
+# a broker's own phrasing quoted into the letter (see the bind
+# rule's reported-speech problem) carries the same weight there.
+_FORWARD_MOTION_PATTERNS = [
+    r"\bwe (will|'ll) (now )?(proceed|advance)\b",
+    r"\bwe (will|'ll) move\b",
+    r"\bmoving (this|the|your) submission forward\b",
+    r"\bwill (proceed|advance) to quote\b",
+]
+
+# Internal authority vocabulary — broker letter only. Authority
+# limits and thresholds are internal facts: the packet records
+# them (the triage rationale quotes them), the letter never does.
+_AUTHORITY_PATTERNS = [
+    r"\bstandard authority\b",
+    r"\bauthority (limit|limits|threshold|thresholds|level)\b",
+    r"\bwithin (our|the) authority\b",
+    r"\$\s?[\d,]+(\.\d+)?\s*(million|mm|m)?\b[^.]{0,25}\bauthority\b",
+    r"\bauthority\b[^.]{0,25}\$\s?[\d,]+",
 ]
 
 _SSN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
@@ -168,6 +202,41 @@ def validate_drafts(
                 "no outcome or timing promises"
                 if promise_hit is None
                 else f"prohibited promise found: '{promise_hit}'"
+            ),
+        )
+    )
+
+    # Letter-scoped: forward-motion commitments and internal
+    # authority references. The packet is deliberately NOT scanned
+    # — it keeps the facts, authority figures included.
+    motion_hit = next(
+        (hit for hit in (_affirmative(p, letter) for p in _FORWARD_MOTION_PATTERNS) if hit),
+        None,
+    )
+    authority_hit = next(
+        (m.group(0) for p in _AUTHORITY_PATTERNS if (m := re.search(p, letter, re.IGNORECASE))),
+        None,
+    )
+    letter_problems = []
+    if motion_hit:
+        letter_problems.append(
+            f"forward-motion commitment: '{motion_hit}' — the letter reports "
+            "status; the underwriter decides the next step"
+        )
+    if authority_hit:
+        letter_problems.append(
+            f"internal authority reference: '{authority_hit}' — authority "
+            "limits are internal and never quoted to brokers"
+        )
+    checks.append(
+        GuardrailCheck(
+            name="no_forward_motion_in_letter",
+            passed=not letter_problems,
+            detail=(
+                "the broker letter reports status only — no forward-motion "
+                "commitments, no internal authority references"
+                if not letter_problems
+                else "; ".join(letter_problems)
             ),
         )
     )

@@ -44,9 +44,18 @@ def _write_results(payload: dict) -> None:
 
 
 def evaluate(cases: list[dict]) -> dict:
-    """Run the pipeline over the cases and score outcome + tier."""
+    """Run the pipeline over the cases and score outcome + tier.
+
+    A case may also carry ``expected_checks`` — a mapping of
+    guardrail check name to the pass/fail the run's validation must
+    show (e.g. a broker pressuring for forward motion must end with
+    ``no_forward_motion_in_letter: false``). Those are scored too
+    and reported alongside the triage accuracy.
+    """
     outcome_correct = 0
     tier_correct = 0
+    checks_correct = 0
+    checks_total = 0
     per_outcome_total: dict[str, int] = defaultdict(int)
     per_outcome_correct: dict[str, int] = defaultdict(int)
     failures: list[str] = []
@@ -71,6 +80,21 @@ def evaluate(cases: list[dict]) -> dict:
                 f"{case['case_id']}: outcome ok, expected tier "
                 f"{case['expected_tier']}, got {result.triage.risk_tier}"
             )
+        expected_checks = case.get("expected_checks") or {}
+        if expected_checks:
+            actual = {
+                c.name: c.passed for c in result.validation.checks
+            } if result.validation else {}
+            for name, expected in expected_checks.items():
+                checks_total += 1
+                if actual.get(name) == expected:
+                    checks_correct += 1
+                else:
+                    failures.append(
+                        f"{case['case_id']}: guardrail check {name} expected "
+                        f"{'pass' if expected else 'fail'}, got "
+                        f"{actual.get(name)}"
+                    )
 
     total = len(cases)
     return {
@@ -79,6 +103,8 @@ def evaluate(cases: list[dict]) -> dict:
         "outcome_accuracy": round(outcome_correct / total, 4) if total else 0.0,
         "tier_correct": tier_correct,
         "tier_accuracy": round(tier_correct / total, 4) if total else 0.0,
+        "checks_correct": checks_correct,
+        "checks_total": checks_total,
         "per_outcome": {
             outcome: {
                 "correct": per_outcome_correct[outcome],
@@ -107,13 +133,17 @@ def main() -> int:
             "total": total,
             "outcome_match": f"{scored['outcome_correct']}/{total}",
             "tier_match": f"{scored['tier_correct']}/{total}",
+            "checks_match": f"{scored['checks_correct']}/{scored['checks_total']}",
             "outcome_correct": scored["outcome_correct"],
             "outcome_accuracy": scored["outcome_accuracy"],
             "tier_correct": scored["tier_correct"],
             "tier_accuracy": scored["tier_accuracy"],
             "per_outcome": scored["per_outcome"],
             "threshold": THRESHOLD,
-            "passed": scored["outcome_accuracy"] >= THRESHOLD,
+            "passed": (
+                scored["outcome_accuracy"] >= THRESHOLD
+                and scored["checks_correct"] == scored["checks_total"]
+            ),
             "framing": (
                 "Synthetic golden set used as a regression gate. "
                 "It is not a real-world accuracy claim."
@@ -130,13 +160,21 @@ def main() -> int:
         f"Risk-tier accuracy      : {scored['tier_correct']}/{total} "
         f"= {scored['tier_accuracy']:.1%}"
     )
+    if scored["checks_total"]:
+        print(
+            f"Guardrail expectations  : {scored['checks_correct']}/"
+            f"{scored['checks_total']} met"
+        )
     for outcome, row in scored["per_outcome"].items():
         print(f"  {outcome:<18} {row['correct']}/{row['total']}")
     if scored["failures"]:
         print("Failures:")
         for failure in scored["failures"]:
             print(f"  - {failure}")
-    passed = scored["outcome_accuracy"] >= THRESHOLD
+    passed = (
+        scored["outcome_accuracy"] >= THRESHOLD
+        and scored["checks_correct"] == scored["checks_total"]
+    )
     print("PASS" if passed else f"FAIL (threshold {THRESHOLD:.0%})")
     return 0 if passed else 1
 
