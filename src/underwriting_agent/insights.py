@@ -2806,6 +2806,16 @@ def ops_digest(
     (``follow_through_response_latency`` — median / mean / max
     days), so the morning read prices the response's speed as
     well as its volume. Effort, like drafting quality, never
+    enters ``total_attention``. The counts also carry the
+    **proposal re-ask outcomes** (re-asks decided, and of those
+    how many second decisions reversed the pruned refusal
+    against how many repeated it —
+    :func:`_proposal_reask_aggregate` over the same proposals
+    the caller passes, the full family along as
+    ``proposal_reasks``): /metrics reads that family as a
+    point in time, but whether the prune-then-re-ask loop
+    converges or circles is a trend question, and trends live
+    in the kept snapshots. Governance, like effort, never
     enters ``total_attention``.
 
     The digest is computed, never sent: it carries the composed
@@ -2920,6 +2930,7 @@ def ops_digest(
     advisory = _letter_advisory_aggregate(records)
     note_repairs = _status_note_repair_aggregate(records)
     broker = _broker_quality_repair_aggregate(broker_drafting_events or [])
+    reasks = _proposal_reask_aggregate(proposals or [])
     counts = {
         "stuck_dispatches": dispatch["stuck_count"],
         "exhausted_breach_notices": dispatch["exhausted_breach_count"],
@@ -2997,6 +3008,18 @@ def ops_digest(
         "broker_quality_drafted": broker["reports_drafted"],
         "broker_quality_repaired": broker["repaired_reports"],
         "broker_quality_refusals": broker["refusals"],
+        # The re-ask outcomes ride the same counts on the same
+        # discipline: re-asks decided, and of the decided the
+        # second decisions that reversed the pruned refusal
+        # against those that repeated it — the full family
+        # rides along below as ``proposal_reasks``. /metrics
+        # reads the family as a point in time; the snapshots
+        # are where its convergence is trended. None enters
+        # total_attention — a re-ask decided is governance
+        # history, not work outstanding.
+        "proposal_reasks_decided": reasks["decided"],
+        "proposal_reasks_reversed": reasks["reversed_first_decision"],
+        "proposal_reasks_repeated": reasks["repeated_first_decision"],
         "proposals_expiring_soon": len(expiring_soon),
         "proposals_expired": len(expired),
     }
@@ -3120,6 +3143,7 @@ def ops_digest(
         "letter_advisories": advisory,
         "status_note_repairs": note_repairs,
         "broker_quality_repairs": broker,
+        "proposal_reasks": reasks,
         "follow_through_response_latency": follow["response_latency"],
         "follow_through_slowest_responses": follow[
             "slowest_responses"
@@ -3163,6 +3187,9 @@ DIGEST_COUNT_KEYS = (
     "broker_quality_drafted",
     "broker_quality_repaired",
     "broker_quality_refusals",
+    "proposal_reasks_decided",
+    "proposal_reasks_reversed",
+    "proposal_reasks_repeated",
     "proposals_expiring_soon",
     "proposals_expired",
     "total_attention",
@@ -3208,6 +3235,9 @@ _COUNT_LABELS = {
     "broker_quality_drafted": "broker quality reports drafted",
     "broker_quality_repaired": "repaired broker quality drafts",
     "broker_quality_refusals": "refused broker quality drafts",
+    "proposal_reasks_decided": "re-ask proposals decided",
+    "proposal_reasks_reversed": "re-asks reversing the first decision",
+    "proposal_reasks_repeated": "re-asks repeating the first decision",
     "proposals_expiring_soon": "proposals nearing expiry",
     "proposals_expired": "expired proposals",
     "total_attention": "total attention",
