@@ -1,6 +1,6 @@
 """Ports: the seams of the agent, declared in one place.
 
-The pipeline depends on four replaceable collaborators, each a
+The pipeline depends on replaceable collaborators, each a
 ``typing.Protocol`` (structural — an implementation qualifies by
 having the methods, not by inheriting):
 
@@ -23,6 +23,8 @@ having the methods, not by inheriting):
   it and also holds a stdlib-SQLite implementation the tests use.
   The checkpointer holds *graph state*; the :class:`Store` remains
   the record of *decisions*.
+- :class:`ObjectStore` — submission documents as objects in an
+  S3-compatible bucket. Implementations live in ``object_store.py``.
 
 ``wiring.py`` is the composition root that builds the concrete
 collaborators from configuration; the rest of the codebase programs
@@ -81,6 +83,22 @@ class EventSink(Protocol):
     """The run-events seam: one ``emit`` per structured event."""
 
     def emit(self, event: "RunEvent") -> None: ...
+
+
+class ObjectStore(Protocol):
+    """The document-storage seam: submission documents as objects.
+
+    Keys are opaque strings the intake side chooses (the service's
+    archive path uses ``submissions/<id>/documents/<doc>.txt``).
+    Implementations live in ``object_store.py``: S3-compatible
+    (boto3) for production, in-memory for tests.
+    """
+
+    def put(self, key: str, data: bytes, content_type: str = "text/plain") -> str: ...
+
+    def get(self, key: str) -> bytes: ...
+
+    def exists(self, key: str) -> bool: ...
 
 
 class Checkpointer(Protocol):

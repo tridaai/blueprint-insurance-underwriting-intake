@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from .checkpoints import get_checkpointer
 from .model_backends import get_backend
-from .ports import Checkpointer, ModelBackend, Retriever, Store
+from .object_store import get_object_store
+from .ports import Checkpointer, ModelBackend, ObjectStore, Retriever, Store
 from .retriever import get_retriever
 from .service import SubmissionService
 from .store import default_store
@@ -33,12 +34,17 @@ def build_checkpointer() -> Checkpointer | None:
     return get_checkpointer()
 
 
+def build_object_store() -> ObjectStore | None:
+    return get_object_store()
+
+
 def build_service_from_env(
     *,
     backend: ModelBackend | None = None,
     retriever: Retriever | None = None,
     store: Store | None = None,
     checkpointer: Checkpointer | bool | None = None,
+    object_store: ObjectStore | bool | None = None,
 ) -> SubmissionService:
     """A service wired from the environment, with any collaborator
     overridable (tests and the CLI batch path inject doubles here)."""
@@ -47,4 +53,5 @@ def build_service_from_env(
         retriever=retriever,
         store=store,
         checkpointer=checkpointer,
+        object_store=object_store,
     )

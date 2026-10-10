@@ -68,6 +68,12 @@ class DocumentInput(BaseModel):
     doc_type: str
     document_id: str = ""
     raw_text: str = ""
+    # Object-storage reference: when the document already lives in
+    # the bucket (the production intake shape), the adapter submits
+    # the key and the service fetches the text through the
+    # ObjectStore port; after analysis the service archives inline
+    # documents and records their keys here on the stored payload.
+    object_key: str = ""
     fields: dict[str, str] = Field(default_factory=dict)
 
     doc_type_provided: str = ""
