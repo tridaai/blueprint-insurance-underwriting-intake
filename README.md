@@ -135,6 +135,16 @@ extract → ingest → screen → classify → retrieve ∥ discrepancies ∥ hi
     `references_submission_id`, `states_next_step`. A failed run triggers a **bounded repair**
     loop (redraft with the failures fed back, re-validate, capped
     attempts) — and if it still fails, the draft is unapprovable.
+    The repair feedback is surgical, not a rule restated: for the
+    letter check it quotes the offending sentence from the draft
+    itself and names the approved status shape to rewrite it into
+    (the shapes the template letter uses, which the draft prompt
+    also carries). A separate **borderline scan** watches for
+    phrasings the blocking patterns deliberately do not catch —
+    "will now move through review", "you will hear from us in the
+    coming days" — and steers one redraft against them; the
+    advisories never block, and the run records them
+    (`letter_advisories`, `advisory_repaired`) either way.
 12. **Gate** — an autonomy recommendation is printed (never acted
     on), an information request is composed when the submission is
     incomplete (composed, never sent), and the run stops at a
@@ -303,8 +313,24 @@ carries a `movement` block reading the live counts and section
 membership against the latest snapshot's (change and direction
 per count, entered/cleared ids per section), and the headline
 speaks that movement in one sentence — the first screen an
-operator opens already says what got worse. No snapshot, no
-movement block: absence, never a fabricated baseline.
+operator opens already says what got worse, and the sentence
+names the membership behind the counts (which ids entered,
+which cleared), because an operator works ids, not arithmetic;
+a count that sits flat while its membership churns says so. No
+snapshot, no movement block: absence, never a fabricated
+baseline. An acknowledged notice whose case is *still*
+undecided a follow-through window later (default 14 days, the
+escalation window's sibling) resurfaces as its own digest
+surface — **acknowledged, still waiting**: the call happened;
+the file has not moved. And both kept documents — digest
+snapshots and calibration snapshots — now share one **retention
+discipline**: a keep-last-N prune
+(`POST /ops/digest/snapshots/prune`,
+`POST /queue/sla/calibration/snapshots/prune`, console controls)
+is the only way a kept snapshot leaves, it is recorded on the
+document it pruned (who, when, what left, the surviving range),
+and snapshot ids run one past the highest number still kept, so
+a citation names exactly one kept report forever.
 
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:

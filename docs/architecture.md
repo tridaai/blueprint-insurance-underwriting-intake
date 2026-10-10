@@ -647,6 +647,37 @@ numbers on the submission and its loss records. Line aliases fold too
   single-item builder like the escalated-note flag, and cleared
   breaches are reported rather than dropped — a fire that went
   out is information, not absence.
+- **Round 14 hardens the drafting side of the letter guardrail,
+  speaks membership in the headline, gives the kept documents a
+  retention discipline, and closes the acknowledgement's blind
+  spot.** (1) The judge packs' recurring lesson was a drafting
+  failure, not a gate failure: the repair loop fed back the
+  failed checks' names, and a restated rule is not a rewrite
+  instruction. `letter_repair.py` now steers: the guardrail's own
+  hit computation is extracted as `letter_wording_hits` (one
+  source of truth, read by gate and steering alike, verdicts
+  unchanged), the repair feedback quotes the offending sentence
+  and names the approved status shape, and the draft prompt
+  carries those shapes up front. A borderline scan covers the
+  phrasings the blocking patterns deliberately miss — it can
+  only ever trigger a redraft, never a verdict, which is why it
+  may cast a wider net than the gate: widening the gate by
+  stealth would move the line; steering the drafts does not.
+  (2) The movement sentence weaves entered/cleared ids into the
+  headline because every surface the headline reaches (including
+  any future sent digest) should read as work, not arithmetic —
+  and flat-count churn is movement an operator must see.
+  (3) Retention is one discipline for both kept documents
+  (`prune_snapshot_list`), recorded on the document pruned, for
+  the same reason snapshots exist at all: a kept-history claim
+  ("the trend since snap-0003") is only as good as the
+  document's own account of its gaps. Ids run past the highest
+  kept number so a prune can never make a citation ambiguous.
+  (4) Acknowledged-but-still-waiting reuses the acknowledged
+  read and the follow-through escalation window rather than
+  growing a second worked-state or a second knob family: the
+  operational fact — silence after human contact — is the same
+  fact the escalation already prices.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 
