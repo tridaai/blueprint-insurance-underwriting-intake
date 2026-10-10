@@ -23,6 +23,8 @@ The promise is precise, and it is enforced in code, not in prompts:
 Everything is synthetic data. There is no real insurer, broker, or
 submission anywhere in this repository.
 
+**Deep-dive:** [Insurance Underwriting Intake Agent Blueprint](https://trida.ai/blog/insurance-underwriting-intake-agent-blueprint) — how the agent works, where it stops, and what the evals actually prove.
+
 ---
 
 ## Try it in 3 commands
