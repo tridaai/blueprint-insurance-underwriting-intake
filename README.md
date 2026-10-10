@@ -224,7 +224,18 @@ is still undecided at twice the follow-through window carries
 the acknowledgement itself (`acknowledged_escalation`: who
 called, when, their note), with those cases listed again in
 `escalated_acknowledgements`: the second touch reads the first
-one's record, never pretends to be the first.
+one's record, never pretends to be the first. Both surfaces
+now also read the second rung's **telling state** in the
+digest's own vocabulary — each list entry and each item's
+acknowledgement block carries the computed
+`escalation_notice_state` (delivered / announced / exhausted /
+unannounced) beside the raw escalation notice, and an
+unannounced case carries `unannounced_days`, the days since
+it crossed the rung with no telling — so the underwriter who
+picks the case up reads whether the escalation webhook
+landed, is in trouble, spent its ledger, or was never fired,
+in the same words the morning digest used, not a raw notice
+to interpret on the spot.
 Webhook dispatches can be HMAC-signed (`ACTION_WEBHOOK_SECRET`) so
 the receiving system can verify the packet's origin. Every dispatch
 is recorded in a **delivery ledger** on the record — attempt number,
@@ -429,7 +440,16 @@ sentence naming the earlier refusal and the prune that took
 its record — so a re-ask never reads as a first ask. Proposal
 ids run one past the highest number in the document for the
 same reason snapshot ids do: a re-asked direction never
-reissues a pruned proposal's number. And the still-waiting
+reissues a pruned proposal's number. The re-asks are counted
+back, too: `/metrics` carries a **`proposal_reasks`** family
+over the proposals document — re-asks drafted, still open,
+and decided, and of the decided how the second decision went
+against the refusal the marker carries: accepted
+(`reversed_first_decision`), rejected again
+(`repeated_first_decision`), or withdrawn, split by the scan
+that drafted them — the population reading of the loop the
+marker makes visible one draft at a time: whether
+prune-then-re-ask converges or circles. And the still-waiting
 surface has a **second rung**: at twice the window a still-
 waiting case is flagged `escalated` in the digest, counted in
 `acknowledged_escalated` (a subset of still-waiting — never a
@@ -695,7 +715,19 @@ and a later keep may take it), the evidence is untouched,
 and the new label answers to every keep's rules: `current`
 refused as reserved, a label another kept report carries
 refused naming the holder, an empty or unchanged target
-refused as no rename at all.
+refused as no rename at all. The rename is read back where
+citations are followed: a calibration diff carries each
+side's label history (`from_label_history` /
+`to_label_history`) and its provenance line names the move —
+kept as the old label, renamed to the current one, by whom,
+when — so a citation written under the old name is
+reconciled by the diff itself instead of naming nothing.
+And every rename across the kept reports is one read —
+`GET /queue/sla/calibration/snapshots/renames` (the console's
+calibration panel renders it under the kept reports): the
+addressing archaeology of the whole document in the order
+the renames happened, each entry naming the report it moved
+on and the label that report wears now.
 
 Two disciplines keep the proposals honest over time. A draft's
 evidence is a snapshot, so drafts **expire** (`PROPOSAL_EXPIRY_DAYS`,

@@ -926,6 +926,35 @@ numbers on the submission and its loss records. Line aliases fold too
   and answers to every keep's label rules through the one
   shared check, so a rename cannot mint an address a keep
   would refuse.
+- **Round 22 reads the round-21 markers back: re-asks as a
+  population, renames where citations land, the telling in the
+  queue's own words.** (1) A marker on one draft answers for
+  that draft; governance asks about the loop.
+  `proposal_reasks` in /metrics aggregates the proposals
+  carrying `previously_decided` — drafted, open, decided, and
+  of the decided, reversed against repeated: the marker's
+  first decision is always a rejection (a remembered one is
+  never drafted), so a second acceptance reversed it and a
+  second rejection repeated it, a withdrawal doing neither.
+  Whether prune-then-re-ask converges is now a number, not an
+  impression. (2) A diff cites its sides by their current
+  labels, which quietly rewrites history for a renamed side;
+  the diff therefore carries each side's `label_history` and
+  its provenance sentence names the move (kept as, renamed
+  to, by whom, when) *beside* the movement — never inside it,
+  on round 19's citation discipline. (3) The per-snapshot
+  histories flatten into one document-level rename log
+  (`calibration_rename_log`), a projection of the kept
+  snapshots rather than a second record, so the addressing
+  archaeology is one call and a prune takes a report's
+  renames with it. (4) The digest computed the escalation
+  telling's state in round 18; the queue carried the raw
+  notice and left the reading to the underwriter. The queue's
+  escalated surfaces now carry the same computed
+  `escalation_notice_state` — the same function, not a second
+  reading — and age the unannounced with the digest's own
+  formula, so the morning read and the worklist cannot
+  disagree about whether an escalation landed.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 
