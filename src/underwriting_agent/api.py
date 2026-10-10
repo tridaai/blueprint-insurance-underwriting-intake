@@ -586,7 +586,9 @@ def dispatch_ops() -> dict:
     """Dispatch operations: the approval-webhook ledgers across all
     records — total attempts, records delivered, failures (oldest
     first) with their last error, and which failures are due a
-    retry under the recorded backoff schedule."""
+    retry under the recorded backoff schedule — plus the
+    SLA-breach notices whose own ledger exhausted its attempts
+    undelivered on cases still awaiting a decision."""
     return service.dispatch_ops()
 
 

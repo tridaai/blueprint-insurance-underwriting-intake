@@ -1126,7 +1126,9 @@ class SubmissionService:
         """The dispatch operations view: every record's webhook
         ledger read as one surface — attempts, failures (oldest
         first), and which failures are due a retry under the
-        recorded backoff schedule (``insights.dispatch_overview``)."""
+        recorded backoff schedule — plus the SLA-breach notices
+        whose own ledger exhausted its attempts undelivered
+        (``insights.dispatch_overview``)."""
         return dispatch_overview(self._get_store().all_records())
 
     def retry_failed_dispatches(self) -> list[dict]:

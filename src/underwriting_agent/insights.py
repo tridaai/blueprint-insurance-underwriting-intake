@@ -1503,6 +1503,78 @@ def _age_bucket(age_days: int) -> str:
     return QUEUE_AGE_BUCKETS[-1][0]
 
 
+def _exhausted_breach_notices(
+    records: list[ApprovalRecord], now: datetime, attempt_budget: int
+) -> list[dict]:
+    """Breach notices that exhausted their own delivery ledger.
+
+    The SLA-breach notice has its own ledger (see
+    ``ApprovalRecord.sla_breach_attempts``), and it is read
+    nowhere in the approval failures above — it is a different
+    event with a different cost: an approval failure means a
+    decided packet did not arrive; an exhausted breach notice
+    means a case sat past its SLA budget, still undecided, and
+    **nobody was ever told**. A notice is exhausted when its
+    ledger has spent the attempt budget
+    (``DISPATCH_ATTEMPT_BUDGET``, the same budget every delivery
+    in the system is measured against) and its latest attempt
+    still failed. A notice whose case has since been decided is
+    left out — the call it needed already happened in the room;
+    a notice later delivered is out by its last attempt's word.
+
+    Each entry ages from the notice's first observation (the
+    moment the breach was real, not the moment delivery gave
+    up), bucketed on the queue's day buckets, oldest first.
+    """
+    entries: list[dict] = []
+    for record in records:
+        notice = record.sla_breach_notice
+        attempts = record.sla_breach_attempts or []
+        if not notice or not attempts:
+            continue
+        if record.result.status != "awaiting_underwriter":
+            continue
+        last = attempts[-1]
+        if last.get("status") != "failed" or len(attempts) < attempt_budget:
+            continue
+        entry = history_entry(record)
+        first_at = _parse_timestamp(attempts[0].get("attempted_at") or "")
+        observed = _parse_timestamp(notice.get("first_observed_at") or "")
+        anchor = observed or first_at
+        age_days = (
+            max(0, (now.date() - anchor.date()).days)
+            if anchor is not None
+            else None
+        )
+        sla = notice.get("sla") or {}
+        entries.append(
+            {
+                "submission_id": record.result.submission_id,
+                "insured_name": entry["insured_name"],
+                "broker_name": entry["broker_name"],
+                "risk_tier": notice.get("risk_tier")
+                or record.result.triage.risk_tier,
+                "sla_budget_days": sla.get("budget_days"),
+                "first_observed_at": notice.get("first_observed_at") or "",
+                "attempts": len(attempts),
+                "attempts_remaining": 0,
+                "first_attempt_at": attempts[0].get("attempted_at") or "",
+                "last_attempt_at": last.get("attempted_at") or "",
+                "last_http_status": last.get("http_status"),
+                "last_error": last.get("error"),
+                "notice_age_days": age_days,
+                "notice_age_bucket": (
+                    _age_bucket(age_days) if age_days is not None else None
+                ),
+                "_sort": anchor or datetime.max.replace(tzinfo=timezone.utc),
+            }
+        )
+    entries.sort(key=lambda e: (e["_sort"], e["submission_id"]))
+    for entry in entries:
+        entry.pop("_sort", None)
+    return entries
+
+
 def dispatch_overview(
     records: list[ApprovalRecord],
     now: datetime | None = None,
@@ -1531,6 +1603,13 @@ def dispatch_overview(
     budget is exhausted, not stuck: it needs a decision (fix the
     receiver, reroute, write it off), not another attempt, and the
     view says which is which.
+
+    The breach notices ride the same view, in their own list:
+    :func:`_exhausted_breach_notices` — notices whose own ledger
+    spent the budget still undelivered, on cases still awaiting a
+    decision. They are not approval failures and never merge into
+    that list; they are the cases out of automated nudges, and
+    the next step for one is a human call, not a retry button.
     """
     now = now or datetime.now(timezone.utc)
     if stuck_age_hours is None:
@@ -1610,6 +1689,20 @@ def dispatch_overview(
                 failure["submission_id"]
             )
     stuck_failures = [f for f in failures if f["stuck"]]
+    exhausted_notices = _exhausted_breach_notices(
+        records, now, attempt_budget
+    )
+    notice_buckets: dict[str, list[str]] = {
+        label: [] for label, _, _ in QUEUE_AGE_BUCKETS
+    }
+    unknown_notice_age: list[str] = []
+    for notice_entry in exhausted_notices:
+        if notice_entry["notice_age_bucket"] is None:
+            unknown_notice_age.append(notice_entry["submission_id"])
+        else:
+            notice_buckets[notice_entry["notice_age_bucket"]].append(
+                notice_entry["submission_id"]
+            )
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "attempts_total": attempts_total,
@@ -1632,6 +1725,17 @@ def dispatch_overview(
         "stuck_failures": stuck_failures,
         "stuck_age_hours": stuck_age_hours,
         "attempt_budget": attempt_budget,
+        "exhausted_breach_notices": exhausted_notices,
+        "exhausted_breach_count": len(exhausted_notices),
+        "exhausted_breach_age_buckets": [
+            {
+                "bucket": label,
+                "count": len(notice_buckets[label]),
+                "submission_ids": notice_buckets[label],
+            }
+            for label, _, _ in QUEUE_AGE_BUCKETS
+        ],
+        "unknown_breach_notice_age": unknown_notice_age,
     }
 
 
@@ -1666,10 +1770,14 @@ def ops_digest(
 ) -> dict:
     """One operator digest over the surfaces that rot quietly.
 
-    Four worklists that used to live on four different screens,
-    composed into a single read: **stuck dispatches** (approval
+    Worklists that used to live on separate screens, composed
+    into a single read: **stuck dispatches** (approval
     webhooks failing past the stuck age with retries still left —
-    :func:`dispatch_overview`), **breached queue cases** (awaiting
+    :func:`dispatch_overview`), **exhausted breach notices**
+    (SLA-breach notices whose own ledger spent its attempts
+    undelivered, on cases still undecided — the same overview,
+    a different list: nobody was told, and no retry is coming),
+    **breached queue cases** (awaiting
     submissions past their tier's SLA budget — :func:`queue_aging`,
     measured against the budgets in force), **outstanding
     follow-through** (status notes whose loop is still open, the
@@ -1734,6 +1842,7 @@ def ops_digest(
 
     counts = {
         "stuck_dispatches": dispatch["stuck_count"],
+        "exhausted_breach_notices": dispatch["exhausted_breach_count"],
         "breached_queue": queue["breach_count"],
         "follow_through_outstanding": len(outstanding),
         "follow_through_escalated": follow["escalated_count"],
@@ -1742,6 +1851,7 @@ def ops_digest(
     }
     counts["total_attention"] = (
         counts["stuck_dispatches"]
+        + counts["exhausted_breach_notices"]
         + counts["breached_queue"]
         + counts["follow_through_escalated"]
         + counts["proposals_expired"]
@@ -1750,6 +1860,11 @@ def ops_digest(
     if counts["stuck_dispatches"]:
         parts.append(
             f"{counts['stuck_dispatches']} stuck dispatch(es)"
+        )
+    if counts["exhausted_breach_notices"]:
+        parts.append(
+            f"{counts['exhausted_breach_notices']} exhausted breach "
+            "notice(s) — a case nobody was told about"
         )
     if counts["breached_queue"]:
         parts.append(f"{counts['breached_queue']} breached queue case(s)")
@@ -1777,14 +1892,15 @@ def ops_digest(
         "Ops digest: " + "; ".join(parts) + "."
         if parts
         else "Ops digest: nothing needs attention — no stuck "
-        "dispatches, no breached cases, no escalated notes, no "
-        "proposals nearing expiry."
+        "dispatches, no exhausted breach notices, no breached "
+        "cases, no escalated notes, no proposals nearing expiry."
     )
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "headline": headline,
         "counts": counts,
         "stuck_dispatches": dispatch["stuck_failures"],
+        "exhausted_breach_notices": dispatch["exhausted_breach_notices"],
         "breached_queue": queue["breaches"],
         "follow_through_outstanding": outstanding,
         "follow_through_escalated": follow["escalated"],
@@ -1807,6 +1923,7 @@ DIGEST_SNAPSHOTS_KEY = "ops_digest_snapshots"
 #: a trend compares across snapshots.
 DIGEST_COUNT_KEYS = (
     "stuck_dispatches",
+    "exhausted_breach_notices",
     "breached_queue",
     "follow_through_outstanding",
     "follow_through_escalated",
@@ -1821,6 +1938,7 @@ DIGEST_COUNT_KEYS = (
 #: count moved.
 _DIGEST_SECTION_IDS = {
     "stuck_dispatches": "submission_id",
+    "exhausted_breach_notices": "submission_id",
     "breached_queue": "submission_id",
     "follow_through_outstanding": "submission_id",
     "follow_through_escalated": "submission_id",
