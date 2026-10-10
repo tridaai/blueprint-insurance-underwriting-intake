@@ -2125,6 +2125,46 @@ def calibration_snapshot_by_label(
     return None
 
 
+def calibration_rename_log(snapshots: list[dict]) -> list[dict]:
+    """Every label rename across the kept reports, in one read.
+
+    Renames are recorded per snapshot (``label_history`` — see
+    ``service.rename_sla_calibration_snapshot_label``), which
+    is where a single report's addressing is audited; but a
+    debate reconstructing its *own* addressing history — which
+    names it has cited, in what order they moved — reads the
+    histories one report at a time without this projection.
+    The log flattens them: one entry per rename, carrying the
+    report it moved on (its snapshot id and the label it wears
+    now), the move itself (from, to), and its author and
+    moment. Entries walk in the order the renames happened —
+    by their recorded moment, ties (and unparseable moments)
+    falling back to the order the snapshots were kept and the
+    history was written, so the read is deterministic. A
+    pruned report's renames leave with it: the log reads the
+    kept reports as they stand, and the prune that removed one
+    is recorded on the document beside them.
+    """
+    entries: list[dict] = []
+    for snapshot in snapshots:
+        for move in snapshot.get("label_history") or []:
+            entries.append(
+                {
+                    "snapshot_id": snapshot.get("snapshot_id", ""),
+                    "current_label": snapshot.get("label", ""),
+                    "from": move.get("from", ""),
+                    "to": move.get("to", ""),
+                    "renamed_by": move.get("renamed_by", ""),
+                    "renamed_at": move.get("renamed_at", ""),
+                    "_order": len(entries),
+                }
+            )
+    entries.sort(key=lambda e: (e["renamed_at"], e["_order"]))
+    for entry in entries:
+        entry.pop("_order", None)
+    return entries
+
+
 # ---------------------------------------------------------------------------
 # Deciding a proposal — the one consequential write
 # ---------------------------------------------------------------------------
