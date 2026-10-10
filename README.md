@@ -164,7 +164,13 @@ decided and why — on the result, in the audit export, in the
 feedback entries, and in the webhook payload — and **`/queue`**
 ages the awaiting queue (buckets by days since submission, outcome
 mix, the single oldest case; the console renders it as the Queue
-aging panel).
+aging panel). Queue items also carry their insured's **escalated
+follow-through** flag: when any record for the same insured holds
+a status note whose loop has aged past the escalation window, the
+item names that note and its age, and the view lists every
+escalated note with the awaiting submissions its insured
+currently has — the rotting loops on the worklist itself, not
+only in the digest.
 Webhook dispatches can be HMAC-signed (`ACTION_WEBHOOK_SECRET`) so
 the receiving system can verify the packet's origin. Every dispatch
 is recorded in a **delivery ledger** on the record — attempt number,
@@ -254,6 +260,16 @@ ones named), and calibration proposals nearing or past their
 evidence expiry — under one composed headline with the entries
 behind it. Computed at read time, never sent; reading it retries
 nothing, refreshes nothing, and decides nothing.
+
+The digest can also be **snapshotted** (`POST /ops/digest/snapshots`,
+console button): the headline, the counts, and the ids behind each
+section, stored dated and under the taker's name — on demand,
+never on a timer. A **trend** (`GET /ops/digest/trend`, rendered
+under the digest) compares the kept snapshots: the headline counts
+as a series, each count's change from the first snapshot to the
+latest and since the previous one, and — between the latest two —
+which ids **entered** and which **cleared** each section, so a
+count that moved reads apart from the churn underneath it.
 
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:
@@ -348,7 +364,14 @@ stale snapshot it replaced. An operator facing a fortnight of
 expired drafts refreshes them in **one sweep**
 (`POST /calibration/proposals/refresh-expired`): each draft's
 scan still re-runs individually, and the report lists renewals
-and withdrawals side by side — the sweep decides nothing. And
+and withdrawals side by side — the sweep decides nothing. Both
+refreshes can be **previewed** first (`GET
+/calibration/proposals/refresh-expired/preview`, `GET
+/calibration/proposals/{id}/refresh/preview`): the same scans run
+and report would-renew — with the fresh snapshot and expiry
+window the renewal would take — or would-withdraw, with the
+reason, while nothing is written; the sweep that follows on the
+same store produces exactly the previewed outcomes. And
 acceptance is no longer one-way: either settings record can be
 **reverted** (`POST /calibration/settings/revert`,
 `POST /queue/sla/settings/revert`), restoring its latest change's
@@ -361,6 +384,14 @@ the entry restored to, however many dimensions move — so a bad
 *sequence* of accepts is undone in one decision, not one revert
 per change. The record is append-only either way, so the way
 back is itself auditable — and a restore can itself be reverted.
+A restore can be **previewed** before it is committed (`POST
+/calibration/settings/restore/preview`, `POST
+/queue/sla/settings/restore/preview`): the restore's own plan as
+a dry run — the values in force, the values as of the chosen
+entry, and exactly which dimension values would change — writing
+nothing and appending nothing. A restore that would move nothing
+previews as exactly that, instead of failing the way the restore
+itself does.
 
 **Multi-line submissions** — a broker often submits the whole
 account at once, so intake accepts a bundle (`lines` on the

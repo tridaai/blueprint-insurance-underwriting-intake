@@ -555,6 +555,31 @@ numbers on the submission and its loss records. Line aliases fold too
   a mis-tuned sequence is one audited decision; `_revert_settings_change`
   learned the `changes` shape, which makes a restore revertible
   by the same rule as everything else.
+- **Round 11 makes movement visible, and previews the writes.**
+  (1) Digest snapshots: the digest evaporated at every read, so
+  `build_digest_snapshot` keeps one on demand — headline, counts,
+  and the section membership (entry ids, sorted) as a stored
+  document under the taker's name — and `digest_trend` compares
+  the kept snapshots: counts as a series, change first→latest and
+  previous→latest, and per-section entered/cleared between the
+  latest two, so churn and net movement are never conflated.
+  Snapshots are operator-taken, never on a timer: a trend reads
+  only what someone decided was worth keeping. (2) Escalation
+  reaches the worklist: `queue_aging` reads the follow-through
+  digest itself and matches escalated notes to queue items by
+  insured (the note's record is usually an older, decided one),
+  so the item carries the flag and the note's age, and the view
+  lists every escalated note with its insured's awaiting ids.
+  One escalation definition, computed once, read everywhere.
+  (3) Both previews are the same code with the save left out:
+  `_restore_plan` computes the restore's target values and
+  per-dimension moves for the restore and its preview alike (the
+  preview reports a no-op as `would_change: false` instead of
+  raising), and `_refresh_scan` runs the refresh's evidence scan
+  for the refresh, its single preview, and the sweep preview —
+  a previewed outcome is therefore the outcome the write
+  produces, pinned by a test that previews, then sweeps, and
+  compares the results field for field.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 
