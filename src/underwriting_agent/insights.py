@@ -349,6 +349,47 @@ def compose_broker_quality_draft(report: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _letter_advisory_aggregate(records: list[ApprovalRecord]) -> dict:
+    """The letter-advisory aggregate over the store's runs.
+
+    One computation, several readers: ``/metrics`` reports the
+    whole family as the drafting-quality trend (see
+    :func:`compute_metrics`), and the ops digest carries its two
+    headline counts — runs that drafted advisories, runs whose
+    advisories the steered redraft cleared — in the counts its
+    snapshots keep, so the kept history trends drafting quality
+    alongside the operations counts instead of the trend living
+    only as today's point-in-time rate.
+    """
+    advisory_runs = 0
+    advisory_total = 0
+    advisory_families: Counter = Counter()
+    advisory_repaired_runs = 0
+    for record in records:
+        advisories = record.result.letter_advisories or []
+        if advisories:
+            advisory_runs += 1
+            advisory_total += len(advisories)
+            for advisory in advisories:
+                advisory_families[advisory.get("family") or "unknown"] += 1
+        if record.result.advisory_repaired:
+            advisory_repaired_runs += 1
+    return {
+        "runs_with_advisories": advisory_runs,
+        "total": advisory_total,
+        "per_run": (
+            round(advisory_total / len(records), 3) if records else None
+        ),
+        "by_family": dict(sorted(advisory_families.items())),
+        "repaired_runs": advisory_repaired_runs,
+        "clear_rate": (
+            round(advisory_repaired_runs / advisory_runs, 3)
+            if advisory_runs
+            else None
+        ),
+    }
+
+
 def compute_metrics(records: list[ApprovalRecord]) -> dict:
     """Operational aggregates over the whole store.
 
@@ -384,10 +425,6 @@ def compute_metrics(records: list[ApprovalRecord]) -> dict:
     latencies: list[float] = []
     guardrail_failures = 0
     reviewer_blocks = 0
-    advisory_runs = 0
-    advisory_total = 0
-    advisory_families: Counter = Counter()
-    advisory_repaired_runs = 0
     for record in records:
         result = record.result
         statuses[result.status] += 1
@@ -397,14 +434,6 @@ def compute_metrics(records: list[ApprovalRecord]) -> dict:
             guardrail_failures += 1
         if result.reviewer_blocked:
             reviewer_blocks += 1
-        advisories = result.letter_advisories or []
-        if advisories:
-            advisory_runs += 1
-            advisory_total += len(advisories)
-            for advisory in advisories:
-                advisory_families[advisory.get("family") or "unknown"] += 1
-        if result.advisory_repaired:
-            advisory_repaired_runs += 1
         telemetry = result.telemetry
         if telemetry is None:
             continue
@@ -443,20 +472,7 @@ def compute_metrics(records: list[ApprovalRecord]) -> dict:
         "risk_tiers": dict(sorted(tiers.items())),
         "guardrail_failures": guardrail_failures,
         "reviewer_blocks": reviewer_blocks,
-        "letter_advisories": {
-            "runs_with_advisories": advisory_runs,
-            "total": advisory_total,
-            "per_run": (
-                round(advisory_total / len(records), 3) if records else None
-            ),
-            "by_family": dict(sorted(advisory_families.items())),
-            "repaired_runs": advisory_repaired_runs,
-            "clear_rate": (
-                round(advisory_repaired_runs / advisory_runs, 3)
-                if advisory_runs
-                else None
-            ),
-        },
+        "letter_advisories": _letter_advisory_aggregate(records),
         "model_calls": model_calls,
         "token_runs": token_runs,
         "input_tokens": input_tokens,
@@ -2078,7 +2094,14 @@ def ops_digest(
     and **calibration proposals nearing expiry** (live drafts
     whose evidence window closes within the warning days, plus
     the expired drafts awaiting a refresh — the caller passes the
-    proposals annotated by ``proposals.annotate_proposal``).
+    proposals annotated by ``proposals.annotate_proposal``). The
+    counts also carry the **letter-advisory aggregates** (runs
+    that drafted advisories, runs whose advisories the steered
+    redraft cleared — the full family rides along as
+    ``letter_advisories``, the same computation ``/metrics``
+    reports), not as worklist items but so the snapshots that
+    keep these counts trend **drafting quality** across the kept
+    history beside the operations movement.
 
     The digest is computed, never sent: it carries the composed
     ``headline`` an operator reads first and the section entries
@@ -2151,6 +2174,7 @@ def ops_digest(
     )
     expired.sort(key=lambda e: e["proposal_id"])
 
+    advisory = _letter_advisory_aggregate(records)
     counts = {
         "stuck_dispatches": dispatch["stuck_count"],
         "exhausted_breach_notices": dispatch["exhausted_breach_count"],
@@ -2161,6 +2185,14 @@ def ops_digest(
         "breached_queue": queue["breach_count"],
         "follow_through_outstanding": len(outstanding),
         "follow_through_escalated": follow["escalated_count"],
+        # Drafting quality rides the same counts the snapshots
+        # keep (advisory_runs_with / advisory_repaired_runs), so
+        # the kept history trends it beside the operations
+        # counts; the full aggregate rides along below as
+        # ``letter_advisories``. Neither enters total_attention —
+        # advisories are a quality signal, not a worklist.
+        "advisory_runs_with": advisory["runs_with_advisories"],
+        "advisory_repaired_runs": advisory["repaired_runs"],
         "proposals_expiring_soon": len(expiring_soon),
         "proposals_expired": len(expired),
     }
@@ -2252,6 +2284,7 @@ def ops_digest(
         "acknowledged_breach_notices": dispatch[
             "acknowledged_breach_notices"
         ],
+        "letter_advisories": advisory,
         "acknowledged_wait_days": acknowledged_wait_days,
         "proposal_warning_days": proposal_warning_days,
         "movement": movement,
@@ -2277,6 +2310,8 @@ DIGEST_COUNT_KEYS = (
     "breached_queue",
     "follow_through_outstanding",
     "follow_through_escalated",
+    "advisory_runs_with",
+    "advisory_repaired_runs",
     "proposals_expiring_soon",
     "proposals_expired",
     "total_attention",
@@ -2308,6 +2343,8 @@ _COUNT_LABELS = {
     "breached_queue": "breached queue cases",
     "follow_through_outstanding": "outstanding follow-through notes",
     "follow_through_escalated": "escalated follow-through notes",
+    "advisory_runs_with": "runs drafting letter advisories",
+    "advisory_repaired_runs": "advisory repairs",
     "proposals_expiring_soon": "proposals nearing expiry",
     "proposals_expired": "expired proposals",
     "total_attention": "total attention",
