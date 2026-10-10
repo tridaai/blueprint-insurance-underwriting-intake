@@ -1118,6 +1118,127 @@ def insured_loss_timeline(
     }
 
 
+def loss_timeline_packet_lines(
+    timeline: dict | None, current_diff=None
+) -> list[str]:
+    """The loss-development arc as a section of a renewal's packet.
+
+    The timeline view (console drill-down) chains an insured's
+    stored diffs; this composes the same arc into the decision
+    document itself, so the underwriter reads the development
+    history where they decide instead of behind a drill-down they
+    may never open. The stored timeline covers the submissions
+    already on file; the current submission's own diff is replayed
+    over it (appeared / developed / no-longer-listed applied to the
+    claim states, its net movement added to the cumulative), so the
+    arc the packet tells is the arc *including this submission*.
+
+    Compact by design — counts, cumulative movement, and the claims
+    still open: the per-claim detail already lives in the changes
+    section and the timeline view. Empty when there is no arc to
+    tell (no stored history, or no claim ever moved).
+    """
+    if not timeline:
+        return []
+    claims: dict[str, dict] = {}
+    order: list[str] = []
+    for claim in timeline.get("claims") or []:
+        key = claim["key"]
+        claims[key] = {
+            "date": claim["date"],
+            "description": claim["description"],
+            "state": claim["state"],
+            "latest_incurred": claim["latest_incurred"],
+            "latest_status": claim["latest_status"],
+        }
+        order.append(key)
+    totals = timeline.get("totals") or {}
+    renewals = totals.get("renewals", 0)
+    cumulative = float(totals.get("cumulative_net_incurred_change", 0.0))
+    development = current_diff.loss_development if current_diff else None
+    if current_diff is not None:
+        renewals += 1
+    if development is not None:
+        cumulative = round(cumulative + development.net_incurred_change, 2)
+
+        def _apply(date: str, description: str, **updates) -> None:
+            key = _claim_key(date, description)
+            claim = claims.get(key)
+            if claim is None:
+                claim = {
+                    "date": date,
+                    "description": description,
+                    "state": "on_latest_run",
+                    "latest_incurred": 0.0,
+                    "latest_status": "",
+                }
+                claims[key] = claim
+                order.append(key)
+            claim.update(updates)
+
+        for ref in development.appeared:
+            _apply(
+                ref.date,
+                ref.description,
+                state="on_latest_run",
+                latest_incurred=ref.amount_incurred,
+                latest_status=ref.status,
+            )
+        for change in development.developed:
+            _apply(
+                change.date,
+                change.description,
+                state="on_latest_run",
+                latest_incurred=change.current_incurred,
+                latest_status=change.current_status,
+            )
+        for ref in development.disappeared:
+            _apply(
+                ref.date,
+                ref.description,
+                state="no_longer_listed",
+                latest_incurred=ref.amount_incurred,
+                latest_status=ref.status,
+            )
+    if renewals < 1 or not order:
+        return []
+    chained = [claims[key] for key in order]
+    open_claims = [
+        c
+        for c in chained
+        if c["state"] == "on_latest_run"
+        and (c["latest_status"] or "").strip().lower() != "closed"
+    ]
+    gone = [c for c in chained if c["state"] == "no_longer_listed"]
+    lines = [
+        "Loss history arc (this insured's stored submissions, chained):",
+        f"- {timeline.get('submissions', 0)} stored submission(s), "
+        f"{renewals} renewal(s) chained including this one; "
+        f"{len(order)} claim(s) tracked across the loss runs",
+        f"- cumulative net incurred movement across the chained "
+        f"renewals: {cumulative:+,.0f}",
+    ]
+    if open_claims:
+        shown = "; ".join(
+            f"{c['description'] or 'no description'} "
+            f"({c['date'] or 'date not stated'}) — "
+            f"${c['latest_incurred']:,.0f} incurred, "
+            f"{c['latest_status'] or 'status not stated'}"
+            for c in open_claims[:4]
+        )
+        extra = (
+            f"; and {len(open_claims) - 4} more" if len(open_claims) > 4 else ""
+        )
+        lines.append(f"- still open on the latest run: {shown}{extra}")
+    else:
+        lines.append("- no claims still open on the latest run")
+    if gone:
+        lines.append(
+            f"- no longer listed on the latest run: {len(gone)} claim(s)"
+        )
+    return lines
+
+
 def audit_csv(rows: list[dict]) -> str:
     """The audit rows as CSV text (header + one line per row)."""
     buffer = io.StringIO()

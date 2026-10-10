@@ -64,7 +64,11 @@ from .extractor import extract_documents, extraction_discrepancies
 from .facts import compute_facts
 from .guardrails import validate_drafts
 from .guidelines_data import GUIDELINES_VERSION
-from .insights import follow_through_packet_lines, status_note_follow_through
+from .insights import (
+    follow_through_packet_lines,
+    loss_timeline_packet_lines,
+    status_note_follow_through,
+)
 from .model_backends import DraftContext, estimate_cost_usd
 from .options import build_options
 from .resilience import ResilientBackend
@@ -207,6 +211,7 @@ class AgentState(TypedDict, total=False):
     prior_submission: Optional[dict[str, Any]]
     prior_status_note: Optional[dict[str, Any]]
     diff_thresholds: Optional[dict[str, Any]]
+    loss_timeline: Optional[dict[str, Any]]
     submission_diff: Optional[dict[str, Any]]
     diagnosis: dict[str, Any]
     options: list[dict[str, Any]]
@@ -305,6 +310,12 @@ def _draft_context(
             )
             if state.get("prior_status_note")
             else []
+        ),
+        loss_timeline=loss_timeline_packet_lines(
+            state.get("loss_timeline"),
+            SubmissionDiff.model_validate(state["submission_diff"])
+            if state.get("submission_diff")
+            else None,
         ),
         options=[o.model_dump() for o in options],
         recommended_option_kind=recommended.kind if recommended else "",
@@ -941,6 +952,7 @@ def run_submission(
     prior_submission: dict | None = None,
     prior_status_note: dict | None = None,
     diff_thresholds: dict | None = None,
+    loss_timeline: dict | None = None,
     event_sink=None,
     checkpointer: BaseCheckpointSaver | None = None,
     thread_id: str | None = None,
@@ -958,7 +970,11 @@ def run_submission(
     ``diff_thresholds`` carries the diff-trigger thresholds in
     force when the service resolved them from an accepted
     calibration proposal's settings record (``None`` = read the
-    environment, the long-standing behaviour);
+    environment, the long-standing behaviour); ``loss_timeline``
+    is the insured's chained loss-development timeline over the
+    stored submissions (``insights.insured_loss_timeline``), which
+    the draft context composes — with this run's own diff — into
+    the packet's loss-history arc;
     ``event_sink`` receives structured run events; ``checkpointer``
     + ``thread_id`` pause the run at the gate for a later resume.
     """
@@ -980,6 +996,7 @@ def run_submission(
         "prior_submission": prior_submission,
         "prior_status_note": prior_status_note,
         "diff_thresholds": diff_thresholds,
+        "loss_timeline": loss_timeline,
     }
     sink.emit(
         RunEvent(

@@ -491,6 +491,7 @@ class SubmissionService:
             prior_submission=self._prior_submission_for(model, prior_records),
             prior_status_note=note_record.status_note if note_record else None,
             diff_thresholds=self.effective_diff_thresholds(),
+            loss_timeline=insured_loss_timeline(prior_records, model.insured_name),
             event_sink=event_sink,
             checkpointer=self._get_checkpointer(),
             thread_id=model.submission_id,
@@ -545,6 +546,7 @@ class SubmissionService:
         # to its own line, and the note's record is marked from the
         # rolled-up bundle result once the bundle is saved.
         note_record = self._prior_status_note_record(model, prior_records)
+        timeline = insured_loss_timeline(prior_records, model.insured_name)
 
         analyses: list[LineAnalysis] = []
         for sub in subs:
@@ -557,6 +559,7 @@ class SubmissionService:
                 prior_submission=self._prior_submission_for(sub, prior_records),
                 prior_status_note=note_record.status_note if note_record else None,
                 diff_thresholds=self.effective_diff_thresholds(),
+                loss_timeline=timeline,
                 event_sink=event_sink,
                 checkpointer=None,
             )
