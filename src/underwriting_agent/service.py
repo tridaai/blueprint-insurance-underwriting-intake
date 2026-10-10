@@ -53,6 +53,7 @@ from .graph import resume_approval, run_submission
 from .guardrails import validate_drafts, validate_status_note
 from .guidelines_data import GUIDELINES_VERSION
 from .insights import (
+    BROKER_QUALITY_DRAFTING_KEY,
     DIGEST_SNAPSHOTS_KEY,
     all_scorecards,
     audit_rows,
@@ -1736,15 +1737,81 @@ class SubmissionService:
     def broker_quality_report(self, broker_name: str) -> dict | None:
         """The broker submission-quality report (trend, discrepancy
         rate, top missing elements) with its drafted text — composed
-        from the store, never sent."""
-        return broker_quality_report(self._get_store().all_records(), broker_name)
+        from the store, never sent.
+
+        The draft is composed under the drafting discipline (see
+        ``insights._discipline_broker_draft``): guardrail-checked,
+        steered once on a wording-only failure, refused on
+        substance. Each drafting is recorded as an event on the
+        ``broker_quality_drafting`` document — clean, repaired,
+        or refused, with the families and failed checks — so the
+        report's repairs and refusals join the drafting-repair
+        family in ``/metrics`` beside the letter advisories and
+        the status-note repairs, named as their own source. The
+        report is drafted on read, so each read is one drafting
+        and one event; the computed sections are unaffected.
+        """
+        report = broker_quality_report(
+            self._get_store().all_records(), broker_name
+        )
+        if report is not None:
+            self._record_broker_quality_drafting(report)
+        return report
+
+    def _record_broker_quality_drafting(self, report: dict) -> None:
+        """Append one drafting event for a broker quality report
+        (see :meth:`broker_quality_report`): the outcome the
+        discipline reached — refused if the report carries a
+        refusal, repaired if it carries a repair, clean
+        otherwise — with the repair families and failed checks
+        the aggregate counts."""
+        refusal = report.get("draft_refusal") or {}
+        repair = report.get("draft_repair") or {}
+        outcome = (
+            "refused" if refusal else "repaired" if repair else "clean"
+        )
+        store = self._get_store()
+        document = store.get_document(BROKER_QUALITY_DRAFTING_KEY) or {}
+        events = list(document.get("events") or [])
+        events.append(
+            {
+                "broker": report.get("broker", ""),
+                "drafted_at": datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                ),
+                "outcome": outcome,
+                "repair_families": (
+                    repair.get("repair_families")
+                    or refusal.get("repair_families")
+                    or []
+                ),
+                "failed_checks": refusal.get("failed_checks") or [],
+                "steered": bool(refusal.get("steered")),
+            }
+        )
+        document["events"] = events
+        store.save_document(BROKER_QUALITY_DRAFTING_KEY, document)
+
+    def broker_quality_drafting_events(self) -> list[dict]:
+        """Every recorded broker-quality drafting event, in the
+        order drafted (see :meth:`_record_broker_quality_drafting`)."""
+        document = (
+            self._get_store().get_document(BROKER_QUALITY_DRAFTING_KEY)
+            or {}
+        )
+        return list(document.get("events") or [])
 
     def metrics(self) -> dict:
         """Operational aggregates over the store: run/decision counts,
         outcome mix, the letter-advisory trend (borderline drafting
         quality, aggregated from the runs' recorded advisories),
-        model usage, cost, and latency."""
-        return compute_metrics(self._get_store().all_records())
+        the drafting-repair family (status-note repairs and
+        refusals, with the broker quality report's nested as
+        their own source), model usage, cost, and latency."""
+        return compute_metrics(
+            self._get_store().all_records(),
+            broker_drafting_events=self.broker_quality_drafting_events(),
+        )
 
     def queue(self) -> dict:
         """The awaiting queue by age bucket and outcome — how long

@@ -515,3 +515,144 @@ def validate_status_note(note: str, submission_id: str) -> Validation:
     )
 
     return Validation(passed=all(c.passed for c in checks), checks=checks)
+
+
+def validate_broker_quality_draft(text: str, broker_name: str) -> Validation:
+    """Guardrail-check a drafted broker quality report.
+
+    The quality report is the third broker-facing draft: like
+    the letter it may be shared with the broker (by a human —
+    the agent never sends it), and like the status note it is
+    composed in code from record prose — the broker's name, the
+    missing-element labels its submissions carried — so it is
+    held to the same families as both: no bind language, no
+    premium figures, no outcome or timing promises, the
+    letter-scoped wording families (forward motion, review
+    commitments, soft time commitments, internal authority
+    references) applied to the report itself, and the PII
+    screen, plus the broker reference that pins the report to
+    its subject. The figures the report exists to state —
+    completeness averages, discrepancy counts — are computed
+    facts, not quotes: the premium check catches a premium
+    *figure* (a currency amount presented as a premium), not
+    the report's own arithmetic. A draft that fails is never
+    served as a draft: the composer steers a wording-only
+    failure once and refuses the rest (see
+    ``insights.broker_quality_report``).
+    """
+    body = text or ""
+    checks: list[GuardrailCheck] = []
+
+    present = bool(broker_name) and broker_name in body
+    checks.append(
+        GuardrailCheck(
+            name="references_broker",
+            passed=present,
+            detail=(
+                f"report names its broker ({broker_name})"
+                if present
+                else f"report never names its broker ({broker_name})"
+            ),
+        )
+    )
+
+    bind_hit = next(
+        (hit for hit in (_affirmative(p, body) for p in _BIND_PATTERNS) if hit),
+        None,
+    )
+    checks.append(
+        GuardrailCheck(
+            name="no_bind_language",
+            passed=bind_hit is None,
+            detail=(
+                "no language states or implies coverage is bound"
+                if bind_hit is None
+                else f"bind language found: '{bind_hit}' — the agent never binds coverage"
+            ),
+        )
+    )
+
+    premium_hit = next(
+        (m.group(0) for p in _PREMIUM_FIGURE if (m := re.search(p, body, re.IGNORECASE))),
+        None,
+    )
+    checks.append(
+        GuardrailCheck(
+            name="no_firm_premium",
+            passed=premium_hit is None,
+            detail=(
+                "no premium figure is stated or quoted"
+                if premium_hit is None
+                else f"premium figure found: '{premium_hit}' — the agent never quotes a premium"
+            ),
+        )
+    )
+
+    promise_hit = next(
+        (m.group(0) for p in _PROMISE_PATTERNS if (m := re.search(p, body, re.IGNORECASE))),
+        None,
+    )
+    checks.append(
+        GuardrailCheck(
+            name="no_prohibited_promises",
+            passed=promise_hit is None,
+            detail=(
+                "no outcome or timing promises"
+                if promise_hit is None
+                else f"prohibited promise found: '{promise_hit}'"
+            ),
+        )
+    )
+
+    problems: list[str] = []
+    for patterns, label in (
+        (_FORWARD_MOTION_PATTERNS, "forward-motion commitment"),
+        (_REVIEW_COMMITMENT_PATTERNS, "review commitment"),
+        (_SOFT_TIME_PATTERNS, "soft time commitment"),
+    ):
+        hit = next(
+            (h for h in (_affirmative(p, body) for p in patterns) if h), None
+        )
+        if hit:
+            problems.append(f"{label}: '{hit}'")
+    authority_hit = next(
+        (m.group(0) for p in _AUTHORITY_PATTERNS if (m := re.search(p, body, re.IGNORECASE))),
+        None,
+    )
+    if authority_hit:
+        problems.append(f"internal authority reference: '{authority_hit}'")
+    checks.append(
+        GuardrailCheck(
+            name="no_forward_motion_in_letter",
+            passed=not problems,
+            detail=(
+                "the report records quality only — no forward-motion "
+                "or review commitments, no soft time commitments, no "
+                "internal authority references"
+                if not problems
+                else "; ".join(problems)
+                + " — the report records quality; underwriters decide submissions"
+            ),
+        )
+    )
+
+    pii_hit = None
+    if _SSN.search(body):
+        pii_hit = "what looks like a US Social Security number"
+    elif _find_card(body):
+        pii_hit = "what looks like a payment card number (Luhn-valid)"
+    elif _PASSPORT.search(body):
+        pii_hit = "what looks like a passport number"
+    checks.append(
+        GuardrailCheck(
+            name="no_pii_in_draft",
+            passed=pii_hit is None,
+            detail=(
+                "no SSN / card / passport patterns in the report"
+                if pii_hit is None
+                else f"PII in report: {pii_hit} — personal identifiers never belong in drafts"
+            ),
+        )
+    )
+
+    return Validation(passed=all(c.passed for c in checks), checks=checks)

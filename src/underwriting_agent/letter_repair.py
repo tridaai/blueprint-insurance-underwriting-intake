@@ -41,6 +41,13 @@ changes no verdict:
   premium figure, a promise, PII) is refused outright, as it
   always was — refusal is the last resort for wording, and the
   only resort for substance.
+- The same steering serves the **broker quality report** (see
+  :func:`broker_quality_repair_guidance` and
+  :func:`steer_broker_quality_draft`): the third broker-facing
+  draft, composed in code from record prose like the note,
+  validated by ``guardrails.validate_broker_quality_draft``
+  and steered deterministically in the report's own shapes —
+  so every broker-facing draft answers to one discipline.
 
 The blocking families themselves are not re-implemented here:
 :func:`guardrails.letter_wording_hits` is the one computation,
@@ -313,29 +320,25 @@ def status_note_repair_guidance(validation: Validation, note: str) -> str:
     )
 
 
-def steer_status_note(note: str, validation: Validation) -> str | None:
-    """One bounded steered redraft of a failed status note.
-
-    The note's drafter is code, so where the letter's steering
-    is handed to a model as a prompt, the note's is applied
-    directly: every sentence carrying a wording hit is replaced
-    by its family's approved note shape (an authority-carrying
-    sentence comes out — the record keeps that fact), and every
-    other sentence is kept byte for byte. Returns the rewritten
-    note, or ``None`` when steering does not apply: the
-    validation passed, the wording check is not the *only*
-    failure (bind language, a premium figure, a promise, or PII
-    in a note is refused, never steered around), or no wording
-    hit can be located in the text. The rewrite is a draft, not
-    a verdict — the caller revalidates it with
-    ``guardrails.validate_status_note`` and stores it only if
-    it passes, exactly as the graph stores only a passing
-    redraft.
+def _steer_wording(
+    text: str, validation: Validation, shapes: dict[str, str]
+) -> str | None:
+    """The deterministic sentence rewrite behind the steered
+    redrafts: every sentence carrying a wording hit is replaced
+    by its family's approved shape from ``shapes`` (an
+    authority-carrying sentence comes out — the record keeps
+    that fact), and every other sentence is kept byte for byte.
+    Returns the rewrite, or ``None`` when steering does not
+    apply: the wording check is not the *only* failure (bind
+    language, a premium figure, a promise, or PII is refused,
+    never steered around), or no wording hit can be located in
+    the text. The rewrite is a draft, not a verdict — the
+    caller revalidates it and serves it only if it passes.
     """
     failed = {check.name for check in validation.checks if not check.passed}
     if failed != {"no_forward_motion_in_letter"}:
         return None
-    text = note or ""
+    text = text or ""
     hits = letter_wording_hits(text)
     families = [family for family, hit in hits.items() if hit]
     if not families:
@@ -358,10 +361,120 @@ def steer_status_note(note: str, validation: Validation) -> str | None:
             if matched is None:
                 pieces.append(piece)
             elif matched != "authority":
-                pieces.append(_NOTE_FAMILY_INSTEAD[matched])
+                pieces.append(shapes[matched])
             # An authority-carrying sentence is not rewritten —
             # it comes out. The fact it referenced stays on the
             # record, where internal facts belong.
         lines.append(" ".join(pieces))
     steered = "\n".join(lines)
     return steered if steered != text else None
+
+
+def steer_status_note(note: str, validation: Validation) -> str | None:
+    """One bounded steered redraft of a failed status note.
+
+    The note's drafter is code, so where the letter's steering
+    is handed to a model as a prompt, the note's is applied
+    directly: every sentence carrying a wording hit is replaced
+    by its family's approved note shape (an authority-carrying
+    sentence comes out — the record keeps that fact), and every
+    other sentence is kept byte for byte. Returns the rewritten
+    note, or ``None`` when steering does not apply: the
+    validation passed, the wording check is not the *only*
+    failure (bind language, a premium figure, a promise, or PII
+    in a note is refused, never steered around), or no wording
+    hit can be located in the text. The rewrite is a draft, not
+    a verdict — the caller revalidates it with
+    ``guardrails.validate_status_note`` and stores it only if
+    it passes, exactly as the graph stores only a passing
+    redraft.
+    """
+    return _steer_wording(note or "", validation, _NOTE_FAMILY_INSTEAD)
+
+
+# ---------------------------------------------------------------------------
+# Broker-quality-report steering — the third drafting surface
+# ---------------------------------------------------------------------------
+
+#: The approved rewrite for each family in a broker quality
+#: report: the shapes restated for a report whose reader may
+#: be the broker (a human shares it; the agent never sends
+#: it), written about the broker's record in the third person.
+#: Authority again has no shape — the reference comes out.
+_REPORT_FAMILY_INSTEAD = {
+    "forward_motion": (
+        "The figures record the submissions as they stand; "
+        "each submission is decided on its own file."
+    ),
+    "review_commitment": (
+        "This report records the broker's submission history "
+        "for internal review."
+    ),
+    "soft_time": (
+        "This report is re-read when a human reviews the "
+        "broker's record again."
+    ),
+    "authority": (
+        "remove the authority reference from the report "
+        "entirely — the record keeps that fact"
+    ),
+}
+
+
+def broker_quality_repair_guidance(validation: Validation, text: str) -> str:
+    """Surgical rewrite instructions for a failed quality report.
+
+    The report-side twin of :func:`status_note_repair_guidance`:
+    built from the guardrail's own hits (``letter_wording_hits``
+    — the report validator's wording check runs the same
+    families), each family's offending sentence quoted verbatim
+    and paired with the problem and the approved report shape.
+    Empty when the report's wording check did not fail — the
+    steering exists for the wording families only.
+    """
+    failed = any(
+        check.name == "no_forward_motion_in_letter" and not check.passed
+        for check in validation.checks
+    )
+    if not failed:
+        return ""
+    body = text or ""
+    sentences = _sentences(body)
+    items = []
+    for family, hit in letter_wording_hits(body).items():
+        if hit is None:
+            continue
+        items.append(
+            (
+                _sentence_with(sentences, hit),
+                f"{_FAMILY_PROBLEM[family]} (matched: '{hit}')",
+                _REPORT_FAMILY_INSTEAD[family],
+            )
+        )
+    if not items:
+        return ""
+    return _guidance_block(
+        "BROKER QUALITY REPORT WORDING — the drafted report "
+        "failed the status-only rule. Rewrite each offending "
+        "sentence below into the approved shape; keep every "
+        "other sentence, and every figure, exactly as it is:",
+        items,
+    )
+
+
+def steer_broker_quality_draft(
+    text: str, validation: Validation
+) -> str | None:
+    """One bounded steered redraft of a failed quality report.
+
+    The report's drafter is code, like the status note's, so
+    the steering is applied directly in the report's own
+    shapes (see :func:`_steer_wording` for the shared
+    discipline): wording families only, an authority-carrying
+    sentence comes out, everything else byte for byte.
+    Returns the rewrite or ``None`` when steering does not
+    apply — the caller revalidates with
+    ``guardrails.validate_broker_quality_draft`` and serves
+    the draft only if it passes.
+    """
+    return _steer_wording(text or "", validation, _REPORT_FAMILY_INSTEAD)

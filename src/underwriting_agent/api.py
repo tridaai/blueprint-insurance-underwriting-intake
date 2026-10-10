@@ -896,8 +896,13 @@ def broker_scorecard(name: str) -> dict:
 def broker_quality(name: str) -> dict:
     """Broker submission-quality report: completeness trend,
     extraction discrepancy rate, and top missing elements over the
-    broker's stored history — with the drafted report text. A draft
-    artifact for internal review; nothing is sent to the broker."""
+    broker's stored history — with the drafted report text. The
+    draft is composed under the drafting discipline: guardrail-
+    checked, steered once on a wording-only failure (the repair
+    rides the report), refused on substance — a refused report
+    serves its computed sections with ``draft`` null and the
+    refusal named. A draft artifact for internal review; nothing
+    is sent to the broker."""
     report = service.broker_quality_report(name)
     if report is None:
         raise HTTPException(status_code=404, detail=f"No stored submissions from broker {name!r}.")

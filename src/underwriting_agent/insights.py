@@ -245,7 +245,13 @@ def broker_quality_report(records: list[ApprovalRecord], broker_name: str) -> di
     discrepancy rate), and which required elements do they most
     often leave out. Returns None for an unknown broker. The report
     carries its own drafted text (``draft``) — composed here, and,
-    like every draft in this system, never sent by the agent.
+    like every draft in this system, never sent by the agent. The
+    draft answers to the same drafting discipline as the letter
+    and the status note (see :func:`_discipline_broker_draft`):
+    guardrail-checked, steered once on a wording-only failure,
+    refused on substance — a refused report serves its computed
+    sections with ``draft`` None and the refusal named, never a
+    draft that failed.
     """
     hits = [r for r in records if broker_name and _party_name(r, "broker") == broker_name]
     if not hits:
@@ -295,8 +301,103 @@ def broker_quality_report(records: list[ApprovalRecord], broker_name: str) -> di
             for element, hits_count in missing.most_common(5)
         ],
     }
-    report["draft"] = compose_broker_quality_draft(report)
+    draft, drafting = _discipline_broker_draft(
+        compose_broker_quality_draft(report), broker_name
+    )
+    report["draft"] = draft
+    report.update(drafting)
     return report
+
+
+#: Store document key for the broker-quality drafting events
+#: (see :func:`_broker_quality_repair_aggregate`): one event per
+#: report the service drafts, so the drafting discipline's
+#: outcomes on this surface are countable in /metrics.
+BROKER_QUALITY_DRAFTING_KEY = "broker_quality_drafting"
+
+
+def _discipline_broker_draft(
+    text: str, broker_name: str
+) -> tuple[str | None, dict]:
+    """One broker-quality draft through the drafting discipline.
+
+    The report is composed in code from record prose — the
+    broker's name, the missing-element labels its submissions
+    carried — so, like the status note, it is guardrail-checked
+    before it is served (``guardrails.validate_broker_quality_draft``)
+    and a **wording-only** failure earns one steered redraft in
+    the report's own shapes (``letter_repair.steer_broker_quality_draft``),
+    the repair recorded with the original validation, the
+    guidance, and the families rewritten. Anything else — bind
+    language, a premium figure, a promise, PII — is refused:
+    the report serves with ``draft`` None and a
+    ``draft_refusal`` naming the failed checks, because the
+    report's computed sections are facts an operator may still
+    read, but a draft that failed on substance is never served
+    as a draft. Returns the served draft (or None) and the
+    drafting block the report carries: the final
+    ``draft_validation``, and the ``draft_repair`` or
+    ``draft_refusal`` when either happened — each stamped
+    ``source: "broker_quality"``, the third drafting surface
+    in the repair aggregate's vocabulary.
+    """
+    from .guardrails import (
+        letter_wording_hits,
+        validate_broker_quality_draft,
+    )
+    from .letter_repair import (
+        broker_quality_repair_guidance,
+        steer_broker_quality_draft,
+    )
+
+    validation = validate_broker_quality_draft(text, broker_name)
+    drafting: dict = {
+        "draft_validation": validation.model_dump(mode="json")
+    }
+    if validation.passed:
+        return text, drafting
+    guidance = broker_quality_repair_guidance(validation, text)
+    steered = (
+        steer_broker_quality_draft(text, validation) if guidance else None
+    )
+    if steered is not None:
+        steered_validation = validate_broker_quality_draft(
+            steered, broker_name
+        )
+        if steered_validation.passed:
+            drafting["draft_repair"] = {
+                "repair_attempted": True,
+                "repaired": True,
+                "source": "broker_quality",
+                "original_validation": validation.model_dump(mode="json"),
+                "repair_guidance": guidance,
+                "repair_families": sorted(
+                    family
+                    for family, hit in letter_wording_hits(text).items()
+                    if hit
+                ),
+            }
+            drafting["draft_validation"] = steered_validation.model_dump(
+                mode="json"
+            )
+            return steered, drafting
+    failed_checks = [c.name for c in validation.checks if not c.passed]
+    drafting["draft_refusal"] = {
+        "refused_at": datetime.now(timezone.utc).isoformat(
+            timespec="seconds"
+        ),
+        "source": "broker_quality",
+        "failed_checks": failed_checks,
+        "steered": steered is not None,
+        "repair_families": sorted(
+            family
+            for family, hit in letter_wording_hits(text).items()
+            if hit
+        )
+        if "no_forward_motion_in_letter" in failed_checks
+        else [],
+    }
+    return None, drafting
 
 
 def compose_broker_quality_draft(report: dict) -> str:
@@ -455,14 +556,73 @@ def _status_note_repair_aggregate(records: list[ApprovalRecord]) -> dict:
     }
 
 
-def compute_metrics(records: list[ApprovalRecord]) -> dict:
+def _broker_quality_repair_aggregate(events: list[dict]) -> dict:
+    """The broker-quality aggregate over the drafting events.
+
+    The third surface in the drafting-repair family: the letter
+    has its advisories, the status note its repairs and
+    refusals, and the broker quality report — drafted on read,
+    from record prose — records one event per drafting (see
+    ``service.broker_quality_report``): clean, repaired (with
+    the families the steering rewrote), or refused (with the
+    failed checks and whether a steered candidate was produced
+    first). The shape mirrors the note aggregate's — drafted /
+    repaired / by-family / refusals / the refusal-vs-steer
+    split / steer success rate — in the report's vocabulary, so
+    the surfaces read side by side and a repair rate on any of
+    them means the same thing: interpolated record prose
+    carried a forbidden phrasing, and the drafting discipline
+    caught it before a broker could see it.
+    """
+    drafted = len(events)
+    repaired_reports = 0
+    families: Counter = Counter()
+    refusal_events: list[dict] = []
+    refusal_checks: Counter = Counter()
+    for event in events:
+        for family in event.get("repair_families") or []:
+            families[family] += 1
+        if event.get("outcome") == "repaired":
+            repaired_reports += 1
+        elif event.get("outcome") == "refused":
+            refusal_events.append(event)
+            for name in event.get("failed_checks") or []:
+                refusal_checks[name] += 1
+    refusals_after_steering = sum(
+        1 for event in refusal_events if event.get("steered")
+    )
+    steer_attempts = repaired_reports + refusals_after_steering
+    return {
+        "reports_drafted": drafted,
+        "repaired_reports": repaired_reports,
+        "by_family": dict(sorted(families.items())),
+        "refusals": len(refusal_events),
+        "refusals_after_steering": refusals_after_steering,
+        "refusals_unsteered": len(refusal_events) - refusals_after_steering,
+        "by_refused_check": dict(sorted(refusal_checks.items())),
+        "steer_attempts": steer_attempts,
+        "steer_success_rate": (
+            round(repaired_reports / steer_attempts, 3)
+            if steer_attempts
+            else None
+        ),
+    }
+
+
+def compute_metrics(
+    records: list[ApprovalRecord],
+    broker_drafting_events: list[dict] | None = None,
+) -> dict:
     """Operational aggregates over the whole store.
 
     Run and decision counts, outcome and tier mix, guardrail and
     reviewer signals, the **letter-advisory trend** (below), the
     **status-note repair family** (the note-side twin: steered
     repairs, refusals, and the refusal-vs-steer split — see
-    :func:`_status_note_repair_aggregate`), and —
+    :func:`_status_note_repair_aggregate` — with the broker
+    quality report's repairs and refusals nested in the same
+    family as its own named source, counted from the drafting
+    events the caller passes), and —
     from each run's recorded telemetry — model calls, tokens,
     estimated cost, and latency. Token/cost figures only include
     runs whose backend reported them (the offline fallback reports
@@ -541,7 +701,16 @@ def compute_metrics(records: list[ApprovalRecord]) -> dict:
         "guardrail_failures": guardrail_failures,
         "reviewer_blocks": reviewer_blocks,
         "letter_advisories": _letter_advisory_aggregate(records),
-        "status_note_repairs": _status_note_repair_aggregate(records),
+        "status_note_repairs": {
+            **_status_note_repair_aggregate(records),
+            # The third drafting surface, named as its own
+            # source inside the same family: the broker quality
+            # report's repairs and refusals, counted from the
+            # drafting events the service records per report.
+            "broker_quality": _broker_quality_repair_aggregate(
+                broker_drafting_events or []
+            ),
+        },
         "model_calls": model_calls,
         "token_runs": token_runs,
         "input_tokens": input_tokens,
