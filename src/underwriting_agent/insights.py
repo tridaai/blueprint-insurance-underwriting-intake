@@ -3655,6 +3655,29 @@ def _pruned_rename_entries(pruned: list[dict]) -> list[dict]:
     return entries
 
 
+def _pruned_label_entries(pruned: list[dict]) -> list[dict]:
+    """The address each pruned report wore when it left: its
+    snapshot id and its label, for every pruned snapshot that
+    carried one.
+
+    :func:`_pruned_rename_entries` keeps the *moves* whole; this
+    keeps the *resting place* — a report that was never renamed
+    has no moves, and without its final label in the prune's
+    record its citation's fate is unanswerable: the id alone
+    cannot say which name stopped naming anything. Digest
+    snapshots carry no labels, so on that document this reads
+    empty — the shared builder stays honest on both.
+    """
+    return [
+        {
+            "snapshot_id": snapshot.get("snapshot_id", ""),
+            "label": snapshot.get("label", ""),
+        }
+        for snapshot in pruned
+        if snapshot.get("label")
+    ]
+
+
 def snapshot_prune_preview(snapshots: list[dict], keep: int) -> dict:
     """A prune, dry-run: what a keep-last-N prune *would* do.
 
@@ -3668,9 +3691,11 @@ def snapshot_prune_preview(snapshots: list[dict], keep: int) -> dict:
     and the prune that follows it on the same document cannot
     disagree, because both read the one computation. The plan
     also names the renames that would leave the kept reports
-    (``would_prune_renames`` — see :func:`_pruned_rename_entries`),
-    so the addressing history a prune carries into its own
-    record is visible before the act, not only after it.
+    (``would_prune_renames`` — see :func:`_pruned_rename_entries`)
+    and the labels the pruned reports wear as they leave
+    (``would_prune_labels``), so the addressing history a prune
+    carries into its own record is visible before the act, not
+    only after it.
     """
     kept, pruned = prune_snapshot_list(snapshots, keep)
     return {
@@ -3680,6 +3705,7 @@ def snapshot_prune_preview(snapshots: list[dict], keep: int) -> dict:
         "would_prune_count": len(pruned),
         "would_prune_ids": [s.get("snapshot_id", "") for s in pruned],
         "would_prune_renames": _pruned_rename_entries(pruned),
+        "would_prune_labels": _pruned_label_entries(pruned),
         "surviving_count": len(kept),
         "surviving_first": kept[0].get("snapshot_id", "") if kept else "",
         "surviving_last": kept[-1].get("snapshot_id", "") if kept else "",
@@ -3706,7 +3732,13 @@ def snapshot_prune_entry(
     repair reads, and a prune that erased it would leave an
     old label's fate unanswerable. The rename log reads this
     stratum back, marked as pruned, beside the kept reports'
-    own histories."""
+    own histories. And it carries each pruned report's final
+    **label** (``pruned_labels`` — see
+    :func:`_pruned_label_entries`): a report never renamed has
+    no renames to keep, and its label is the one fact a
+    tombstone read (see
+    ``proposals.calibration_snapshot_tombstone``) needs to say
+    which name the prune took."""
     return {
         "pruned_at": pruned_at,
         "pruned_by": actor,
@@ -3714,6 +3746,7 @@ def snapshot_prune_entry(
         "pruned_count": len(pruned),
         "pruned_ids": [s.get("snapshot_id", "") for s in pruned],
         "pruned_renames": _pruned_rename_entries(pruned),
+        "pruned_labels": _pruned_label_entries(pruned),
         "surviving_first": kept[0].get("snapshot_id", "") if kept else "",
         "surviving_last": kept[-1].get("snapshot_id", "") if kept else "",
     }

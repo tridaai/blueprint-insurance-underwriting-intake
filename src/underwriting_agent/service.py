@@ -2402,6 +2402,23 @@ class SubmissionService:
             self.sla_calibration_snapshots(), label
         )
 
+    def sla_calibration_snapshot_tombstone(self, label: str) -> dict | None:
+        """The tombstone for a label whose report was pruned
+        (``proposals.calibration_snapshot_tombstone``): the
+        label it wore when it left, the rename chain that led
+        there, and the prune that removed it (who, when) — so
+        a citation whose report is gone is answered with its
+        fate, not with the same silence a never-named label
+        gets. Read in the by-label read's order — only once
+        no kept report carries the label and no successor
+        descends from it — and it returns no report: the
+        report is gone, and the tombstone says so."""
+        from .proposals import calibration_snapshot_tombstone
+
+        return calibration_snapshot_tombstone(
+            self.sla_calibration_snapshot_prunes(), label
+        )
+
     def sla_calibration_rename_log(self) -> dict:
         """Every label rename across the calibration reports,
         in the order the renames happened

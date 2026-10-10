@@ -11,10 +11,11 @@ report that now descends from the cited name, the label it
 wears now, and the chain of renames between — a redirect in
 data that names the move instead of pretending the old
 address still names the report. The 404 survives exactly
-where it belongs: a label that names nothing and never did,
-and a label whose report a prune has removed (the rename
-log's pruned stratum names that fate; there is no report
-left to descend to). The repair is a by-label-read act only —
+where it belongs: a label that names nothing and never did.
+(A label whose report a prune removed 404'd here in round
+23; round 24 answers it with a tombstone instead — see
+``test_calibration_tombstone.py`` — still returning no
+report, but stating the fate.) The repair is a by-label-read act only —
 the diff's resolve step keeps refusing a stale label, so a
 comparison is never silently re-pointed.
 """
@@ -243,14 +244,26 @@ def test_the_repair_does_not_resurrect_a_pruned_report(client):
         "/queue/sla/calibration/snapshots/prune",
         json={"actor": "Uma", "keep": 1},
     )
-    # The renamed report is gone; its fate is in the rename
-    # log's pruned stratum, but there is no report to descend
-    # to, so the citation 404s — honestly, as it names nothing
-    # that stands.
+    # Round 23 pinned this read to a 404: the renamed report is
+    # gone, there is no report to descend to, so the citation
+    # named nothing that stands. Round 24 reverses the silence,
+    # not the substance: the read now answers with a
+    # **tombstone** — the fate stated plainly (the label the
+    # report wore when it left, the chain that led there, the
+    # prune that removed it) — while still returning no report:
+    # there is no ``snapshot`` in the answer, and nothing is
+    # resurrected.
     res = client.get(
         "/queue/sla/calibration/snapshots/by-label/pre-change"
     )
-    assert res.status_code == 404
+    assert res.status_code == 200
+    body = res.json()
+    assert "snapshot" not in body
+    assert body["pruned"] is True
+    assert body["cited_label"] == "pre-change"
+    assert body["label_at_prune"] == "final-baseline"
+    assert body["pruned_by"] == "Uma"
+    assert len(body["rename_chain"]) == 2
     log = client.get("/queue/sla/calibration/snapshots/renames").json()
     assert log["count"] == 2
     assert all(e["pruned"] for e in log["renames"])

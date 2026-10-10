@@ -2263,6 +2263,109 @@ def calibration_snapshot_successor(
     return best
 
 
+def calibration_snapshot_tombstone(
+    prunes: list[dict], label: str
+) -> dict | None:
+    """The tombstone for a citation whose report was pruned,
+    or None — the fate read.
+
+    Citation repair (see :func:`calibration_snapshot_successor`)
+    answers for a report that still stands; a report a prune
+    removed has nothing to descend to, and until now its
+    labels 404'd exactly like a name that never existed. The
+    prune records know the difference: each entry kept the
+    pruned reports' renames whole (``pruned_renames``) and,
+    since the tombstone landed, the label each pruned report
+    wore when it left (``pruned_labels``). A label a pruned
+    report ever wore — its label at the prune, or any name in
+    its rename chain — answers with a **tombstone**: the cited
+    label, the report it named (snapshot id), the label that
+    report wore when it left, the rename chain from the cited
+    label to that resting place, and the prune itself (who,
+    when). It returns no report and pretends none survives —
+    it states the fate plainly, so "existed, pruned on this
+    date by this operator" is said instead of silence.
+
+    A label can have been worn by more than one pruned report
+    (freed, retaken, pruned again); the **latest** prune's
+    answer wins — the name's most recent fate, the successor
+    read's rule — with the later report inside one prune
+    breaking ties, so the read is deterministic. Prune
+    records written before ``pruned_labels`` existed answer
+    only for labels their ``pruned_renames`` carry: a report
+    pruned unrenamed in that era left no label behind, and
+    the tombstone does not invent one. None when no prune
+    ever removed a report that wore the label — the name
+    never named anything here, and its 404 is honest.
+    """
+    if not label:
+        return None
+    best: dict | None = None
+    for entry in prunes or []:
+        final_labels: dict[str, str] = {}
+        for kept_label in entry.get("pruned_labels") or []:
+            final_labels[kept_label.get("snapshot_id", "")] = (
+                kept_label.get("label", "")
+            )
+        moves_by_id: dict[str, list[dict]] = {}
+        for move in entry.get("pruned_renames") or []:
+            sid = move.get("snapshot_id", "")
+            moves_by_id.setdefault(sid, []).append(move)
+            final_labels.setdefault(sid, move.get("label_at_prune", ""))
+        snapshot_ids = list(
+            dict.fromkeys(
+                [
+                    *(entry.get("pruned_ids") or []),
+                    *final_labels,
+                    *moves_by_id,
+                ]
+            )
+        )
+        for sid in snapshot_ids:
+            moves = moves_by_id.get(sid, [])
+            final_label = final_labels.get(sid, "")
+            worn = {final_label}
+            for move in moves:
+                worn.add(move.get("from", ""))
+                worn.add(move.get("to", ""))
+            if label not in worn:
+                continue
+            start = next(
+                (
+                    i
+                    for i, move in enumerate(moves)
+                    if move.get("from") == label
+                ),
+                None,
+            )
+            # The chain that led to the resting place: from
+            # the cited name onward — or, when the cited name
+            # *is* the resting place (no move starts at it),
+            # the whole history that arrived there. A report
+            # never renamed has no moves, and its chain is
+            # empty honestly.
+            chain_moves = moves[start:] if start is not None else moves
+            chain = [
+                {
+                    "from": move.get("from", ""),
+                    "to": move.get("to", ""),
+                    "renamed_by": move.get("renamed_by", ""),
+                    "renamed_at": move.get("renamed_at", ""),
+                }
+                for move in chain_moves
+            ]
+            best = {
+                "cited_label": label,
+                "snapshot_id": sid,
+                "label_at_prune": final_label,
+                "rename_chain": chain,
+                "pruned_at": entry.get("pruned_at", ""),
+                "pruned_by": entry.get("pruned_by", ""),
+                "pruned": True,
+            }
+    return best
+
+
 # ---------------------------------------------------------------------------
 # Deciding a proposal — the one consequential write
 # ---------------------------------------------------------------------------

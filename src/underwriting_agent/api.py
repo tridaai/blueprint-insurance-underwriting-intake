@@ -710,16 +710,23 @@ def sla_calibration_snapshot_by_label(label: str) -> dict:
     under ``snapshot``, with the cited name, the name it wears
     now, and the rename chain between them — a redirect in
     data, naming the move, never pretending the old address
-    still names the report directly. 404 only when the label
-    names nothing and never did, or its report has been pruned
-    — a citation that names nothing is a broken citation, said
-    plainly rather than answered with an empty list."""
+    still names the report directly. And a label whose report
+    a **prune** removed answers with a tombstone: the label
+    the report wore when it left, the rename chain that led
+    there, and the prune itself (who, when) — its fate stated
+    plainly, still returning no report. 404 only when the
+    label names nothing and never did — a citation that names
+    nothing is a broken citation, said plainly rather than
+    answered with an empty list."""
     snapshot = service.sla_calibration_snapshot_by_label(label)
     if snapshot is not None:
         return snapshot
     successor = service.sla_calibration_snapshot_successor(label)
     if successor is not None:
         return successor
+    tombstone = service.sla_calibration_snapshot_tombstone(label)
+    if tombstone is not None:
+        return tombstone
     raise HTTPException(
         status_code=404,
         detail=(

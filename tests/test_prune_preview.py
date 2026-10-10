@@ -67,6 +67,12 @@ def test_the_preview_names_what_would_leave_and_what_would_survive():
         # (empty here — these snapshots were never renamed),
         # so the prune's kept-whole record is previewed too.
         "would_prune_renames": [],
+        # Round 24 shape growth, deliberate: the plan also
+        # names the label each pruned report wears as it
+        # leaves (empty here — these snapshots carry no
+        # labels), the resting place the tombstone read
+        # answers from.
+        "would_prune_labels": [],
         "surviving_count": 2,
         "surviving_first": "snap-0004",
         "surviving_last": "snap-0005",
