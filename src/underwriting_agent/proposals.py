@@ -1550,10 +1550,23 @@ def calibration_snapshot_diff(older: dict, newer: dict) -> dict:
     label rides the diff (``from_label`` / ``to_label``) so the
     movement reads against the names the debate actually uses;
     a snapshot kept before labels existed reads as unlabelled.
-    The diff also carries the movement as one line of prose
-    (``movement``, see :func:`_calibration_movement_sentence`):
-    the tables are the evidence, but a debate opens with a
-    sentence, and "rows became ready: 3, 5" is not one.
+    Each side's **provenance** rides it too (``from_kept_from``
+    / ``to_kept_from``, and a ``provenance`` prose line — see
+    :func:`_calibration_provenance_sentence`): a side kept from
+    the live report at its keep moment (``kept_from:
+    "current"`` — see ``service.keep_calibration_current``) is
+    a different kind of evidence from a separately computed
+    keep, and a debate reading "march → post-review" should be
+    able to tell which it is holding; a plain keep reads as an
+    empty provenance. The provenance rides *beside* the
+    movement, never inside it: round 19's keep-from-diff pins
+    the cited diff's movement sentence to the one the operator
+    read, and an annotation about a side's origin must not
+    rewrite the sentence that was read. The diff also carries
+    the movement as one line of prose (``movement``, see
+    :func:`_calibration_movement_sentence`): the tables are the
+    evidence, but a debate opens with a sentence, and "rows
+    became ready: 3, 5" is not one.
 
     The newer side may be the live report itself, shaped by
     :func:`live_calibration_snapshot`: the diff then cites it
@@ -1609,12 +1622,15 @@ def calibration_snapshot_diff(older: dict, newer: dict) -> dict:
         "to_taken_at": newer.get("taken_at", ""),
         "from_label": older.get("label", ""),
         "to_label": newer.get("label", ""),
+        "from_kept_from": older.get("kept_from") or "",
+        "to_kept_from": newer.get("kept_from") or "",
         "budgets_changed": any(
             row["budget_in_force"]["changed"] for row in tiers.values()
         ),
         "tiers": tiers,
     }
     diff["movement"] = _calibration_movement_sentence(older, tiers)
+    diff["provenance"] = _calibration_provenance_sentence(older, newer)
     return diff
 
 
@@ -1625,6 +1641,51 @@ def _rows_phrase(values: list) -> str:
     if len(values) == 1:
         return f"{values[0]}-day row"
     return " and ".join(f"{value}-day" for value in values) + " rows"
+
+
+def _side_handle(snapshot: dict) -> str:
+    """A kept report named the way the debate names it: its
+    label in quotes, or its snapshot id when it has none."""
+    label = snapshot.get("label") or ""
+    return (
+        f"'{label}'" if label else snapshot.get("snapshot_id", "")
+    ) or "the earlier report"
+
+
+def _calibration_provenance_sentence(older: dict, newer: dict) -> str:
+    """The diff's sides, sourced: which of them were the live
+    report once.
+
+    A side kept from the live report is named with its keeper
+    and its keep moment — "The newer side ('post-review') was
+    kept from the live report by Ops Lead at … — the live
+    reading at its keep moment, not a separately computed
+    report." The live side itself, when a diff is taken against
+    ``current``, is named as what it is: not a kept report at
+    all. Two plain keeps have no provenance to state and the
+    line is empty — provenance is spoken only when there is
+    some. This rides beside ``movement``, never inside it (see
+    :func:`calibration_snapshot_diff`): the movement sentence a
+    citation carries is the sentence the operator read, and
+    annotating a side's origin must not rewrite it."""
+    notes: list[str] = []
+    for side, snapshot in (("earlier", older), ("newer", newer)):
+        if (snapshot.get("kept_from") or "") == "current":
+            kept_by = snapshot.get("taken_by") or "an operator"
+            kept_at = snapshot.get("taken_at") or ""
+            notes.append(
+                f"The {side} side ({_side_handle(snapshot)}) was "
+                f"kept from the live report by {kept_by}"
+                + (f" at {kept_at}" if kept_at else "")
+                + " — the live reading at its keep moment, not a "
+                "separately computed report."
+            )
+        elif snapshot.get("snapshot_id") == CURRENT_CALIBRATION_LABEL:
+            notes.append(
+                f"The {side} side is the live report itself "
+                "('current') — not a kept report."
+            )
+    return " ".join(notes)
 
 
 def _calibration_movement_sentence(older: dict, tiers: dict) -> str:
@@ -1639,10 +1700,7 @@ def _calibration_movement_sentence(older: dict, tiers: dict) -> str:
     arguments — and a tier whose budget moved with no row
     movement still gets its clause. Nothing moved anywhere:
     the line says the rows held, rather than going quiet."""
-    label = older.get("label") or ""
-    anchor = (
-        f"'{label}'" if label else older.get("snapshot_id", "")
-    ) or "the earlier report"
+    anchor = _side_handle(older)
     clauses: list[str] = []
     for tier, row in tiers.items():
         budget = row["budget_in_force"]
