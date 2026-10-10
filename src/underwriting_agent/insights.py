@@ -1792,3 +1792,146 @@ def ops_digest(
         "proposals_expired": expired,
         "proposal_warning_days": proposal_warning_days,
     }
+
+
+# ---------------------------------------------------------------------------
+# Ops digest snapshots — the digest, kept, so movement is visible
+# ---------------------------------------------------------------------------
+
+#: Store document key for the ops-digest snapshots (see
+#: :func:`build_digest_snapshot`): ``{"snapshots": [...]}``, one
+#: appended document per operator-taken snapshot.
+DIGEST_SNAPSHOTS_KEY = "ops_digest_snapshots"
+
+#: The digest's headline counts, in headline order — the numbers
+#: a trend compares across snapshots.
+DIGEST_COUNT_KEYS = (
+    "stuck_dispatches",
+    "breached_queue",
+    "follow_through_outstanding",
+    "follow_through_escalated",
+    "proposals_expiring_soon",
+    "proposals_expired",
+    "total_attention",
+)
+
+#: Digest sections whose entries carry a stable id, mapped to the
+#: field that carries it — a snapshot keeps each section's ids so
+#: a trend can say what entered and what cleared, not just that a
+#: count moved.
+_DIGEST_SECTION_IDS = {
+    "stuck_dispatches": "submission_id",
+    "breached_queue": "submission_id",
+    "follow_through_outstanding": "submission_id",
+    "follow_through_escalated": "submission_id",
+    "proposals_expiring_soon": "proposal_id",
+    "proposals_expired": "proposal_id",
+}
+
+
+def build_digest_snapshot(
+    digest: dict, snapshot_id: str, actor: str
+) -> dict:
+    """One stored snapshot of an ops digest, taken on demand.
+
+    The digest is computed at read time and evaporates; a snapshot
+    is the digest as an operator chose to keep it — its headline,
+    its counts, and the ids behind each section — stamped with
+    who took it and when (the digest's own ``generated_at``, so
+    the snapshot's date is the digest's date, not a second clock).
+    Snapshots are never taken on a timer: a snapshot nobody asked
+    for is noise, and the trend below reads only what an operator
+    decided was worth keeping.
+    """
+    counts = {
+        key: (digest.get("counts") or {}).get(key, 0)
+        for key in DIGEST_COUNT_KEYS
+    }
+    sections = {
+        section: sorted(
+            {
+                entry[id_field]
+                for entry in digest.get(section) or []
+                if entry.get(id_field)
+            }
+        )
+        for section, id_field in _DIGEST_SECTION_IDS.items()
+    }
+    return {
+        "snapshot_id": snapshot_id,
+        "taken_at": digest.get("generated_at", ""),
+        "taken_by": actor,
+        "headline": digest.get("headline", ""),
+        "counts": counts,
+        "sections": sections,
+    }
+
+
+def digest_trend(snapshots: list[dict]) -> dict:
+    """Movement across the stored digest snapshots.
+
+    The headline counts as a series (oldest snapshot first, the
+    order they were taken), each count's movement from the first
+    snapshot to the latest and from the previous snapshot to the
+    latest, and — between the latest two snapshots — which ids
+    **entered** and which **cleared** each section. A count that
+    moves without its membership changing reads differently from
+    churn, and the trend keeps the two apart. Fewer than two
+    snapshots is not a trend: the deltas say so instead of
+    inventing movement.
+    """
+    series = [
+        {
+            "snapshot_id": snap.get("snapshot_id", ""),
+            "taken_at": snap.get("taken_at", ""),
+            "taken_by": snap.get("taken_by", ""),
+            "counts": {
+                key: (snap.get("counts") or {}).get(key, 0)
+                for key in DIGEST_COUNT_KEYS
+            },
+        }
+        for snap in snapshots
+    ]
+    deltas: dict[str, dict] = {}
+    for key in DIGEST_COUNT_KEYS:
+        if not series:
+            deltas[key] = {"first": None, "latest": None, "change": None, "since_previous": None}
+            continue
+        first = series[0]["counts"][key]
+        latest = series[-1]["counts"][key]
+        previous = series[-2]["counts"][key] if len(series) > 1 else None
+        deltas[key] = {
+            "first": first,
+            "latest": latest,
+            "change": latest - first if len(series) > 1 else None,
+            "since_previous": (
+                latest - previous if previous is not None else None
+            ),
+        }
+    movement: dict | None = None
+    if len(snapshots) > 1:
+        before = snapshots[-2].get("sections") or {}
+        after = snapshots[-1].get("sections") or {}
+        movement = {
+            "from_snapshot": snapshots[-2].get("snapshot_id", ""),
+            "to_snapshot": snapshots[-1].get("snapshot_id", ""),
+            "sections": {
+                section: {
+                    "entered": sorted(
+                        set(after.get(section) or [])
+                        - set(before.get(section) or [])
+                    ),
+                    "cleared": sorted(
+                        set(before.get(section) or [])
+                        - set(after.get(section) or [])
+                    ),
+                }
+                for section in _DIGEST_SECTION_IDS
+            },
+        }
+    return {
+        "snapshot_count": len(series),
+        "series": series,
+        "deltas": deltas,
+        "movement": movement,
+    }

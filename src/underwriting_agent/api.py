@@ -483,6 +483,31 @@ def ops_digest_view() -> dict:
     return service.ops_digest()
 
 
+@app.post("/ops/digest/snapshots", dependencies=_AUTH)
+def snapshot_ops_digest(request: DecisionRequest) -> dict:
+    """Snapshot the ops digest as it stands now: the headline,
+    the counts, and the ids behind each section, stored under the
+    taker's name. Operator-taken, never on a timer — snapshots are
+    what the digest trend compares. Taking one changes nothing
+    but the snapshot list."""
+    return service.snapshot_ops_digest(_decision_actor(request))
+
+
+@app.get("/ops/digest/snapshots", dependencies=_AUTH)
+def ops_digest_snapshots() -> dict:
+    """Every stored ops-digest snapshot, in the order taken."""
+    return {"snapshots": service.ops_digest_snapshots()}
+
+
+@app.get("/ops/digest/trend", dependencies=_AUTH)
+def ops_digest_trend() -> dict:
+    """Movement across the stored digest snapshots: the headline
+    counts as a series, their change from first to latest and
+    since the previous snapshot, and which ids entered or cleared
+    each section between the latest two snapshots."""
+    return service.ops_digest_trend()
+
+
 @app.get("/dispatch", dependencies=_AUTH)
 def dispatch_ops() -> dict:
     """Dispatch operations: the approval-webhook ledgers across all

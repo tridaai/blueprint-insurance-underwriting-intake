@@ -53,11 +53,14 @@ from .graph import resume_approval, run_submission
 from .guardrails import validate_drafts, validate_status_note
 from .guidelines_data import GUIDELINES_VERSION
 from .insights import (
+    DIGEST_SNAPSHOTS_KEY,
     all_scorecards,
     audit_rows,
     broker_quality_report,
+    build_digest_snapshot,
     compose_status_note,
     compute_metrics,
+    digest_trend,
     dispatch_overview,
     follow_through_digest,
     inbox_groups,
@@ -1359,6 +1362,36 @@ class SubmissionService:
             self.calibration_proposals(),
             sla_budgets_map=self.effective_sla_budgets(),
         )
+
+    def snapshot_ops_digest(self, actor: str) -> dict:
+        """Take a stored snapshot of the ops digest as it stands
+        now (``insights.build_digest_snapshot``): the headline,
+        the counts, and the ids behind each section, kept under
+        the taker's name. Snapshots are operator-taken, never on a
+        timer — they are what the digest trend reads. Taking one
+        changes nothing but the snapshot list itself."""
+        store = self._get_store()
+        document = store.get_document(DIGEST_SNAPSHOTS_KEY) or {}
+        snapshots = list(document.get("snapshots") or [])
+        snapshot = build_digest_snapshot(
+            self.ops_digest(), f"snap-{len(snapshots) + 1:04d}", actor
+        )
+        snapshots.append(snapshot)
+        store.save_document(DIGEST_SNAPSHOTS_KEY, {"snapshots": snapshots})
+        return snapshot
+
+    def ops_digest_snapshots(self) -> list[dict]:
+        """Every stored ops-digest snapshot, in the order taken."""
+        document = self._get_store().get_document(DIGEST_SNAPSHOTS_KEY) or {}
+        return list(document.get("snapshots") or [])
+
+    def ops_digest_trend(self) -> dict:
+        """Movement across the stored digest snapshots
+        (``insights.digest_trend``): the headline counts as a
+        series, their change from first to latest and since the
+        previous snapshot, and which ids entered or cleared each
+        section between the latest two."""
+        return digest_trend(self.ops_digest_snapshots())
 
     def effective_sla_budgets(self) -> dict:
         """The queue SLA budgets in force: the environment budgets,
