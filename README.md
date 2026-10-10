@@ -274,6 +274,13 @@ carrying the original breach snapshot. The check is invoked, not
 timed — there is no scheduler hiding in the service — and with no
 webhook configured nothing fires and nothing is recorded, so
 configuring one later still announces the standing breaches.
+The same call is the **morning sweep**: it runs the escalation
+check (below) immediately after the breach check and reports
+both firings in one response — the escalation report rides
+under `escalations` — because the two tellings are rungs of one
+ladder and operators run them together; each keeps its own
+notice, ledger, and dedupe, and the escalation-only endpoint
+stays for schedulers that want only that rung.
 
 The note, meanwhile, is **followed through**. It snapshots what
 the case was waiting on (missing elements, gap sources, blocking
@@ -397,7 +404,12 @@ the same aggregation `/metrics` reports), so a kept digest
 snapshot keeps them too and the trend reads **drafting
 quality** across the kept mornings beside the operations
 movement. A quality signal, not a worklist: the counts never
-enter `total_attention`.
+enter `total_attention`. The counts likewise carry the
+**worked response** (`follow_through_worked`,
+`follow_through_quieted`): kept snapshots now trend whether
+touches keep pace with escalations — the response beside the
+problem — on the same discipline, effort never entering
+`total_attention` either.
 
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:
@@ -514,12 +526,28 @@ on a timer. A kept report can also carry the taker's **label**
 post-budget-change report" — because a kept report is cited in
 budget debates and nobody cites `cal-0007`: the label rides
 the snapshot, the kept list, and both sides of the diff, so
-the movement reads in business terms. A **diff** (`GET /queue/sla/calibration/snapshots/diff`)
+the movement reads in business terms. The label is an
+**address** now, not just a caption: keeping refuses a label
+a kept report already carries (422, naming the holder and the
+labels in use — unlabelled keeps stay unlimited, and a prune
+frees the label with its report), the kept list filters by it
+(`?label=`), one report reads by it
+(`GET /queue/sla/calibration/snapshots/by-label/{label}`, 404
+when it names nothing), and the diff takes `from_label` /
+`to_label` selectors so a debate follows its own citation —
+an unnamed side defaults to its positional partner, and the
+pair walks in keep order whichever way it was named. A **diff** (`GET /queue/sla/calibration/snapshots/diff`)
 reads the two latest kept reports against each other: per tier,
 which rows became proposal-ready and which stopped being,
 beside the budget and decided-count movement that explains the
 change — so a budget debate can cite the evidence as of a date
-instead of re-running history from memory.
+instead of re-running history from memory. The diff also
+**speaks**: its `movement` line composes the change in the
+digest headline's register — *"Since 'pre-budget-change': the
+high tier's 3-day row became proposal-ready as the budget held
+at 3 days"* — entered and cleared rows named, with the budget
+context (held, or moved from–to) that decides whether the
+movement is evidence growing or a budget changing.
 
 Two disciplines keep the proposals honest over time. A draft's
 evidence is a snapshot, so drafts **expire** (`PROPOSAL_EXPIRY_DAYS`,

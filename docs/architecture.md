@@ -747,6 +747,37 @@ numbers on the submission and its loss records. Line aliases fold too
   unlabelled snapshots, including every one kept before this
   round, read as an empty label under the same absence
   discipline as every other kept-document field.
+- **Round 17 makes the handles addresses, the two tellings one
+  sweep, and both kept histories speak.** (1) The morning
+  sweep merges the *call*, never the machinery: the breach
+  check and the escalation check run back to back on one clock
+  and their reports nest rather than blend, because each
+  telling's dedupe is its own soundness argument — merge the
+  ledgers and neither notice can be trusted to mean one
+  firing. The escalation-only endpoint stays: a scheduler is
+  also an operator, of one rung. (2) Label uniqueness
+  deliberately reverses round 16's "never dedupe": a display
+  string may repeat, an address may not — a citation that
+  names two evidence bases names none. Enforcement sits at
+  the only write (the keep), the refusal names the holder and
+  the labels in use so the correction is a choice, and reads
+  of pre-discipline repeats resolve to the latest kept, the
+  report the label most recently named; a prune frees the
+  label with its report, as it frees everything else about
+  it. (3) The calibration diff's movement line is composed
+  from the diff's own computed rows, not a second pass over
+  the snapshots — the digest headline's discipline, that
+  prose generated from the data it narrates cannot drift
+  from it — and it claims a budget story (held, moved) only
+  when both sides carry the budget, because absence in a
+  snapshot is a fact about the snapshot. (4) The worked
+  counts ride the digest counts on the advisory discipline:
+  `quieted_count` is counted by the same follow-through
+  computation that decides quieting, so the snapshot trend
+  cannot disagree with the queue about whether a note is
+  quieted; and effort, like drafting quality, trends beside
+  `total_attention` without entering it — a count of work
+  counts work outstanding.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 
