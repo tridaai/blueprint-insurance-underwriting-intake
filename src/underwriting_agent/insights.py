@@ -3228,7 +3228,97 @@ def build_digest_snapshot(
     }
 
 
-def digest_trend(snapshots: list[dict]) -> dict:
+#: The digest counts a drafting-event prune can legitimately
+#: move *backwards*: the broker drafting counts are computed
+#: from the drafting-events document, so pruning that document
+#: lowers them without a single report going undrafted. See
+#: :func:`_prune_step_annotations`.
+_BROKER_COUNT_KEYS = (
+    "broker_quality_drafted",
+    "broker_quality_repaired",
+    "broker_quality_refusals",
+)
+
+
+def _prune_step_annotations(
+    series: list[dict], drafting_prunes: list[dict]
+) -> list[dict]:
+    """Annotate the trend's broker-count steps a drafting-event
+    prune explains.
+
+    The broker counts are cumulative over the drafting events
+    as they stand *now*; a kept snapshot froze the counts of
+    its moment. When retention prunes the events document
+    between two snapshots, the later snapshot's broker counts
+    step *down* — and an unannotated trend reads that step as
+    a drafting collapse: fewer reports drafted this week than
+    last. The honesty the prune entries themselves carry, one
+    level up: for each step down in a broker count, the prunes
+    whose ``pruned_at`` falls inside the step's window are
+    named (who, when, how many events left), so the reader can
+    tell retention from regression. A step down with no prune
+    in its window is left unannotated — it is a real movement,
+    and the trend says nothing to soften it.
+    """
+    annotations: list[dict] = []
+    for before, after in zip(series, series[1:]):
+        window = [
+            entry
+            for entry in drafting_prunes
+            if before["taken_at"]
+            < (entry.get("pruned_at") or "")
+            <= after["taken_at"]
+        ]
+        if not window:
+            continue
+        for key in _BROKER_COUNT_KEYS:
+            change = after["counts"][key] - before["counts"][key]
+            if change >= 0:
+                continue
+            named = "; ".join(
+                f"a drafting-event prune on "
+                f"{(entry.get('pruned_at') or '')[:10]} by "
+                f"{entry.get('pruned_by', '')} removed "
+                f"{entry.get('pruned_count', 0)} event(s)"
+                for entry in window
+            )
+            annotations.append(
+                {
+                    "count": key,
+                    "from_snapshot": before["snapshot_id"],
+                    "to_snapshot": after["snapshot_id"],
+                    "change": change,
+                    "pruned_events": sum(
+                        entry.get("pruned_count", 0)
+                        for entry in window
+                    ),
+                    "prunes": [
+                        {
+                            "pruned_at": entry.get("pruned_at", ""),
+                            "pruned_by": entry.get("pruned_by", ""),
+                            "pruned_count": entry.get(
+                                "pruned_count", 0
+                            ),
+                        }
+                        for entry in window
+                    ],
+                    "note": (
+                        f"{_COUNT_LABELS[key]} fell "
+                        f"{abs(change)} between "
+                        f"{before['snapshot_id']} and "
+                        f"{after['snapshot_id']} — {named} inside "
+                        "that window, so the step is retention, "
+                        "not a drafting collapse."
+                    ),
+                }
+            )
+    return annotations
+
+
+def digest_trend(
+    snapshots: list[dict],
+    drafting_prunes: list[dict] | None = None,
+) -> dict:
     """Movement across the stored digest snapshots.
 
     The headline counts as a series (oldest snapshot first, the
@@ -3240,6 +3330,14 @@ def digest_trend(snapshots: list[dict]) -> dict:
     churn, and the trend keeps the two apart. Fewer than two
     snapshots is not a trend: the deltas say so instead of
     inventing movement.
+
+    When the caller passes the drafting-events document's
+    prune record (``drafting_prunes``), the trend also carries
+    ``annotations``: the broker-count steps a prune inside the
+    step's window explains (see :func:`_prune_step_annotations`)
+    — a count stepping down because retention removed its
+    history is annotated as exactly that, never left to read as
+    drafting quality falling.
     """
     series = [
         {
@@ -3295,6 +3393,9 @@ def digest_trend(snapshots: list[dict]) -> dict:
         "series": series,
         "deltas": deltas,
         "movement": movement,
+        "annotations": _prune_step_annotations(
+            series, list(drafting_prunes or [])
+        ),
     }
 
 

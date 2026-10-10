@@ -2044,8 +2044,15 @@ class SubmissionService:
         (``insights.digest_trend``): the headline counts as a
         series, their change from first to latest and since the
         previous snapshot, and which ids entered or cleared each
-        section between the latest two."""
-        return digest_trend(self.ops_digest_snapshots())
+        section between the latest two. The drafting-events
+        document's prune record rides along, so a broker-count
+        step down that a prune explains is annotated as
+        retention rather than left to read as a drafting
+        collapse (see ``insights._prune_step_annotations``)."""
+        return digest_trend(
+            self.ops_digest_snapshots(),
+            drafting_prunes=self.broker_quality_drafting_prunes(),
+        )
 
     def effective_sla_budgets(self) -> dict:
         """The queue SLA budgets in force: the environment budgets,
