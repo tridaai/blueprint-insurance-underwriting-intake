@@ -16,7 +16,7 @@ def test_golden_set_shape():
         for line in (ROOT / "evals" / "golden.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert len(cases) == 37
+    assert len(cases) == 39
     outcomes = {c["expected_outcome"] for c in cases}
     assert outcomes == {"in_appetite", "borderline", "out_of_appetite", "incomplete"}
     tiers = {c["expected_tier"] for c in cases}
@@ -33,8 +33,8 @@ def test_deterministic_runner_scores_full_marks():
         if line.strip()
     ]
     scored = run_evals.evaluate(cases)
-    assert scored["outcome_correct"] == scored["total"] == 37
-    assert scored["tier_correct"] == 37
+    assert scored["outcome_correct"] == scored["total"] == 39
+    assert scored["tier_correct"] == 39
     assert scored["checks_correct"] == scored["checks_total"] == 5
     assert scored["failures"] == []
 

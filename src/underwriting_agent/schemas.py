@@ -102,6 +102,11 @@ class LossRecord(BaseModel):
     amount_incurred: float = 0.0
     description: str = ""
     status: str = "closed"
+    # The carrier's claim identifier, when the loss run carries one.
+    # Loss development matching (diffing.py) keys on it first and
+    # falls back to date + description — a claim keeps its identity
+    # across loss runs even when its wording is edited.
+    claim_id: str = ""
 
     @field_validator("amount_incurred", mode="before")
     @classmethod
@@ -207,6 +212,45 @@ class DiffFieldChange(BaseModel):
     note: str = ""  # direction / magnitude, e.g. "increased" or "+29.2%"
 
 
+class LossClaimRef(BaseModel):
+    """One claim as it appeared on one side of a loss-run diff."""
+
+    date: str = ""
+    description: str = ""
+    amount_incurred: float = 0.0
+    status: str = ""
+
+
+class ClaimDevelopment(BaseModel):
+    """One claim matched across two loss runs, and how it moved."""
+
+    date: str = ""
+    description: str = ""
+    prior_incurred: float = 0.0
+    current_incurred: float = 0.0
+    delta_incurred: float = 0.0
+    prior_status: str = ""
+    current_status: str = ""
+
+
+class LossDevelopment(BaseModel):
+    """Per-claim development between the prior loss run and this one.
+
+    The aggregate loss-history change says the totals moved; this
+    says *which claims* moved — the ones that appeared on the run,
+    the ones that are no longer listed, and the matched claims whose
+    incurred (or status) changed while the underwriter wasn't
+    looking. Computed in code by ``diffing.match_loss_development``;
+    matching is by claim id when the runs carry one, else by
+    date + description.
+    """
+
+    appeared: list[LossClaimRef] = Field(default_factory=list)
+    disappeared: list[LossClaimRef] = Field(default_factory=list)
+    developed: list[ClaimDevelopment] = Field(default_factory=list)
+    net_incurred_change: float = 0.0
+
+
 class SubmissionDiff(BaseModel):
     """What changed since this insured's previous stored submission.
 
@@ -221,6 +265,9 @@ class SubmissionDiff(BaseModel):
     prior_outcome: str = ""
     prior_risk_tier: str = ""
     changes: list[DiffFieldChange] = Field(default_factory=list)
+    # Per-claim loss development (appeared / disappeared / developed),
+    # present whenever either side's loss run carried claims.
+    loss_development: Optional[LossDevelopment] = None
 
 
 # ---------------------------------------------------------------------------
