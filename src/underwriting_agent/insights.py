@@ -1374,6 +1374,7 @@ def follow_through_digest(
     worked = [
         e for e in entries if e["worked"] is not None and not e["escalated"]
     ]
+    quieted = [e for e in entries if e["quieted_by_work"]]
     return {
         "generated_at": now.isoformat(timespec="seconds"),
         "total_notes": len(entries),
@@ -1384,6 +1385,8 @@ def follow_through_digest(
         "escalated": escalated,
         "worked_count": len(worked),
         "worked": worked,
+        "quieted_count": len(quieted),
+        "quieted": quieted,
     }
 
 
@@ -2200,7 +2203,14 @@ def ops_digest(
     ``letter_advisories``, the same computation ``/metrics``
     reports), not as worklist items but so the snapshots that
     keep these counts trend **drafting quality** across the kept
-    history beside the operations movement.
+    history beside the operations movement. The counts likewise
+    carry the **worked follow-through response** (notes touched,
+    and escalations a fresh touch is currently quieting —
+    :func:`follow_through_digest`'s own counts): the problem
+    counts alone cannot say whether the response keeps pace
+    with the escalations, and the kept snapshots are where that
+    pace is read. Effort, like drafting quality, never enters
+    ``total_attention``.
 
     The digest is computed, never sent: it carries the composed
     ``headline`` an operator reads first and the section entries
@@ -2284,6 +2294,15 @@ def ops_digest(
         "breached_queue": queue["breach_count"],
         "follow_through_outstanding": len(outstanding),
         "follow_through_escalated": follow["escalated_count"],
+        # The worked response rides the same counts, on the
+        # advisory discipline: notes an underwriter has touched
+        # (worked) and escalations a fresh touch is currently
+        # quieting (quieted) are effort signals the snapshots
+        # keep so the trend can say whether touches keep pace
+        # with escalations — never part of total_attention,
+        # which counts work outstanding, not work done.
+        "follow_through_worked": follow["worked_count"],
+        "follow_through_quieted": follow["quieted_count"],
         # Drafting quality rides the same counts the snapshots
         # keep (advisory_runs_with / advisory_repaired_runs), so
         # the kept history trends it beside the operations
@@ -2410,6 +2429,8 @@ DIGEST_COUNT_KEYS = (
     "breached_queue",
     "follow_through_outstanding",
     "follow_through_escalated",
+    "follow_through_worked",
+    "follow_through_quieted",
     "advisory_runs_with",
     "advisory_repaired_runs",
     "proposals_expiring_soon",
@@ -2443,6 +2464,8 @@ _COUNT_LABELS = {
     "breached_queue": "breached queue cases",
     "follow_through_outstanding": "outstanding follow-through notes",
     "follow_through_escalated": "escalated follow-through notes",
+    "follow_through_worked": "worked follow-through notes",
+    "follow_through_quieted": "work-quieted follow-through notes",
     "advisory_runs_with": "runs drafting letter advisories",
     "advisory_repaired_runs": "advisory repairs",
     "proposals_expiring_soon": "proposals nearing expiry",
