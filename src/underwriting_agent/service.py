@@ -1892,13 +1892,17 @@ class SubmissionService:
         their own source), the proposal re-ask family (drafts
         carrying a pruned earlier decision, counted from the
         proposals document, and how the second decision went),
-        model usage, cost, and latency."""
+        the stale-citation traffic (successor and tombstone
+        answers, counted per cited label from the calibration
+        document's answer notes), model usage, cost, and
+        latency."""
         from .proposals import load_proposals
 
         return compute_metrics(
             self._get_store().all_records(),
             broker_drafting_events=self.broker_quality_drafting_events(),
             proposals=load_proposals(self._get_store()),
+            citation_traffic=self.sla_calibration_citation_traffic(),
         )
 
     def queue(self) -> dict:
@@ -2424,6 +2428,99 @@ class SubmissionService:
         return calibration_snapshot_tombstone(
             self.sla_calibration_snapshot_prunes(), label
         )
+
+    def sla_calibration_citation_traffic(self) -> list[dict]:
+        """Every stale-citation answer recorded on the
+        calibration document, in the order answered (see
+        :meth:`answer_sla_calibration_citation`)."""
+        from .proposals import CALIBRATION_SNAPSHOTS_KEY
+
+        document = self._get_store().get_document(CALIBRATION_SNAPSHOTS_KEY) or {}
+        return list(document.get("citation_traffic") or [])
+
+    def answer_sla_calibration_citation(self, label: str) -> dict | None:
+        """Answer a citation no kept report carries — and
+        record the answer.
+
+        The by-label read's fall-through, in one act: the
+        successor read when the name was renamed away (see
+        :meth:`sla_calibration_snapshot_successor`), else the
+        tombstone when its report was pruned (see
+        :meth:`sla_calibration_snapshot_tombstone`), else
+        None — the name never named anything, and the caller
+        404s. Each answer appends one note to the calibration
+        document's ``citation_traffic`` (the kind, the cited
+        label, where it points now or the report it names,
+        the chain's length, when): the **one write a read
+        makes** on this document, and only the answering kinds
+        make it — a direct hit records nothing (the citation
+        was fresh), a 404 records nothing (the citation named
+        nothing). Until the notes existed, the repairs were
+        invisible: a debate whose citations keep going stale —
+        rename churn outrunning its readers — looked exactly
+        like a debate whose citations all land. /metrics
+        counts the notes per cited label (see
+        ``insights._citation_traffic_aggregate``): a label
+        everyone still cites is a rename that didn't take,
+        and now it shows as a number."""
+        successor = self.sla_calibration_snapshot_successor(label)
+        if successor is not None:
+            self._record_citation_answer(
+                kind="successor",
+                cited_label=label,
+                current_label=successor.get("current_label", ""),
+                snapshot_id=(
+                    successor.get("snapshot") or {}
+                ).get("snapshot_id", ""),
+                chain_length=len(successor.get("rename_chain") or []),
+            )
+            return successor
+        tombstone = self.sla_calibration_snapshot_tombstone(label)
+        if tombstone is not None:
+            self._record_citation_answer(
+                kind="tombstone",
+                cited_label=label,
+                current_label="",
+                snapshot_id=tombstone.get("snapshot_id", ""),
+                chain_length=len(tombstone.get("rename_chain") or []),
+            )
+            return tombstone
+        return None
+
+    def _record_citation_answer(
+        self,
+        *,
+        kind: str,
+        cited_label: str,
+        current_label: str,
+        snapshot_id: str,
+        chain_length: int,
+    ) -> None:
+        """Append one answer note to the calibration
+        document's ``citation_traffic`` — append-only, the
+        notes never edited or pruned by any act in this
+        round: they are the traffic record the metrics family
+        counts, and a record that could be tidied would stop
+        measuring the churn it exists to show."""
+        from .proposals import CALIBRATION_SNAPSHOTS_KEY
+
+        store = self._get_store()
+        document = store.get_document(CALIBRATION_SNAPSHOTS_KEY) or {}
+        notes = list(document.get("citation_traffic") or [])
+        notes.append(
+            {
+                "kind": kind,
+                "cited_label": cited_label,
+                "current_label": current_label,
+                "snapshot_id": snapshot_id,
+                "chain_length": chain_length,
+                "answered_at": datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                ),
+            }
+        )
+        document["citation_traffic"] = notes
+        store.save_document(CALIBRATION_SNAPSHOTS_KEY, document)
 
     def sla_calibration_rename_log(self) -> dict:
         """Every label rename across the calibration reports,

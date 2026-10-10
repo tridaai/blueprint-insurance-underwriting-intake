@@ -663,10 +663,54 @@ def _proposal_reask_aggregate(proposals: list[dict]) -> dict:
     }
 
 
+def _citation_traffic_aggregate(notes: list[dict]) -> dict:
+    """The stale-citation traffic over the calibration
+    document's answer notes.
+
+    Round 23 repaired a renamed-away citation on read, and
+    round 24 added the tombstone for a pruned one — and reads
+    recorded nothing, so a debate whose citations keep going
+    stale (rename churn outrunning its readers) was invisible:
+    the repairs happened, silently, one reader at a time. The
+    answering read now leaves one note per answer on the
+    calibration document (see
+    ``service.answer_sla_calibration_citation``), and this
+    aggregate counts them: answers in total, split by kind
+    (successor / tombstone), per cited label — the stale
+    handles, ranked by how often they are still being followed
+    — and per successor target, where the repaired citations
+    now point. A label with a rising count is a rename that
+    didn't take: the debate still cites the old name, and the
+    number says so before the next rename compounds it.
+    """
+    by_label: Counter = Counter()
+    targets: Counter = Counter()
+    successors = 0
+    tombstones = 0
+    for note in notes:
+        by_label[note.get("cited_label", "")] += 1
+        if note.get("kind") == "successor":
+            successors += 1
+            targets[note.get("current_label", "")] += 1
+        elif note.get("kind") == "tombstone":
+            tombstones += 1
+    return {
+        "answers": len(notes),
+        "successor_answers": successors,
+        "tombstone_answers": tombstones,
+        "by_cited_label": dict(sorted(by_label.items())),
+        "successor_targets": dict(sorted(targets.items())),
+        "last_answered_at": (
+            notes[-1].get("answered_at", "") if notes else ""
+        ),
+    }
+
+
 def compute_metrics(
     records: list[ApprovalRecord],
     broker_drafting_events: list[dict] | None = None,
     proposals: list[dict] | None = None,
+    citation_traffic: list[dict] | None = None,
 ) -> dict:
     """Operational aggregates over the whole store.
 
@@ -680,7 +724,11 @@ def compute_metrics(
     events the caller passes), the **proposal re-ask family**
     (drafts carrying a pruned earlier decision, and how the
     second decision went — see :func:`_proposal_reask_aggregate`,
-    counted from the proposals the caller passes), and —
+    counted from the proposals the caller passes), the
+    **stale-citation traffic** (by-label answers that repaired
+    or tombstoned a citation, counted per cited label from the
+    answer notes the caller passes — see
+    :func:`_citation_traffic_aggregate`), and —
     from each run's recorded telemetry — model calls, tokens,
     estimated cost, and latency. Token/cost figures only include
     runs whose backend reported them (the offline fallback reports
@@ -770,6 +818,9 @@ def compute_metrics(
             ),
         },
         "proposal_reasks": _proposal_reask_aggregate(proposals or []),
+        "citation_traffic": _citation_traffic_aggregate(
+            citation_traffic or []
+        ),
         "model_calls": model_calls,
         "token_runs": token_runs,
         "input_tokens": input_tokens,

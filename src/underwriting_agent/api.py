@@ -717,16 +717,18 @@ def sla_calibration_snapshot_by_label(label: str) -> dict:
     plainly, still returning no report. 404 only when the
     label names nothing and never did — a citation that names
     nothing is a broken citation, said plainly rather than
-    answered with an empty list."""
+    answered with an empty list. Each repairing answer is
+    **recorded** (the one write this read makes): the
+    successor and tombstone answers append a note to the
+    calibration document's citation traffic, which /metrics
+    counts per cited label — a label everyone still cites is
+    a rename that didn't take, and it shows."""
     snapshot = service.sla_calibration_snapshot_by_label(label)
     if snapshot is not None:
         return snapshot
-    successor = service.sla_calibration_snapshot_successor(label)
-    if successor is not None:
-        return successor
-    tombstone = service.sla_calibration_snapshot_tombstone(label)
-    if tombstone is not None:
-        return tombstone
+    answer = service.answer_sla_calibration_citation(label)
+    if answer is not None:
+        return answer
     raise HTTPException(
         status_code=404,
         detail=(
