@@ -1940,14 +1940,17 @@ class SubmissionService:
         )
         return annotate_proposal(proposal)
 
-    def snapshot_sla_calibration(self, actor: str) -> dict:
+    def snapshot_sla_calibration(self, actor: str, label: str = "") -> dict:
         """Keep a snapshot of the SLA calibration report as it
         stands now (``proposals.build_calibration_snapshot``):
         the budgets in force, the decided evidence weighed, and
         per tier which candidate rows were proposal-ready — dated
-        and under the taker's name. Operator-kept, never on a
-        timer; keeping one changes nothing but the snapshot list,
-        and the snapshots are what the calibration diff reads."""
+        and under the taker's name, with the taker's optional
+        ``label`` ("post-budget-change") so a later citation has
+        a handle beyond the snapshot id. Operator-kept, never on
+        a timer; keeping one changes nothing but the snapshot
+        list, and the snapshots are what the calibration diff
+        reads."""
         from .proposals import CALIBRATION_SNAPSHOTS_KEY, build_calibration_snapshot
 
         store = self._get_store()
@@ -1957,6 +1960,7 @@ class SubmissionService:
             self.sla_budget_calibration(),
             next_snapshot_id(snapshots, "cal-"),
             actor,
+            label=label,
         )
         snapshots.append(snapshot)
         document["snapshots"] = snapshots

@@ -644,6 +644,23 @@ class FollowThroughWorkedRequest(BaseModel):
         return self.actor or self.approver or self.reviewer
 
 
+class CalibrationSnapshotRequest(BaseModel):
+    """An operator's keep of the SLA calibration report (see
+    ``service.snapshot_sla_calibration``): who is keeping it,
+    and an optional label — the handle a budget debate cites
+    ("the post-budget-change report") beyond the snapshot id.
+    The label is the taker's own words, kept verbatim on the
+    snapshot, its list, and its diffs."""
+
+    actor: Optional[str] = None
+    approver: Optional[str] = None
+    reviewer: Optional[str] = None
+    label: Optional[str] = None
+
+    def actor_name(self) -> Optional[str]:
+        return self.actor or self.approver or self.reviewer
+
+
 class SlaCalibrationDraftRequest(BaseModel):
     """An operator's draft-from-a-calibration-row request (see
     ``proposals.draft_sla_proposal_from_row``): who is drafting,

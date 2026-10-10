@@ -1445,7 +1445,11 @@ CALIBRATION_SNAPSHOTS_KEY = "sla_calibration_snapshots"
 
 
 def build_calibration_snapshot(
-    report: dict, snapshot_id: str, actor: str, taken_at: str = ""
+    report: dict,
+    snapshot_id: str,
+    actor: str,
+    taken_at: str = "",
+    label: str = "",
 ) -> dict:
     """One stored snapshot of the SLA calibration report.
 
@@ -1459,11 +1463,17 @@ def build_calibration_snapshot(
     per tier the budget, its source, the decided count, the wait
     distribution, and the candidate values whose rows were
     ``proposal_ready`` — dated and under the taker's name. The
-    full sweep arithmetic is deliberately not kept: it is
-    reproducible from the records, and what a later reader needs
-    is which moves the evidence supported, not every row's
-    splits. Snapshots are operator-kept, never on a timer — the
-    same discipline as the digest snapshots.
+    taker may also give it a ``label`` ("post-budget-change"):
+    a kept report is cited in debates, and the citation needs a
+    handle beyond ``cal-0007`` — the label rides the snapshot,
+    the list, and the diff, so the argument reads in business
+    terms. Retention makes this more pointed, not less: the
+    survivors are the cited ones. The full sweep arithmetic is
+    deliberately not kept: it is reproducible from the records,
+    and what a later reader needs is which moves the evidence
+    supported, not every row's splits. Snapshots are
+    operator-kept, never on a timer — the same discipline as the
+    digest snapshots.
     """
     tiers = []
     for tier_block in report.get("tiers") or []:
@@ -1485,6 +1495,7 @@ def build_calibration_snapshot(
         "snapshot_id": snapshot_id,
         "taken_at": taken_at or _now(),
         "taken_by": actor,
+        "label": label,
         "budgets": dict(report.get("budgets") or {}),
         "decided_cases_weighed": report.get("decided_cases_weighed", 0),
         "tiers": tiers,
@@ -1505,7 +1516,10 @@ def calibration_snapshot_diff(older: dict, newer: dict) -> dict:
     from one that appeared because the decided evidence grew.
     A tier missing from either snapshot reads as no ready rows
     and unknown values — absence in a snapshot is a fact about
-    the snapshot, not something to invent around.
+    the snapshot, not something to invent around. Each side's
+    label rides the diff (``from_label`` / ``to_label``) so the
+    movement reads against the names the debate actually uses;
+    a snapshot kept before labels existed reads as unlabelled.
     """
     def _tiers_by_name(snapshot: dict) -> dict[str, dict]:
         return {
@@ -1552,6 +1566,8 @@ def calibration_snapshot_diff(older: dict, newer: dict) -> dict:
         "to_snapshot": newer.get("snapshot_id", ""),
         "from_taken_at": older.get("taken_at", ""),
         "to_taken_at": newer.get("taken_at", ""),
+        "from_label": older.get("label", ""),
+        "to_label": newer.get("label", ""),
         "budgets_changed": any(
             row["budget_in_force"]["changed"] for row in tiers.values()
         ),

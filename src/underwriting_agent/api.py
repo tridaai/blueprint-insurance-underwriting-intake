@@ -41,6 +41,7 @@ from .schemas import (
     AgentResult,
     BreachAcknowledgementRequest,
     FollowThroughWorkedRequest,
+    CalibrationSnapshotRequest,
     DecisionRequest,
     ProposalDecisionRequest,
     SettingsRestoreRequest,
@@ -553,13 +554,18 @@ def draft_sla_proposal_from_row(request: SlaCalibrationDraftRequest) -> dict:
 
 
 @app.post("/queue/sla/calibration/snapshots", dependencies=_AUTH)
-def snapshot_sla_calibration(request: DecisionRequest) -> dict:
+def snapshot_sla_calibration(request: CalibrationSnapshotRequest) -> dict:
     """Keep a snapshot of the SLA calibration report as it stands
     now: the budgets in force, the decided cases weighed, and per
     tier which candidate rows were proposal-ready — stored dated
-    and under the taker's name. Operator-kept, never on a timer;
+    and under the taker's name. The request may carry a label
+    ("post-budget-change"): the handle a budget debate cites
+    beyond the snapshot id, kept verbatim on the snapshot, its
+    list, and its diffs. Operator-kept, never on a timer;
     snapshots are what the calibration diff compares."""
-    return service.snapshot_sla_calibration(_decision_actor(request))
+    return service.snapshot_sla_calibration(
+        _decision_actor(request), label=request.label or ""
+    )
 
 
 @app.get("/queue/sla/calibration/snapshots", dependencies=_AUTH)
