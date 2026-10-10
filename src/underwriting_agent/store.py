@@ -42,7 +42,10 @@ class ApprovalRecord:
     dispatch_attempts: list[dict] = field(default_factory=list)
     # The drafted queue status note for an SLA-breached case (see
     # service.draft_status_note): {text, drafted_at, sla, validation,
-    # outstanding} or None when none has been drafted. ``outstanding``
+    # outstanding} or None when none has been drafted — plus, when a
+    # wording-only failure was steered into a passing redraft,
+    # {repair_attempted, repaired, original_validation,
+    # repair_guidance} recording the repair. ``outstanding``
     # snapshots what the case was waiting on; a later resubmission
     # from the same insured adds a ``follow_through`` marking to the
     # note (see service._record_note_follow_through) without ever

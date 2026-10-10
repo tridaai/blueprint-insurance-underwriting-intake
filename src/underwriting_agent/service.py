@@ -1683,10 +1683,22 @@ class SubmissionService:
         should pick it up. It is composed in code from the record
         and the queue projection (``insights.compose_status_note``),
         guardrail-checked like every other draft
-        (``guardrails.validate_status_note``) — a note that fails is
-        refused, never stored — and then kept on the record as an
-        internal draft. Nothing is sent, to anyone, ever: the
-        underwriter reads it in the console and decides.
+        (``guardrails.validate_status_note``), and then kept on the
+        record as an internal draft. Nothing is sent, to anyone,
+        ever: the underwriter reads it in the console and decides.
+
+        A note that fails on **wording alone** — record prose the
+        composition interpolated (a gap source, a missing-element
+        label) carrying a forward-motion, review-commitment,
+        soft-time, or authority phrasing — gets one steered redraft
+        before refusal (``letter_repair.steer_status_note``: the
+        offending sentence rewritten into the family's approved
+        note shape, the rewrite revalidated, the repair recorded
+        on the note with the original validation and the guidance
+        that steered it). A note failing anything else — bind
+        language, a premium figure, a promise, PII — is refused
+        outright, never stored, exactly as before: steering is
+        for wording, refusal is for substance.
 
         Re-drafting replaces the stored note (the case aged, the
         facts may have moved). Raises KeyError for an unknown id
@@ -1713,6 +1725,31 @@ class SubmissionService:
         now = datetime.now(timezone.utc)
         text = compose_status_note(record, item, now)
         validation = validate_status_note(text, submission_id)
+        repair: dict = {}
+        if not validation.passed:
+            # One steered redraft for a wording-only failure (see
+            # the docstring): the steering quotes the offending
+            # sentence and rewrites it into the approved shape;
+            # the rewrite ships only if it passes the same gate.
+            from .letter_repair import (
+                status_note_repair_guidance,
+                steer_status_note,
+            )
+
+            guidance = status_note_repair_guidance(validation, text)
+            steered = steer_status_note(text, validation) if guidance else None
+            if steered is not None:
+                steered_validation = validate_status_note(steered, submission_id)
+                if steered_validation.passed:
+                    repair = {
+                        "repair_attempted": True,
+                        "repaired": True,
+                        "original_validation": validation.model_dump(
+                            mode="json"
+                        ),
+                        "repair_guidance": guidance,
+                    }
+                    text, validation = steered, steered_validation
         if not validation.passed:
             failed = "; ".join(
                 f"{c.name}: {c.detail}" for c in validation.checks if not c.passed
@@ -1725,6 +1762,7 @@ class SubmissionService:
             "submission_id": submission_id,
             "text": text,
             "drafted_at": now.isoformat(timespec="seconds"),
+            **repair,
             "sla": {
                 "risk_tier": item["risk_tier"],
                 "budget_days": item["sla_budget_days"],

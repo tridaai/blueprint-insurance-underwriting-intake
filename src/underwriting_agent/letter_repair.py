@@ -28,6 +28,19 @@ changes no verdict:
   in the validate node, and the run records the advisories it
   found, so what the drafter produced stays auditable even when
   the redraft clears it.
+- The same steering serves the **status note** (see
+  :func:`status_note_repair_guidance` and :func:`steer_status_note`):
+  the note is held to the letter's families by
+  ``guardrails.validate_status_note``, but its drafter is code,
+  not a model, so where the letter gets guidance in a prompt,
+  the note gets guidance plus a deterministic sentence rewrite —
+  the offending sentence replaced by the family's approved note
+  shape — and the service revalidates the rewrite exactly as the
+  graph revalidates a redraft. Steering covers the wording
+  families only: a note failing anything else (bind language, a
+  premium figure, a promise, PII) is refused outright, as it
+  always was — refusal is the last resort for wording, and the
+  only resort for substance.
 
 The blocking families themselves are not re-implemented here:
 :func:`guardrails.letter_wording_hits` is the one computation,
@@ -228,3 +241,127 @@ def advisory_repair_guidance(advisories: list[dict]) -> str:
         "into the approved shape; change nothing else:",
         items,
     )
+
+
+# ---------------------------------------------------------------------------
+# Status-note steering — the same discipline for the other draft
+# ---------------------------------------------------------------------------
+
+#: The approved rewrite for each family in a status note: the
+#: letter's shapes restated for an internal reader (the note's
+#: reader is the underwriter, not the broker, so there is no
+#: "you"). Authority again has no shape at all — the reference
+#: comes out, and the fact stays on the record it belongs to.
+_NOTE_FAMILY_INSTEAD = {
+    "forward_motion": (
+        "The case is under review; an underwriter will review "
+        "it and decide the next step."
+    ),
+    "review_commitment": (
+        "This note records where the case stands for "
+        "underwriter review."
+    ),
+    "soft_time": (
+        "The case will be updated when the review reaches its "
+        "next step."
+    ),
+    "authority": (
+        "remove the authority reference from the note entirely "
+        "— the record keeps that fact"
+    ),
+}
+
+
+def status_note_repair_guidance(validation: Validation, note: str) -> str:
+    """Surgical rewrite instructions for a failed status note.
+
+    The note-side twin of :func:`letter_repair_guidance`: built
+    from the guardrail's own hits (``letter_wording_hits`` — the
+    note validator's wording check runs the same families), each
+    family's offending sentence quoted verbatim from the note
+    and paired with the problem and the approved note shape.
+    Empty when the note's wording check did not fail — the
+    steering exists for the wording families only.
+    """
+    failed = any(
+        check.name == "no_forward_motion_in_letter" and not check.passed
+        for check in validation.checks
+    )
+    if not failed:
+        return ""
+    text = note or ""
+    sentences = _sentences(text)
+    items = []
+    for family, hit in letter_wording_hits(text).items():
+        if hit is None:
+            continue
+        items.append(
+            (
+                _sentence_with(sentences, hit),
+                f"{_FAMILY_PROBLEM[family]} (matched: '{hit}')",
+                _NOTE_FAMILY_INSTEAD[family],
+            )
+        )
+    if not items:
+        return ""
+    return _guidance_block(
+        "STATUS NOTE WORDING — the drafted status note failed "
+        "the status-only rule. Rewrite each offending sentence "
+        "below into the approved shape; keep every other "
+        "sentence, and every fact, exactly as it is:",
+        items,
+    )
+
+
+def steer_status_note(note: str, validation: Validation) -> str | None:
+    """One bounded steered redraft of a failed status note.
+
+    The note's drafter is code, so where the letter's steering
+    is handed to a model as a prompt, the note's is applied
+    directly: every sentence carrying a wording hit is replaced
+    by its family's approved note shape (an authority-carrying
+    sentence comes out — the record keeps that fact), and every
+    other sentence is kept byte for byte. Returns the rewritten
+    note, or ``None`` when steering does not apply: the
+    validation passed, the wording check is not the *only*
+    failure (bind language, a premium figure, a promise, or PII
+    in a note is refused, never steered around), or no wording
+    hit can be located in the text. The rewrite is a draft, not
+    a verdict — the caller revalidates it with
+    ``guardrails.validate_status_note`` and stores it only if
+    it passes, exactly as the graph stores only a passing
+    redraft.
+    """
+    failed = {check.name for check in validation.checks if not check.passed}
+    if failed != {"no_forward_motion_in_letter"}:
+        return None
+    text = note or ""
+    hits = letter_wording_hits(text)
+    families = [family for family, hit in hits.items() if hit]
+    if not families:
+        return None
+    lines: list[str] = []
+    for line in text.split("\n"):
+        if not any(
+            (hits[family] or "").lower() in line.lower() for family in families
+        ):
+            lines.append(line)
+            continue
+        pieces = []
+        for piece in re.split(r"(?<=[.!?])\s+", line):
+            matched: str | None = None
+            for family in families:
+                hit = hits[family]
+                if hit and hit.lower() in piece.lower():
+                    matched = family
+                    break
+            if matched is None:
+                pieces.append(piece)
+            elif matched != "authority":
+                pieces.append(_NOTE_FAMILY_INSTEAD[matched])
+            # An authority-carrying sentence is not rewritten —
+            # it comes out. The fact it referenced stays on the
+            # record, where internal facts belong.
+        lines.append(" ".join(pieces))
+    steered = "\n".join(lines)
+    return steered if steered != text else None
