@@ -1422,6 +1422,32 @@ class SubmissionService:
             "unannounced_no_webhook": unannounced,
         }
 
+    def notify_sla_notifications(
+        self, now: datetime | None = None
+    ) -> dict:
+        """One sweep for both tellings: breaches, then escalations.
+
+        Operators run the breach check and the escalation check
+        together every morning — they are the two rungs of one
+        ladder (a case nobody told about; a case told, worked,
+        and still waiting) — so the morning sweep runs both and
+        reports both firings in one response: the breach report
+        as :meth:`notify_sla_breaches` returns it, with the
+        escalation report (see
+        :meth:`notify_acknowledged_escalations`) riding under
+        ``escalations``. Each telling keeps its own dedupe and
+        ledger — the breach notice on its record, the escalation
+        notice on its — and the sweep is exactly the two checks
+        run back to back on the same clock, nothing merged: a
+        case that crosses both rungs between sweeps is announced
+        on both, in ladder order. The separate escalation
+        endpoint stays for schedulers that want only that rung.
+        """
+        now = now or datetime.now(timezone.utc)
+        report = self.notify_sla_breaches(now)
+        report["escalations"] = self.notify_acknowledged_escalations(now)
+        return report
+
     def retry_escalation_notice(self, submission_id: str) -> dict:
         """Retry a failed acknowledged-escalation dispatch.
 

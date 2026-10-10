@@ -634,14 +634,19 @@ def draft_sla_budget_proposals() -> dict:
 
 @app.post("/queue/sla-notifications", dependencies=_AUTH)
 def notify_sla_breaches() -> dict:
-    """Run the SLA-breach check: the first time the queue projection
+    """Run the morning notification sweep — both tellings in one
+    call. The breach check: the first time the queue projection
     observes a case past its SLA budget, fire one signed
     ``sla_breach`` webhook through the output-routing seam and
     record the notice on the record (the record is the dedupe —
-    re-running the check never re-fires). With no ACTION_WEBHOOK_URL
-    configured, breaches are reported as observed-but-unannounced
-    and nothing is recorded."""
-    return service.notify_sla_breaches()
+    re-running the check never re-fires). The escalation check
+    runs in the same sweep and its report rides in the response
+    under ``escalations`` (the second rung's own firing, dedupe,
+    and ledger — the separate ``/queue/escalation-notifications``
+    endpoint still runs that rung alone). With no
+    ACTION_WEBHOOK_URL configured, crossings are reported as
+    observed-but-unannounced and nothing is recorded."""
+    return service.notify_sla_notifications()
 
 
 @app.get("/metrics", dependencies=_AUTH)
