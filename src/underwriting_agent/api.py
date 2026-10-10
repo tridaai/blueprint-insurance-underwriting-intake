@@ -238,6 +238,16 @@ def guidelines_change_impact() -> dict:
     return service.guideline_change_impact()
 
 
+@app.get("/guidelines/diff-trigger-calibration", dependencies=_AUTH)
+def diff_trigger_calibration() -> dict:
+    """Diff-trigger calibration: replay the stored renewals at
+    candidate referral-trigger thresholds and show how many
+    referrals each setting would have produced, family by family —
+    alongside what actually fired and what underwriters decided.
+    Read-only; nothing stored is changed by reading it."""
+    return service.diff_trigger_calibration()
+
+
 @app.get("/samples", dependencies=_AUTH)
 def list_samples() -> list[dict]:
     return load_sample_submissions()

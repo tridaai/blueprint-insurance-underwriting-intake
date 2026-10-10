@@ -1110,6 +1110,16 @@ class SubmissionService:
         record = self._get_store().get(submission_id)
         return record.status_note if record else None
 
+    def diff_trigger_calibration(self) -> dict:
+        """The diff-trigger calibration report: the stored renewals
+        replayed at candidate trigger thresholds (read-only
+        what-if), alongside what actually fired at analysis time
+        and what underwriters decided on those cases
+        (``calibration.py``)."""
+        from .calibration import trigger_calibration
+
+        return trigger_calibration(self._get_store().all_records())
+
     def guideline_change_impact(self, classifier=None) -> dict:
         """Which awaiting submissions would re-triage differently
         under the current guidelines/rules (``retriage.py``).
