@@ -19,6 +19,15 @@ Per-case token usage and latency are printed, with a summary at the
 end; estimated cost uses the backend module's price table (models not
 in the table report cost as n/a; a local Ollama run is $0).
 
+**Regression gate** — the summary also diffs the run's flagged
+verdicts against ``judge_checklist.json`` (see ``judge_gate.py``):
+the families earlier runs found and the draft side fixed. A flagged
+verdict landing in a pinned family is printed as a named REGRESSION
+with its cases; one matching no family is a NEW FINDING. The gate
+names things — it never changes the exit code, and it only reads
+the judge's output (the drafts get policed; the judge never gets
+tuned to pass).
+
 Run from the repo root, with a provider configured (see .env.example):
 
     MODEL_BACKEND=anthropic RETRIEVER=keyword python evals/run_llm_evals.py
@@ -40,6 +49,9 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from judge_gate import load_checklist, regression_gate  # noqa: E402
 
 from underwriting_agent.facts import readiness_explanation  # noqa: E402
 from underwriting_agent.graph import run_submission  # noqa: E402
@@ -220,6 +232,7 @@ def main() -> int:
 
     total = len(cases)
     cost = estimate_cost_usd(model, total_input, total_output)
+    gate = regression_gate(rows, load_checklist())
     summary = {
         "backend": backend.name,
         "model": model,
@@ -234,6 +247,7 @@ def main() -> int:
         "estimated_cost_usd": cost,
         "rows": rows,
         "failures": failures,
+        "regression_gate": gate,
         "framing": (
             "Provider-mode eval over the synthetic golden set: cross-check "
             "behaviour and LLM-judged draft safety. Not a real-world "
@@ -252,6 +266,15 @@ def main() -> int:
         print("Flagged drafts:")
         for failure in failures:
             print(f"  - {failure}")
+    print(
+        f"Judge regression gate  : {len(gate['regressions'])} regression(s), "
+        f"{len(gate['new_findings'])} new finding(s) "
+        f"({len(gate['holding'])} pinned families holding)"
+    )
+    for entry in gate["regressions"]:
+        print(f"  REGRESSION {entry['family']} — cases: {', '.join(entry['cases'])}")
+    for entry in gate["new_findings"]:
+        print(f"  NEW FINDING {entry['family']} — cases: {', '.join(entry['cases'])}")
     passed = judged > 0 and clean == judged
     print("PASS" if passed else "FAIL")
     return 0 if passed else 1

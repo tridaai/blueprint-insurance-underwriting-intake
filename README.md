@@ -381,15 +381,23 @@ gate, the eval design, and the production-hardening list.
 
 Deterministic golden gate (28 synthetic cases, full pipeline):
 
-- **Triage outcome accuracy: 28/28**
-- **Risk-tier accuracy: 28/28**
+- **Triage outcome accuracy: 37/37**
+- **Risk-tier accuracy: 37/37**
+- **Guardrail expectations: 5/5**
 
 These are regression gates over a synthetic set, not real-world
 accuracy claims. The opt-in provider pack (`make llm-evals`) reports
 rules/LLM cross-check agreement and LLM-judged draft safety
 (groundedness, invented terms, prohibited promises) with token usage
 and estimated cost; it exits loudly (code 2) when no provider is
-configured, by design.
+configured, by design. Its summary also runs the **judge regression
+gate** (`evals/judge_gate.py` over `evals/judge_checklist.json`):
+the finding families earlier pack runs produced — forward motion,
+review commitments, soft time commitments, figure leakage, invented
+details — are pinned, and a flagged verdict landing in a pinned
+family is printed as a named REGRESSION rather than a fresh
+surprise. The gate only names things; the drafts get policed, the
+judge never gets tuned to pass.
 
 ## Repository structure
 
