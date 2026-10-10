@@ -273,6 +273,7 @@ def calibration_proposals() -> dict:
     return {
         "proposals": service.calibration_proposals(),
         "settings": service.diff_threshold_settings(),
+        "sla_settings": service.sla_budget_settings(),
     }
 
 
@@ -300,6 +301,26 @@ def decide_calibration_proposal(
             _decision_actor(request),
             accept=request.accept,
             note=request.note or "",
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/calibration/proposals/{proposal_id}/refresh", dependencies=_AUTH)
+def refresh_calibration_proposal(
+    proposal_id: str, request: DecisionRequest
+) -> dict:
+    """Refresh one expired proposal: re-run its evidence scan
+    against the store as it stands now. The proposal is renewed
+    in place (fresh snapshot, fresh expiry window) when the
+    evidence still carries a one-sided move, or withdrawn when
+    it no longer does. A live draft cannot be refreshed, and an
+    expired draft cannot be decided until it is."""
+    try:
+        return service.refresh_calibration_proposal(
+            proposal_id, _decision_actor(request)
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

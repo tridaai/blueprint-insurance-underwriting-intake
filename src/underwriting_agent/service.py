@@ -1504,10 +1504,28 @@ class SubmissionService:
         return draft_proposals(store, store.all_records())
 
     def calibration_proposals(self) -> list[dict]:
-        """Every stored calibration proposal, oldest first."""
-        from .proposals import load_proposals
+        """Every stored calibration proposal, oldest first — each
+        annotated with its evidence expiry (``expires_at`` /
+        ``expired``), resolved at read time."""
+        from .proposals import annotate_proposal, load_proposals
 
-        return load_proposals(self._get_store())
+        return [
+            annotate_proposal(p) for p in load_proposals(self._get_store())
+        ]
+
+    def refresh_calibration_proposal(self, proposal_id: str, actor: str) -> dict:
+        """Refresh one expired proposal: re-run its evidence scan
+        against the store as it stands (``proposals.refresh_proposal``).
+        The proposal is renewed with a fresh snapshot, or withdrawn
+        when the evidence no longer carries the move — either way
+        the refresh is on the proposal's audit list."""
+        from .proposals import annotate_proposal, refresh_proposal
+
+        store = self._get_store()
+        proposal = refresh_proposal(
+            store, store.all_records(), proposal_id, actor
+        )
+        return annotate_proposal(proposal)
 
     def decide_calibration_proposal(
         self,

@@ -42,6 +42,20 @@ accepted SLA proposal writes its budget into a second settings
 document, and the queue resolves its budgets through
 :func:`effective_sla_budgets` — settings record over environment,
 the same single-resolution discipline as the thresholds.
+
+A draft proposal's evidence is a snapshot: renewals decided
+since it was drafted can quietly invalidate it. So a draft
+**expires** — after ``PROPOSAL_EXPIRY_DAYS`` (default 14) it can
+no longer be decided. Expiry is not the end of the question,
+though: :func:`refresh_proposal` re-runs the evidence scan for
+that one setting against the store as it stands now. When the
+evidence still carries a one-sided move, the proposal is renewed
+in place (same id, fresh snapshot, fresh window); when it no
+longer does, the proposal is **withdrawn** and says why. Every
+refresh is appended to the proposal's ``refreshes`` audit list —
+who refreshed it, when, what the stale snapshot said, and how
+the re-scan came out — so a proposal's evidence is never
+silently stale, and never silently replaced either.
 """
 
 from __future__ import annotations
@@ -76,6 +90,69 @@ _SLA_KIND = "sla_budget"
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _now_dt(now: datetime | None) -> datetime:
+    return now or datetime.now(timezone.utc)
+
+
+def _fmt(moment: datetime) -> str:
+    return moment.isoformat(timespec="seconds")
+
+
+def _parse_ts(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Proposal expiry — a draft's evidence is a snapshot, snapshots age
+# ---------------------------------------------------------------------------
+
+#: Days a drafted proposal stays decidable before its evidence is
+#: considered stale (PROPOSAL_EXPIRY_DAYS overrides per deployment).
+DEFAULT_PROPOSAL_EXPIRY_DAYS = 14
+
+
+def proposal_expiry_days() -> int:
+    return max(1, env_int("PROPOSAL_EXPIRY_DAYS", DEFAULT_PROPOSAL_EXPIRY_DAYS))
+
+
+def proposal_expires_at(proposal: dict) -> str | None:
+    """When a proposal's evidence goes stale: its stamped
+    ``expires_at``, or — for a draft stamped before expiry
+    existed — its ``drafted_at`` plus the configured window."""
+    if proposal.get("expires_at"):
+        return proposal["expires_at"]
+    drafted = _parse_ts(proposal.get("drafted_at"))
+    if drafted is None:
+        return None
+    return _fmt(drafted + timedelta(days=proposal_expiry_days()))
+
+
+def is_expired(proposal: dict, now: datetime | None = None) -> bool:
+    """A live draft past its evidence window. Decided and
+    withdrawn proposals are history — they do not expire."""
+    if proposal.get("status") != "draft":
+        return False
+    expires = _parse_ts(proposal_expires_at(proposal))
+    return expires is not None and _now_dt(now) > expires
+
+
+def annotate_proposal(proposal: dict, now: datetime | None = None) -> dict:
+    """A copy of one proposal with its expiry resolved for
+    display: the effective ``expires_at`` and whether it has
+    lapsed. Stored documents are never mutated by annotation."""
+    return {
+        **proposal,
+        "expires_at": proposal_expires_at(proposal),
+        "expired": is_expired(proposal, now),
+    }
 
 
 def _value_text(dimension: str, value: float) -> str:
@@ -371,7 +448,9 @@ def _threshold_fields(
     }
 
 
-def draft_proposals(store: Store, records: list[ApprovalRecord]) -> dict:
+def draft_proposals(
+    store: Store, records: list[ApprovalRecord], now: datetime | None = None
+) -> dict:
     """Scan the stored renewals for proposal-worthy threshold moves.
 
     One candidate move per dimension at most: among the swept
@@ -411,11 +490,15 @@ def draft_proposals(store: Store, records: list[ApprovalRecord]) -> dict:
         )
         if best is None:
             continue
+        drafted_dt = _now_dt(now)
         proposal = {
             "proposal_id": f"PROP-{len(existing) + len(drafted) + 1:04d}",
             **_threshold_fields(dimension, current, best, pairs, decided_pairs),
             "status": "draft",
-            "drafted_at": _now(),
+            "drafted_at": _fmt(drafted_dt),
+            "expires_at": _fmt(
+                drafted_dt + timedelta(days=proposal_expiry_days())
+            ),
             "decided_by": None,
             "decided_at": None,
             "decision_note": "",
@@ -562,7 +645,9 @@ def _sla_fields(
     }
 
 
-def draft_sla_proposals(store: Store, records: list[ApprovalRecord]) -> dict:
+def draft_sla_proposals(
+    store: Store, records: list[ApprovalRecord], now: datetime | None = None
+) -> dict:
     """Scan the decided cases' waits for proposal-worthy SLA moves.
 
     The same drafting discipline as the threshold scan: one open
@@ -594,11 +679,15 @@ def draft_sla_proposals(store: Store, records: list[ApprovalRecord]) -> dict:
         )
         if best is None:
             continue
+        drafted_dt = _now_dt(now)
         proposal = {
             "proposal_id": f"PROP-{len(existing) + len(drafted) + 1:04d}",
             **_sla_fields(tier, budgets[tier], best, tier_cases),
             "status": "draft",
-            "drafted_at": _now(),
+            "drafted_at": _fmt(drafted_dt),
+            "expires_at": _fmt(
+                drafted_dt + timedelta(days=proposal_expiry_days())
+            ),
             "decided_by": None,
             "decided_at": None,
             "decision_note": "",
@@ -621,6 +710,7 @@ def decide_proposal(
     *,
     accept: bool,
     note: str = "",
+    now: datetime | None = None,
 ) -> dict:
     """Record a human's decision on one proposal.
 
@@ -645,7 +735,14 @@ def decide_proposal(
             f"(decided by {proposal.get('decided_by')} at "
             f"{proposal.get('decided_at')}) — a proposal is decided once"
         )
-    now = _now()
+    if is_expired(proposal, now):
+        raise ValueError(
+            f"Proposal {proposal_id} expired at "
+            f"{proposal_expires_at(proposal)} — its evidence is a stale "
+            "snapshot. Refresh it to re-run the evidence scan before "
+            "deciding"
+        )
+    now = _fmt(_now_dt(now))
     proposal["status"] = "accepted" if accept else "rejected"
     proposal["decided_by"] = actor
     proposal["decided_at"] = now
@@ -676,5 +773,115 @@ def decide_proposal(
                 at=now,
             )
         proposal["settings_written"] = after
+    _save_proposals(store, proposals)
+    return proposal
+
+
+# ---------------------------------------------------------------------------
+# Refreshing an expired proposal — re-run its evidence scan
+# ---------------------------------------------------------------------------
+
+
+def refresh_proposal(
+    store: Store,
+    records: list[ApprovalRecord],
+    proposal_id: str,
+    actor: str,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """Re-run one expired draft's evidence scan against the store
+    as it stands now.
+
+    The scan is the drafting scan, restricted to the proposal's
+    own setting and re-based on the values in force today (which
+    may themselves have moved since the draft). Two outcomes:
+
+    - **Renewed** — the evidence still carries a one-sided decided
+      move: the proposal keeps its id and takes the fresh snapshot
+      (values, rationale, evidence, a new drafted-at and a new
+      expiry window). The move it proposes may differ from the
+      stale one — it is whatever today's evidence supports.
+    - **Withdrawn** — no one-sided move remains: the proposal
+      leaves the live list with the reason recorded, instead of
+      waiting to be decided on evidence that no longer holds.
+
+    Either way the refresh is appended to the proposal's
+    ``refreshes`` audit list with the stale snapshot it replaced.
+    Only an expired draft can be refreshed — a live draft's
+    evidence is current by definition, and a decided or withdrawn
+    proposal is history.
+    """
+    proposals = load_proposals(store)
+    proposal = next(
+        (p for p in proposals if p["proposal_id"] == proposal_id), None
+    )
+    if proposal is None:
+        raise KeyError(f"Unknown proposal_id: {proposal_id}")
+    if proposal["status"] != "draft":
+        raise ValueError(
+            f"Proposal {proposal_id} is {proposal['status']} — only a "
+            "live draft can be refreshed"
+        )
+    now_dt = _now_dt(now)
+    if not is_expired(proposal, now_dt):
+        raise ValueError(
+            f"Proposal {proposal_id} is still live until "
+            f"{proposal_expires_at(proposal)} — refresh applies once "
+            "a draft has expired"
+        )
+    kind = _proposal_kind(proposal)
+    rejected = _rejected_directions(proposals, kind)
+    fields: dict | None = None
+    if kind == _SLA_KIND:
+        budgets = effective_sla_budgets(store)
+        tier = proposal["dimension"]
+        cases = decided_wait_cases(records)
+        tier_cases = [c for c in cases if c["risk_tier"] == tier]
+        best = _best_sla_candidate(cases, tier, budgets[tier], rejected)
+        if best is not None:
+            fields = _sla_fields(tier, budgets[tier], best, tier_cases)
+    else:
+        current = effective_thresholds(store)
+        pairs = renewal_pairs(records)
+        decided_pairs = [
+            p for p in pairs if p["status"] in ("approved", "rejected")
+        ]
+        best = _best_threshold_candidate(
+            pairs, proposal["dimension"], current, rejected
+        )
+        if best is not None:
+            fields = _threshold_fields(
+                proposal["dimension"], current, best, pairs, decided_pairs
+            )
+    entry = {
+        "at": _fmt(now_dt),
+        "by": actor,
+        "previous": {
+            "current_value": proposal.get("current_value"),
+            "proposed_value": proposal.get("proposed_value"),
+            "direction": proposal.get("direction"),
+            "drafted_at": proposal.get("drafted_at"),
+            "expires_at": proposal_expires_at(proposal),
+        },
+    }
+    if fields is None:
+        proposal["status"] = "withdrawn"
+        proposal["withdrawn_at"] = _fmt(now_dt)
+        proposal["withdrawn_by"] = actor
+        proposal["withdrawal_reason"] = (
+            "the evidence refresh found no one-sided decided move "
+            "for this setting — the snapshot it was drafted from no "
+            "longer holds"
+        )
+        entry["outcome"] = "withdrawn"
+    else:
+        proposal.update(fields)
+        proposal["drafted_at"] = _fmt(now_dt)
+        proposal["expires_at"] = _fmt(
+            now_dt + timedelta(days=proposal_expiry_days())
+        )
+        entry["outcome"] = "renewed"
+    proposal.setdefault("refreshes", []).append(entry)
     _save_proposals(store, proposals)
     return proposal
