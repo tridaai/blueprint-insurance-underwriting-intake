@@ -21,6 +21,13 @@ A verdict may carry several families; the gate reports them all.
 The gate never changes the pack's verdict: any flagged draft still
 fails the pack. And it only ever reads the judge's output — the
 drafts get policed, the judge never gets tuned to pass.
+
+**History + trend** — each pack run appends one summary line to
+``judge_history.jsonl`` (append-only: a run can add its line, it
+can never rewrite an earlier one). The pack prints the trend —
+flagged-case counts by family across runs — so "the loop is
+improving" is a series of numbers with dates on it, not an
+impression from the latest run.
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ import json
 from pathlib import Path
 
 CHECKLIST_PATH = Path(__file__).resolve().parent / "judge_checklist.json"
+HISTORY_PATH = Path(__file__).resolve().parent / "judge_history.jsonl"
 UNCLASSIFIED = "unclassified"
 
 
@@ -93,3 +101,92 @@ def regression_gate(rows: list[dict], checklist: list[dict]) -> dict:
         "holding": sorted(known - set(detected)),
         "detected": {family_id: sorted(cases) for family_id, cases in sorted(detected.items())},
     }
+
+
+# ---------------------------------------------------------------------------
+# Run history + trend — the gate, remembered
+# ---------------------------------------------------------------------------
+
+
+def run_summary(
+    rows: list[dict],
+    gate: dict,
+    *,
+    generated_at: str,
+    backend: str = "",
+    model: str = "",
+) -> dict:
+    """One pack run as a history line: when, on what backend, how
+    many drafts were flagged, and the flagged-case count per
+    family. ``flagged`` counts cases once; ``by_family`` counts a
+    case under every family it matched, like the gate itself."""
+    return {
+        "generated_at": generated_at,
+        "backend": backend,
+        "model": model,
+        "cases": len(rows),
+        "flagged": sum(
+            1 for row in rows if verdict_is_flagged(row.get("judge") or {})
+        ),
+        "by_family": {
+            family_id: len(cases)
+            for family_id, cases in sorted(gate.get("detected", {}).items())
+        },
+        "regressions": [entry["family"] for entry in gate.get("regressions", [])],
+        "new_findings": [entry["family"] for entry in gate.get("new_findings", [])],
+        "holding": list(gate.get("holding", [])),
+    }
+
+
+def append_history(summary: dict, path: Path | None = None) -> Path:
+    """Append one run summary to the history file. Append-only by
+    construction — the file is the trend's memory, and a run that
+    could rewrite it could also flatter it."""
+    target = path or HISTORY_PATH
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(summary) + "\n")
+    return target
+
+
+def load_history(path: Path | None = None) -> list[dict]:
+    """Every recorded run summary, oldest first. A missing file is
+    an empty history; a malformed line is skipped, never fatal —
+    the trend is a report, not a gate."""
+    target = path or HISTORY_PATH
+    if not target.is_file():
+        return []
+    runs: list[dict] = []
+    for line in target.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            runs.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return runs
+
+
+def trend_lines(history: list[dict]) -> list[str]:
+    """The trend as printable lines: flagged totals, then one line
+    per family with its flagged-case count in each run, oldest
+    first. Deterministic — same history, same lines."""
+    if not history:
+        return ["Judge trend: no recorded runs yet."]
+    families: list[str] = []
+    for run in history:
+        for family_id in run.get("by_family", {}):
+            if family_id not in families:
+                families.append(family_id)
+    lines = [
+        f"Judge trend over {len(history)} recorded run(s), oldest first:",
+        "  flagged drafts: "
+        + " -> ".join(
+            f"{run.get('flagged', 0)}/{run.get('cases', 0)}" for run in history
+        ),
+    ]
+    for family_id in families:
+        counts = " -> ".join(
+            str(run.get("by_family", {}).get(family_id, 0)) for run in history
+        )
+        lines.append(f"  {family_id}: {counts}")
+    return lines

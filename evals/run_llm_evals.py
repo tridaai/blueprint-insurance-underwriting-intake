@@ -26,7 +26,9 @@ verdict landing in a pinned family is printed as a named REGRESSION
 with its cases; one matching no family is a NEW FINDING. The gate
 names things — it never changes the exit code, and it only reads
 the judge's output (the drafts get policed; the judge never gets
-tuned to pass).
+tuned to pass). Each run also appends its gate summary to
+``judge_history.jsonl`` and prints the run-over-run trend by
+family, so improvement is a series, not an impression.
 
 Run from the repo root, with a provider configured (see .env.example):
 
@@ -46,12 +48,20 @@ import json
 import sys
 import time
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from judge_gate import load_checklist, regression_gate  # noqa: E402
+from judge_gate import (  # noqa: E402
+    append_history,
+    load_history,
+    load_checklist,
+    regression_gate,
+    run_summary,
+    trend_lines,
+)
 
 from underwriting_agent.facts import readiness_explanation  # noqa: E402
 from underwriting_agent.graph import run_submission  # noqa: E402
@@ -275,6 +285,19 @@ def main() -> int:
         print(f"  REGRESSION {entry['family']} — cases: {', '.join(entry['cases'])}")
     for entry in gate["new_findings"]:
         print(f"  NEW FINDING {entry['family']} — cases: {', '.join(entry['cases'])}")
+    # Remember this run, then print the trend — the history is
+    # append-only, so the series can only ever gain a line.
+    append_history(
+        run_summary(
+            rows,
+            gate,
+            generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            backend=backend.name,
+            model=model,
+        )
+    )
+    for line in trend_lines(load_history()):
+        print(line)
     passed = judged > 0 and clean == judged
     print("PASS" if passed else "FAIL")
     return 0 if passed else 1

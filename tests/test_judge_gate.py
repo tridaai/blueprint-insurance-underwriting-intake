@@ -159,3 +159,90 @@ def test_judge_errors_never_classify():
     assert gate["regressions"] == []
     assert gate["new_findings"] == []
     assert set(gate["holding"]) == KNOWN_IDS
+
+
+# ---------------------------------------------------------------------------
+# History + trend: the gate, remembered across runs
+# ---------------------------------------------------------------------------
+
+
+def _summary(at: str, flagged: int, cases: int, **by_family: int) -> dict:
+    return {
+        "generated_at": at,
+        "backend": "anthropic",
+        "model": "haiku",
+        "cases": cases,
+        "flagged": flagged,
+        "by_family": by_family,
+        "regressions": [],
+        "new_findings": [],
+        "holding": [],
+    }
+
+
+def test_run_summary_counts_flagged_cases_once_and_families_fully():
+    rows = [
+        _row(
+            "E1",
+            grounded=False,
+            prohibited_promise=True,
+            rationale=(
+                "The letter states we will move this submission forward "
+                "to quote file preparation."
+            ),
+        ),
+        _row("E2"),
+        {"case_id": "E3", "judge": {"judge_error": "provider timeout"}},
+    ]
+    gate = judge_gate.regression_gate(rows, CHECKLIST)
+    summary = judge_gate.run_summary(
+        rows, gate, generated_at="2026-10-10T13:00:00+00:00",
+        backend="anthropic", model="haiku",
+    )
+    assert summary["cases"] == 3
+    assert summary["flagged"] == 1  # the judge error is not a finding
+    assert summary["by_family"] == {"forward_motion": 1}
+    assert summary["regressions"] == ["forward_motion"]
+    assert "invented_detail" in summary["holding"]
+
+
+def test_history_is_append_only_and_round_trips(tmp_path):
+    path = tmp_path / "judge_history.jsonl"
+    assert judge_gate.load_history(path) == []  # missing file = empty
+    first = _summary("2026-10-01T00:00:00+00:00", 9, 28, forward_motion=6)
+    second = _summary("2026-10-08T00:00:00+00:00", 5, 28, forward_motion=3)
+    judge_gate.append_history(first, path)
+    judge_gate.append_history(second, path)
+    loaded = judge_gate.load_history(path)
+    assert loaded == [first, second]  # oldest first, nothing rewritten
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2  # one JSON object per line
+
+
+def test_load_history_skips_a_malformed_line(tmp_path):
+    path = tmp_path / "judge_history.jsonl"
+    good = _summary("2026-10-01T00:00:00+00:00", 1, 4, invented_detail=1)
+    judge_gate.append_history(good, path)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("this is not json\n")
+    assert judge_gate.load_history(path) == [good]
+
+
+def test_trend_lines_show_each_family_across_runs():
+    history = [
+        _summary("2026-09-24T00:00:00+00:00", 9, 28,
+                 forward_motion=6, invented_detail=3),
+        _summary("2026-10-01T00:00:00+00:00", 5, 28,
+                 forward_motion=3, invented_detail=2),
+        _summary("2026-10-08T00:00:00+00:00", 2, 28, invented_detail=2),
+    ]
+    lines = judge_gate.trend_lines(history)
+    assert lines[0] == "Judge trend over 3 recorded run(s), oldest first:"
+    assert lines[1] == "  flagged drafts: 9/28 -> 5/28 -> 2/28"
+    # A family absent from a run counts 0 there — the burn-down shows.
+    assert "  forward_motion: 6 -> 3 -> 0" in lines
+    assert "  invented_detail: 3 -> 2 -> 2" in lines
+
+
+def test_trend_lines_for_an_empty_history():
+    assert judge_gate.trend_lines([]) == ["Judge trend: no recorded runs yet."]
