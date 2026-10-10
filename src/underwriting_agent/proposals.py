@@ -1861,7 +1861,16 @@ def calibration_snapshot_diff(older: dict, newer: dict) -> dict:
     movement, never inside it: round 19's keep-from-diff pins
     the cited diff's movement sentence to the one the operator
     read, and an annotation about a side's origin must not
-    rewrite the sentence that was read. The diff also carries
+    rewrite the sentence that was read. Each side's **rename
+    history** rides the diff the same way
+    (``from_label_history`` / ``to_label_history``, and the
+    provenance line names the move): a side renamed since it
+    was kept reads under its current label as if it had always
+    worn it, and a citation followed months later — "the
+    'pre-change' report" — names nothing by then. The diff
+    says what the side was kept as and who renamed it when, so
+    the report the debate meant at the time is reconstructible
+    from the citation itself. The diff also carries
     the movement as one line of prose (``movement``, see
     :func:`_calibration_movement_sentence`): the tables are the
     evidence, but a debate opens with a sentence, and "rows
@@ -1923,6 +1932,8 @@ def calibration_snapshot_diff(older: dict, newer: dict) -> dict:
         "to_label": newer.get("label", ""),
         "from_kept_from": older.get("kept_from") or "",
         "to_kept_from": newer.get("kept_from") or "",
+        "from_label_history": list(older.get("label_history") or []),
+        "to_label_history": list(newer.get("label_history") or []),
         "budgets_changed": any(
             row["budget_in_force"]["changed"] for row in tiers.values()
         ),
@@ -1953,7 +1964,7 @@ def _side_handle(snapshot: dict) -> str:
 
 def _calibration_provenance_sentence(older: dict, newer: dict) -> str:
     """The diff's sides, sourced: which of them were the live
-    report once.
+    report once, and which have moved address since.
 
     A side kept from the live report is named with its keeper
     and its keep moment — "The newer side ('post-review') was
@@ -1961,9 +1972,13 @@ def _calibration_provenance_sentence(older: dict, newer: dict) -> str:
     reading at its keep moment, not a separately computed
     report." The live side itself, when a diff is taken against
     ``current``, is named as what it is: not a kept report at
-    all. Two plain keeps have no provenance to state and the
-    line is empty — provenance is spoken only when there is
-    some. This rides beside ``movement``, never inside it (see
+    all. A side renamed since its keep is named with the move
+    (see :func:`_side_rename_note`): the label a citation used
+    at the time is not the label the side wears now, and the
+    diff is where the two are reconciled. Two plain keeps,
+    never renamed, have no provenance to state and the line is
+    empty — provenance is spoken only when there is some. This
+    rides beside ``movement``, never inside it (see
     :func:`calibration_snapshot_diff`): the movement sentence a
     citation carries is the sentence the operator read, and
     annotating a side's origin must not rewrite it."""
@@ -1984,7 +1999,50 @@ def _calibration_provenance_sentence(older: dict, newer: dict) -> str:
                 f"The {side} side is the live report itself "
                 "('current') — not a kept report."
             )
+        rename_note = _side_rename_note(side, snapshot)
+        if rename_note:
+            notes.append(rename_note)
     return " ".join(notes)
+
+
+def _side_rename_note(side: str, snapshot: dict) -> str:
+    """One diff side's rename, named: what it was kept as, what
+    it answers to now, who moved the address and when.
+
+    A diff cites its sides by their current labels; a side
+    renamed since it was kept (see
+    ``service.rename_sla_calibration_snapshot_label``) reads as
+    if it had always worn the new name, and a citation written
+    at the time — "the 'pre-change' report" — names nothing by
+    the time it is followed, the old label having been freed.
+    The note reconciles the two: kept as the first name in its
+    ``label_history``, wearing the last rename's ``to``, moved
+    by that rename's author at its moment — with the count
+    spoken when the address moved more than once. A side never
+    renamed has nothing to reconcile and the note is empty."""
+    history = snapshot.get("label_history") or []
+    if not history:
+        return ""
+    handle = _side_handle(snapshot)
+    first = history[0]
+    last = history[-1]
+    renamed_by = last.get("renamed_by") or "an operator"
+    renamed_at = last.get("renamed_at") or ""
+    at = f" at {renamed_at}" if renamed_at else ""
+    if len(history) == 1:
+        return (
+            f"The {side} side ({handle}) was kept as "
+            f"'{first.get('from', '')}' and renamed to "
+            f"'{last.get('to', '')}' by {renamed_by}{at} — "
+            "citations by the old name name nothing now."
+        )
+    return (
+        f"The {side} side ({handle}) was kept as "
+        f"'{first.get('from', '')}' and renamed "
+        f"{len(history)} times, most recently to "
+        f"'{last.get('to', '')}' by {renamed_by}{at} — "
+        "citations by an earlier name name nothing now."
+    )
 
 
 def _calibration_movement_sentence(older: dict, tiers: dict) -> str:
