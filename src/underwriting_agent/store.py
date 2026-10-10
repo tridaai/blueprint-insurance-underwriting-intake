@@ -60,6 +60,15 @@ class ApprovalRecord:
     # Older payloads predate both fields.
     sla_breach_notice: dict | None = None
     sla_breach_attempts: list[dict] = field(default_factory=list)
+    # The operator acknowledgement of an exhausted breach notice
+    # (see service.acknowledge_exhausted_breach_notice):
+    # {acknowledged_by, acknowledged_at, note} recorded when a
+    # human attests they picked up a case whose breach notice
+    # never landed — the call the exhaustion worklist exists to
+    # prompt. It marks the notice worked; it does not pretend the
+    # webhook delivered, and it never touches the attempts
+    # ledger. Older payloads predate it.
+    breach_notice_acknowledgement: dict | None = None
 
 
 def history_entry(record: ApprovalRecord) -> dict:
@@ -130,6 +139,7 @@ def _record_to_dict(record: ApprovalRecord) -> dict:
         "status_note": record.status_note,
         "sla_breach_notice": record.sla_breach_notice,
         "sla_breach_attempts": record.sla_breach_attempts,
+        "breach_notice_acknowledgement": record.breach_notice_acknowledgement,
     }
 
 
@@ -151,6 +161,7 @@ def _record_from_dict(data: dict) -> ApprovalRecord:
         status_note=data.get("status_note"),
         sla_breach_notice=data.get("sla_breach_notice"),
         sla_breach_attempts=data.get("sla_breach_attempts") or [],
+        breach_notice_acknowledgement=data.get("breach_notice_acknowledgement"),
     )
 
 

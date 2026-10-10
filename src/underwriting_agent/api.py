@@ -39,6 +39,7 @@ from .insights import audit_csv
 from .samples import load_sample_submissions
 from .schemas import (
     AgentResult,
+    BreachAcknowledgementRequest,
     DecisionRequest,
     ProposalDecisionRequest,
     SettingsRestoreRequest,
@@ -649,6 +650,33 @@ def dispatch_ops() -> dict:
     SLA-breach notices whose own ledger exhausted its attempts
     undelivered on cases still awaiting a decision."""
     return service.dispatch_ops()
+
+
+@app.post(
+    "/dispatch/exhausted/{submission_id}/acknowledge", dependencies=_AUTH
+)
+def acknowledge_exhausted_breach_notice(
+    submission_id: str, request: BreachAcknowledgementRequest
+) -> dict:
+    """Acknowledge an exhausted SLA-breach notice as worked: an
+    operator attests — under their name, with an optional note —
+    that they picked up a case whose breach notice spent its
+    delivery attempts and never landed. The acknowledgement is
+    kept on the record, the case leaves the exhaustion worklist
+    and the digest's count, and the delivery ledger is never
+    rewritten: the webhook still never arrived, and the record
+    keeps saying so. Only a currently-exhausted notice can be
+    acknowledged, and only once."""
+    try:
+        return service.acknowledge_exhausted_breach_notice(
+            submission_id,
+            _decision_actor(request),
+            note=request.note or "",
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/dispatch/retry-failed", dependencies=_AUTH)

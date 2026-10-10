@@ -579,6 +579,23 @@ class SettingsRestoreRequest(BaseModel):
         return self.actor or self.approver or self.reviewer
 
 
+class BreachAcknowledgementRequest(BaseModel):
+    """An operator's acknowledgement of an exhausted breach
+    notice (see ``service.acknowledge_exhausted_breach_notice``):
+    who picked the case up, and an optional note — how the broker
+    was reached, what was said. The note is kept on the record
+    with the acknowledgement; it attests to a human action
+    outside the system, it does not record a delivery."""
+
+    actor: Optional[str] = None
+    approver: Optional[str] = None
+    reviewer: Optional[str] = None
+    note: Optional[str] = None
+
+    def actor_name(self) -> Optional[str]:
+        return self.actor or self.approver or self.reviewer
+
+
 class SlaCalibrationDraftRequest(BaseModel):
     """An operator's draft-from-a-calibration-row request (see
     ``proposals.draft_sla_proposal_from_row``): who is drafting,

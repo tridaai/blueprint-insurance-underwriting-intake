@@ -1504,7 +1504,11 @@ def _age_bucket(age_days: int) -> str:
 
 
 def _exhausted_breach_notices(
-    records: list[ApprovalRecord], now: datetime, attempt_budget: int
+    records: list[ApprovalRecord],
+    now: datetime,
+    attempt_budget: int,
+    *,
+    acknowledged: bool = False,
 ) -> list[dict]:
     """Breach notices that exhausted their own delivery ledger.
 
@@ -1522,6 +1526,15 @@ def _exhausted_breach_notices(
     left out — the call it needed already happened in the room;
     a notice later delivered is out by its last attempt's word.
 
+    ``acknowledged`` selects which side of the worked line to
+    read: the default is the worklist — exhausted notices no
+    operator has acknowledged yet. With ``acknowledged=True``
+    the same computation returns the worked ones, each carrying
+    its acknowledgement (who picked the case up, when, their
+    note). An acknowledgement marks a notice worked; it does not
+    un-exhaust it, and the two reads together are the whole
+    exhaustion picture.
+
     Each entry ages from the notice's first observation (the
     moment the breach was real, not the moment delivery gave
     up), bucketed on the queue's day buckets, oldest first.
@@ -1536,6 +1549,8 @@ def _exhausted_breach_notices(
             continue
         last = attempts[-1]
         if last.get("status") != "failed" or len(attempts) < attempt_budget:
+            continue
+        if (record.breach_notice_acknowledgement is not None) != acknowledged:
             continue
         entry = history_entry(record)
         first_at = _parse_timestamp(attempts[0].get("attempted_at") or "")
@@ -1566,6 +1581,7 @@ def _exhausted_breach_notices(
                 "notice_age_bucket": (
                     _age_bucket(age_days) if age_days is not None else None
                 ),
+                "acknowledgement": record.breach_notice_acknowledgement,
                 "_sort": anchor or datetime.max.replace(tzinfo=timezone.utc),
             }
         )
@@ -1610,6 +1626,13 @@ def dispatch_overview(
     decision. They are not approval failures and never merge into
     that list; they are the cases out of automated nudges, and
     the next step for one is a human call, not a retry button.
+    Notices an operator has acknowledged (see
+    :func:`_exhausted_breach_notices`) ride in a second list,
+    ``acknowledged_breach_notices``: the worklist counts only
+    the unacknowledged — a case somebody has picked up is no
+    longer silently rotting — but the worked ones stay visible
+    with their acknowledgement, because "we called" is a claim
+    the record should be able to show.
     """
     now = now or datetime.now(timezone.utc)
     if stuck_age_hours is None:
@@ -1692,6 +1715,9 @@ def dispatch_overview(
     exhausted_notices = _exhausted_breach_notices(
         records, now, attempt_budget
     )
+    acknowledged_notices = _exhausted_breach_notices(
+        records, now, attempt_budget, acknowledged=True
+    )
     notice_buckets: dict[str, list[str]] = {
         label: [] for label, _, _ in QUEUE_AGE_BUCKETS
     }
@@ -1727,6 +1753,8 @@ def dispatch_overview(
         "attempt_budget": attempt_budget,
         "exhausted_breach_notices": exhausted_notices,
         "exhausted_breach_count": len(exhausted_notices),
+        "acknowledged_breach_notices": acknowledged_notices,
+        "acknowledged_breach_count": len(acknowledged_notices),
         "exhausted_breach_age_buckets": [
             {
                 "bucket": label,
@@ -1777,7 +1805,11 @@ def ops_digest(
     :func:`dispatch_overview`), **exhausted breach notices**
     (SLA-breach notices whose own ledger spent its attempts
     undelivered, on cases still undecided — the same overview,
-    a different list: nobody was told, and no retry is coming),
+    a different list: nobody was told, and no retry is coming;
+    notices an operator has acknowledged count nowhere here —
+    the case has been picked up — and ride along in
+    ``acknowledged_breach_notices`` with the acknowledgement,
+    so the worked ones stay auditable from the same read),
     **breached queue cases** (awaiting
     submissions past their tier's SLA budget — :func:`queue_aging`,
     measured against the budgets in force), **outstanding
@@ -1929,6 +1961,9 @@ def ops_digest(
         "headline": headline,
         "counts": counts,
         **sections,
+        "acknowledged_breach_notices": dispatch[
+            "acknowledged_breach_notices"
+        ],
         "proposal_warning_days": proposal_warning_days,
         "movement": movement,
     }

@@ -48,7 +48,7 @@ from .bundles import (
 )
 from .checkpoints import get_checkpointer
 from .clarify import build_bundle_information_request
-from .config import env_float, env_str, load_dotenv
+from .config import env_float, env_int, env_str, load_dotenv
 from .graph import resume_approval, run_submission
 from .guardrails import validate_drafts, validate_status_note
 from .guidelines_data import GUIDELINES_VERSION
@@ -1273,6 +1273,77 @@ class SubmissionService:
         store.save(record)
         return {
             "submission_id": submission_id,
+            "notice": record.sla_breach_notice,
+            "attempts": record.sla_breach_attempts,
+        }
+
+    def acknowledge_exhausted_breach_notice(
+        self,
+        submission_id: str,
+        actor: str,
+        note: str = "",
+        now: datetime | None = None,
+    ) -> dict:
+        """Acknowledge an exhausted SLA-breach notice as worked.
+
+        The exhaustion worklist's whole point is the human call
+        (see ``insights._exhausted_breach_notices``): the notice
+        never landed, the case is still undecided, and somebody
+        has to pick it up outside the webhook. This records that
+        somebody did — who, when, and their note — on the record
+        as ``breach_notice_acknowledgement``. The acknowledgement
+        marks the notice *worked*: it leaves the exhaustion
+        worklist and the digest's count, and stays readable on
+        the acknowledged list with the record. It changes nothing
+        else: the delivery ledger is never rewritten (the webhook
+        still never landed, and the record keeps saying so), the
+        case's queue state is untouched, and nothing is sent.
+
+        Only a notice that is exhausted *now* can be acknowledged
+        — the same computation the worklist reads, so what can be
+        acknowledged is exactly what the worklist shows. A notice
+        already acknowledged cannot be acknowledged again: the
+        first acknowledgement is the audit, and a second would
+        blur whose call it was.
+        """
+        from .insights import _exhausted_breach_notices
+
+        store = self._get_store()
+        record = store.get(submission_id)
+        if record is None:
+            raise KeyError(
+                f"Unknown submission_id: {submission_id} (analyze it first)"
+            )
+        if record.breach_notice_acknowledgement is not None:
+            ack = record.breach_notice_acknowledgement
+            raise ValueError(
+                f"The breach notice for {submission_id} was already "
+                f"acknowledged by {ack.get('acknowledged_by')} at "
+                f"{ack.get('acknowledged_at')} — the first "
+                "acknowledgement is the record of the call"
+            )
+        now = now or datetime.now(timezone.utc)
+        exhausted = _exhausted_breach_notices(
+            [record], now, env_int("DISPATCH_ATTEMPT_BUDGET", 8)
+        )
+        if not exhausted:
+            raise ValueError(
+                f"The breach notice for {submission_id} is not "
+                "exhausted — acknowledgement records the human "
+                "pickup of a notice whose delivery ledger spent "
+                "its attempts on a case still awaiting a decision, "
+                "and this notice is not in that state"
+            )
+        acknowledgement = {
+            "acknowledged_by": actor,
+            "acknowledged_at": now.isoformat(timespec="seconds"),
+            "note": note,
+        }
+        record.breach_notice_acknowledgement = acknowledgement
+        store.save(record)
+        return {
+            "submission_id": submission_id,
+            "acknowledgement": acknowledgement,
             "notice": record.sla_breach_notice,
             "attempts": record.sla_breach_attempts,
         }
