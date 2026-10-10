@@ -364,7 +364,40 @@ waiting case is flagged `escalated` in the digest, counted in
 `acknowledged_escalated` (a subset of still-waiting — never a
 second helping of `total_attention`), named in the headline,
 and surfaced on the queue with its acknowledgement attached
-(above).
+(above). The second rung now also **fires outward**: an
+escalation check (`POST /queue/escalation-notifications`,
+console button) POSTs one signed `acknowledged_escalation`
+event through the same webhook seam the breach itself used —
+the case, the acknowledgement it follows, and the second
+window it crossed — recorded on the record with its own
+delivery ledger, so the notice is the dedupe (one firing per
+acknowledgement episode, however often the check runs). A
+failed firing waits for an operator retry
+(`POST /submissions/{id}/acknowledged-escalation/retry`,
+carrying the original snapshot), and an escalation ledger that
+spends its attempts joins the dispatch view's worklist in its
+own list beside the breach notices' — same surface, different
+event: the case *was* told about, and the escalation that said
+it is still waiting is the thing that never landed.
+
+The escalated follow-through notes have a **worked state** of
+their own (`POST /submissions/{id}/status-note/worked`, console
+button): a named operator marks a note worked with their note,
+and the touch is kept on the note itself. The latest touch
+quiets the escalation for one escalation window — the digest,
+the digest counts, and the queue all stop counting the note as
+untouched at once, because they read the one computation — and
+the digest's worked subset keeps the touch auditable (who,
+when, what they recorded). If the loop is still open when the
+window lapses the note escalates again and a further touch can
+be recorded: the worked state is not a quieter place to rot.
+And the digest's counts now carry the **letter-advisory
+aggregates** (`advisory_runs_with`, `advisory_repaired_runs` —
+the same aggregation `/metrics` reports), so a kept digest
+snapshot keeps them too and the trend reads **drafting
+quality** across the kept mornings beside the operations
+movement. A quality signal, not a worklist: the counts never
+enter `total_attention`.
 
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:
@@ -476,7 +509,12 @@ lower the evidence bar. The report itself can also be **kept**
 budgets in force with their sources, the decided cases weighed,
 and per tier the wait distribution and which candidate rows
 were proposal-ready — dated and under the taker's name, never
-on a timer. A **diff** (`GET /queue/sla/calibration/snapshots/diff`)
+on a timer. A kept report can also carry the taker's **label**
+(`label` on the snapshot request, console input) — "the
+post-budget-change report" — because a kept report is cited in
+budget debates and nobody cites `cal-0007`: the label rides
+the snapshot, the kept list, and both sides of the diff, so
+the movement reads in business terms. A **diff** (`GET /queue/sla/calibration/snapshots/diff`)
 reads the two latest kept reports against each other: per tier,
 which rows became proposal-ready and which stopped being,
 beside the budget and decided-count movement that explains the

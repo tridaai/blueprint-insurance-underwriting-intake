@@ -707,6 +707,46 @@ numbers on the submission and its loss records. Line aliases fold too
   consequential write in the console now has a dry run that
   shares the write's own computation, which is what makes
   "preview, then act" a guarantee rather than a promise.
+- **Round 16 gives every rung its missing half: a worked state,
+  a telling, a history, a name.** (1) The worked touch for an
+  escalated follow-through note lives on the note itself
+  (`escalation_touches`) rather than in a second store, because
+  the follow-through computation is the only reader that decides
+  escalation — quieting is computed there, so the digest, the
+  ops counts, and the queue inherit it at once and cannot
+  disagree. A touch quiets for exactly one escalation window,
+  priced by the same knob the escalation itself uses, and
+  re-escalation past the window is the discipline that keeps
+  "worked" from becoming a quieter place to rot; a second touch
+  while quieted is refused because the latest touch is the
+  record of the work, and touches accumulate rather than
+  overwrite, like every ledger in this system. (2) The advisory
+  counts ride the digest counts rather than growing a second
+  snapshot family: one aggregation
+  (`_letter_advisory_aggregate`) feeds `/metrics`, the digest,
+  and thereby the snapshots, so no surface can drift from
+  another — and the counts stay out of `total_attention`,
+  because a count of work must count work; drafting quality is
+  a trend, not a worklist. (3) The escalation webhook mirrors
+  the breach machinery's shape but not its ledger: a different
+  event gets its own notice and attempts on the record, and its
+  exhaustion joins the dispatch worklist in its *own* list —
+  merging it into the breach list would corrupt the breach
+  counts and the digest's "a case nobody was told about"
+  headline, which would be false here: this case was told,
+  twice. The dedupe is the notice's presence, sound because an
+  acknowledgement is recorded once, so there is exactly one
+  episode to announce; the sweep recomputes the rung from the
+  acknowledged read at call time (no timer), and with no
+  webhook configured the episode stays unannounced *and
+  unrecorded*, so configuring the webhook later still
+  announces it. (4) A calibration label is the taker's own
+  words, stored verbatim and never interpreted — the system
+  does not parse, normalise, or dedupe labels, because the
+  handle belongs to the budget debate, not the software;
+  unlabelled snapshots, including every one kept before this
+  round, read as an empty label under the same absence
+  discipline as every other kept-document field.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 
