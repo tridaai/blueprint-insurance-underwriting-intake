@@ -203,6 +203,7 @@ class MockModelBackend:
             ),
             f"Computed loss history: {context.get('loss_summary')}",
             *(context.get("submission_changes") or []),
+            *(context.get("status_note_follow_through") or []),
             f"Risk summary: {context.get('diagnosis_summary') or 'not recorded'}",
             "Risk factors:",
         ]
@@ -383,6 +384,10 @@ class _BaseLLMBackend:
             "changes_since_last": (
                 "\n".join(context.get("submission_changes") or [])
                 or "none recorded (first submission for this insured)"
+            ),
+            "note_follow_through": (
+                "\n".join(context.get("status_note_follow_through") or [])
+                or "none recorded"
             ),
             "discrepancies": "; ".join(context.get("discrepancies", [])) or "none",
             "broker_text": context.get("broker_text") or "none recorded",

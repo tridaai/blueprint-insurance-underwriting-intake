@@ -64,6 +64,7 @@ from .extractor import extract_documents, extraction_discrepancies
 from .facts import compute_facts
 from .guardrails import validate_drafts
 from .guidelines_data import GUIDELINES_VERSION
+from .insights import follow_through_packet_lines, status_note_follow_through
 from .model_backends import DraftContext, estimate_cost_usd
 from .options import build_options
 from .resilience import ResilientBackend
@@ -204,6 +205,7 @@ class AgentState(TypedDict, total=False):
     history: Optional[dict[str, Any]]
     priors: list[dict[str, Any]]
     prior_submission: Optional[dict[str, Any]]
+    prior_status_note: Optional[dict[str, Any]]
     submission_diff: Optional[dict[str, Any]]
     diagnosis: dict[str, Any]
     options: list[dict[str, Any]]
@@ -288,6 +290,19 @@ def _draft_context(
         submission_changes=(
             diff_packet_lines(SubmissionDiff.model_validate(state["submission_diff"]))
             if state.get("submission_diff")
+            else []
+        ),
+        status_note_follow_through=(
+            follow_through_packet_lines(
+                state["prior_status_note"],
+                status_note_follow_through(
+                    state["prior_status_note"],
+                    missing_elements=facts.missing_elements,
+                    blocking_lines=[],
+                    line_of_business=sub.line_of_business,
+                ),
+            )
+            if state.get("prior_status_note")
             else []
         ),
         options=[o.model_dump() for o in options],
@@ -914,6 +929,7 @@ def run_submission(
     history: dict | None = None,
     priors: list[dict] | None = None,
     prior_submission: dict | None = None,
+    prior_status_note: dict | None = None,
     event_sink=None,
     checkpointer: BaseCheckpointSaver | None = None,
     thread_id: str | None = None,
@@ -925,6 +941,9 @@ def run_submission(
     insured/broker (the service layer supplies them);
     ``prior_submission`` is the insured's most recent prior stored
     submission (payload + computed facts) for renewal diffing;
+    ``prior_status_note`` is the stored underwriter status note for
+    an earlier case of this insured (its outstanding snapshot is
+    followed through against this run's facts, into the packet);
     ``event_sink`` receives structured run events; ``checkpointer``
     + ``thread_id`` pause the run at the gate for a later resume.
     """
@@ -944,6 +963,7 @@ def run_submission(
         "history": history,
         "priors": priors or [],
         "prior_submission": prior_submission,
+        "prior_status_note": prior_status_note,
     }
     sink.emit(
         RunEvent(

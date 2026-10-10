@@ -65,6 +65,7 @@ from .insights import (
     queue_item_for,
     scorecard,
     scorecards_for,
+    status_note_follow_through,
 )
 from .model_backends import ModelBackend, get_backend
 from .object_store import get_object_store
@@ -475,6 +476,12 @@ class SubmissionService:
         feedback = self._feedback_for(model)
         if feedback:
             history = {**(history or {}), "feedback": feedback}
+        # Status-note follow-through: an earlier case of this
+        # insured breached its SLA and a note was drafted for it;
+        # this resubmission is checked against what that note was
+        # waiting on (packet section, composed in the graph) and the
+        # note's own record is marked with the outcome.
+        note_record = self._prior_status_note_record(model, prior_records)
         result = run_submission(
             model,
             backend=backend,
@@ -482,6 +489,7 @@ class SubmissionService:
             history=history,
             priors=priors,
             prior_submission=self._prior_submission_for(model, prior_records),
+            prior_status_note=note_record.status_note if note_record else None,
             event_sink=event_sink,
             checkpointer=self._get_checkpointer(),
             thread_id=model.submission_id,
@@ -489,6 +497,8 @@ class SubmissionService:
         self._get_store().save(
             ApprovalRecord(result=result, submission=self._archive_documents(model))
         )
+        if note_record is not None:
+            self._record_note_follow_through(note_record, result)
         return result
 
     def _analyze_bundle(
@@ -529,6 +539,11 @@ class SubmissionService:
         feedback = self._feedback_for(model)
         if feedback:
             history = {**(history or {}), "feedback": feedback}
+        # Status-note follow-through, as in the single-line path:
+        # each line's sub-analysis checks the note's snapshot scoped
+        # to its own line, and the note's record is marked from the
+        # rolled-up bundle result once the bundle is saved.
+        note_record = self._prior_status_note_record(model, prior_records)
 
         analyses: list[LineAnalysis] = []
         for sub in subs:
@@ -539,6 +554,7 @@ class SubmissionService:
                 history=history,
                 priors=priors,
                 prior_submission=self._prior_submission_for(sub, prior_records),
+                prior_status_note=note_record.status_note if note_record else None,
                 event_sink=event_sink,
                 checkpointer=None,
             )
@@ -714,6 +730,8 @@ class SubmissionService:
         self._get_store().save(
             ApprovalRecord(result=result, submission=self._archive_documents(model))
         )
+        if note_record is not None:
+            self._record_note_follow_through(note_record, result)
         return result
 
     def analyze_batch(
@@ -832,6 +850,69 @@ class SubmissionService:
                 "facts": record.result.facts.model_dump(mode="json"),
             }
         return None
+
+    def _prior_status_note_record(
+        self, model: SubmissionInput, prior_records: list[ApprovalRecord]
+    ) -> ApprovalRecord | None:
+        """The most recent prior record for this insured that carries
+        a drafted status note, or None.
+
+        The note was drafted because an earlier case of this insured
+        breached its SLA; when the insured submits again, that note
+        is followed through against the new submission (the packet
+        section the graph composes, and the marking on the note's
+        own record below). Most recent wins — an older note for the
+        same insured was superseded by the newer case's note.
+        """
+        if not model.insured_name:
+            return None
+        for record in reversed(prior_records):
+            if record.status_note is None:
+                continue
+            insured = record.result.insured_name or record.submission.get(
+                "insured_name", ""
+            )
+            if insured == model.insured_name:
+                return record
+        return None
+
+    def _record_note_follow_through(
+        self, note_record: ApprovalRecord, result: AgentResult
+    ) -> None:
+        """Mark a followed-through status note on its own record.
+
+        The new analysis checked the note's outstanding snapshot
+        against its computed facts (the same computation the packet
+        section reports — one function, two surfaces, so they
+        cannot disagree). The marking records the state (answered /
+        partially answered / still outstanding), the item lists,
+        and which submission did the answering; the note's original
+        text and snapshot are never rewritten, so a stale note can
+        never quietly read as the current state of the case.
+        """
+        follow = status_note_follow_through(
+            note_record.status_note or {},
+            missing_elements=result.facts.missing_elements,
+            blocking_lines=[
+                {
+                    "line_of_business": a.line_of_business,
+                    "missing_items": list(a.result.facts.missing_elements),
+                }
+                for a in result.line_analyses
+                if a.result.facts.missing_elements
+            ],
+        )
+        note_record.status_note = {
+            **(note_record.status_note or {}),
+            "follow_through": {
+                **follow,
+                "by_submission_id": result.submission_id,
+                "checked_at": datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                ),
+            },
+        }
+        self._get_store().save(note_record)
 
     def _feedback_for(self, submission: SubmissionInput) -> list[dict]:
         """Recent underwriter feedback matching this insured or broker.
@@ -1299,6 +1380,23 @@ class SubmissionService:
                 "budget_days": item["sla_budget_days"],
                 "age_days": item["age_days"],
                 "days_over": item["sla_days_over"],
+            },
+            # What this case was waiting on when the note was
+            # drafted — the snapshot a later resubmission's
+            # follow-through is checked against (see
+            # insights.status_note_follow_through). The note's prose
+            # says it in words; this says it in data, so the check
+            # is computed, not re-read from text.
+            "outstanding": {
+                "missing_elements": list(record.result.facts.missing_elements),
+                "gap_sources": list(record.result.facts.gap_sources),
+                "blocking_lines": [
+                    {
+                        "line_of_business": entry["line_of_business"],
+                        "missing_items": list(entry["missing_items"]),
+                    }
+                    for entry in item["blocking_lines"]
+                ],
             },
             "validation": validation.model_dump(mode="json"),
         }

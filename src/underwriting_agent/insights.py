@@ -775,6 +775,176 @@ def compose_status_note(
 
 
 # ---------------------------------------------------------------------------
+# Status-note follow-through — what the note said was outstanding,
+# checked against what the next submission actually brought
+# ---------------------------------------------------------------------------
+
+
+def status_note_follow_through(
+    note: dict,
+    *,
+    missing_elements: list[str],
+    blocking_lines: list[dict],
+    line_of_business: str | None = None,
+) -> dict:
+    """Check a stored status note's outstanding items against a new
+    submission's computed facts.
+
+    The note snapshots what was outstanding when it was drafted
+    (``note["outstanding"]``: whole-submission missing elements and
+    per-line blocking items). A resubmission from the same insured
+    answers some of it, or none of it — this computes which, in
+    code, from the new run's facts: an outstanding item is *still
+    outstanding* when the same element is missing in the new facts
+    (at note level, or on the blocking line it belonged to), and
+    *answered* when it is missing nowhere relevant any more.
+
+    ``line_of_business`` scopes the check to one line's run (a
+    bundle's per-line sub-analysis): only the note-level items and
+    that line's blocking items are judged, against that line's
+    missing elements. Without it, the check reads the new result
+    whole (the service's record-marking path).
+
+    Notes drafted before the outstanding snapshot existed carry
+    nothing to check: the result says so (``recorded`` False,
+    state ``not_recorded``) instead of pretending the note was
+    answered.
+    """
+    note = note or {}
+    base = {
+        "prior_submission_id": note.get("submission_id", ""),
+        "note_drafted_at": note.get("drafted_at", ""),
+    }
+    outstanding = note.get("outstanding")
+    if outstanding is None:
+        return {
+            **base,
+            "recorded": False,
+            "state": "not_recorded",
+            "answered": [],
+            "still_outstanding": [],
+        }
+    entries: list[dict] = [
+        {"line": "", "item": item}
+        for item in outstanding.get("missing_elements") or []
+    ]
+    for entry in outstanding.get("blocking_lines") or []:
+        entries += [
+            {"line": entry.get("line_of_business", ""), "item": item}
+            for item in entry.get("missing_items") or []
+        ]
+    if line_of_business:
+        target = normalize_line(line_of_business)
+        entries = [
+            e
+            for e in entries
+            if not e["line"] or normalize_line(e["line"]) == target
+        ]
+    current_missing = set(missing_elements or [])
+    current_by_line = {
+        normalize_line(b.get("line_of_business", "")): set(
+            b.get("missing_items") or []
+        )
+        for b in blocking_lines or []
+    }
+
+    def _still(entry: dict) -> bool:
+        if entry["item"] in current_missing:
+            return True
+        if entry["line"]:
+            return entry["item"] in current_by_line.get(
+                normalize_line(entry["line"]), set()
+            )
+        if line_of_business:
+            return entry["item"] in current_by_line.get(
+                normalize_line(line_of_business), set()
+            )
+        return False
+
+    answered = [e for e in entries if not _still(e)]
+    still = [e for e in entries if _still(e)]
+    if not entries:
+        state = "nothing_outstanding"
+    elif not still:
+        state = "answered"
+    elif not answered:
+        state = "still_outstanding"
+    else:
+        state = "partially_answered"
+    return {
+        **base,
+        "recorded": True,
+        "state": state,
+        "answered": answered,
+        "still_outstanding": still,
+    }
+
+
+def _follow_items_text(entries: list[dict]) -> str:
+    return "; ".join(
+        f"{e['item']} ({e['line']})" if e["line"] else e["item"] for e in entries
+    )
+
+
+def follow_through_packet_lines(note: dict, follow: dict) -> list[str]:
+    """The follow-through as a section of the new submission's packet.
+
+    The note was drafted for the underwriter on an earlier case; the
+    packet of the case that answers it is where the loop closes —
+    what was outstanding then, what arrived with this submission,
+    what is still missing — so the earlier note never reads as the
+    current state of the case. Status only, like the note itself.
+    """
+    header = (
+        f"Follow-through on the underwriter status note for "
+        f"{follow['prior_submission_id'] or 'an earlier submission'}"
+        + (
+            f" (drafted {follow['note_drafted_at'][:10]}):"
+            if follow["note_drafted_at"]
+            else ":"
+        )
+    )
+    if not follow["recorded"]:
+        return [
+            header,
+            "- that note predates outstanding-item tracking, so there "
+            "is nothing recorded to check this submission against; "
+            "read this case on its own facts.",
+        ]
+    if follow["state"] == "nothing_outstanding":
+        return [
+            header,
+            "- the note recorded nothing outstanding: the earlier case "
+            "was complete and waiting on a decision, and this "
+            "submission is read on its own facts.",
+        ]
+    outstanding = follow["answered"] + follow["still_outstanding"]
+    lines = [
+        header,
+        f"- outstanding when the note was drafted: {_follow_items_text(outstanding)}",
+        "- arrived with this submission: "
+        + (_follow_items_text(follow["answered"]) if follow["answered"] else "none of it"),
+        "- still outstanding: "
+        + (
+            _follow_items_text(follow["still_outstanding"])
+            if follow["still_outstanding"]
+            else "none"
+        ),
+    ]
+    lines.append(
+        {
+            "answered": "- the note is answered: everything it waited on "
+            "has arrived with this submission.",
+            "partially_answered": "- the note is partially answered: it "
+            "stays open on the items still outstanding above.",
+            "still_outstanding": "- none of the note's outstanding items "
+            "arrived; the note still describes what this case is waiting on.",
+        }[follow["state"]]
+    )
+    return lines
+
+
+# ---------------------------------------------------------------------------
 # Insured loss-development timeline
 # ---------------------------------------------------------------------------
 

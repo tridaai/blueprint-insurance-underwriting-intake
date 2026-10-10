@@ -41,9 +41,13 @@ class ApprovalRecord:
     # it and load with an empty ledger.
     dispatch_attempts: list[dict] = field(default_factory=list)
     # The drafted queue status note for an SLA-breached case (see
-    # service.draft_status_note): {text, drafted_at, sla, validation}
-    # or None when none has been drafted. An internal draft — it is
-    # stored on the record and never sent. Older payloads predate it.
+    # service.draft_status_note): {text, drafted_at, sla, validation,
+    # outstanding} or None when none has been drafted. ``outstanding``
+    # snapshots what the case was waiting on; a later resubmission
+    # from the same insured adds a ``follow_through`` marking to the
+    # note (see service._record_note_follow_through) without ever
+    # rewriting the note itself. An internal draft — it is stored on
+    # the record and never sent. Older payloads predate it.
     status_note: dict | None = None
     # The SLA-breach webhook notice (see service.notify_sla_breaches):
     # set the first time the queue projection observes this record
