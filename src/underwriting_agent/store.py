@@ -77,6 +77,20 @@ class ApprovalRecord:
     # webhook delivered, and it never touches the attempts
     # ledger. Older payloads predate it.
     breach_notice_acknowledgement: dict | None = None
+    # The acknowledged-escalation webhook notice (see
+    # service.notify_acknowledged_escalations): set the first
+    # time an acknowledged-but-still-waiting case is observed
+    # past the second rung (twice the follow-through window)
+    # AND an escalation dispatch was attempted —
+    # {first_observed_at, insured_name, broker_name, risk_tier,
+    # acknowledgement, acknowledged_age_days,
+    # escalation_window_days, dispatch_status}. Its presence is
+    # the dedupe: one firing per acknowledgement episode (an
+    # acknowledgement is recorded once, so one episode per
+    # record). The attempts live in their own ledger below.
+    # Older payloads predate both fields.
+    escalation_notice: dict | None = None
+    escalation_attempts: list[dict] = field(default_factory=list)
 
 
 def history_entry(record: ApprovalRecord) -> dict:
@@ -148,6 +162,8 @@ def _record_to_dict(record: ApprovalRecord) -> dict:
         "sla_breach_notice": record.sla_breach_notice,
         "sla_breach_attempts": record.sla_breach_attempts,
         "breach_notice_acknowledgement": record.breach_notice_acknowledgement,
+        "escalation_notice": record.escalation_notice,
+        "escalation_attempts": record.escalation_attempts,
     }
 
 
@@ -170,6 +186,8 @@ def _record_from_dict(data: dict) -> ApprovalRecord:
         sla_breach_notice=data.get("sla_breach_notice"),
         sla_breach_attempts=data.get("sla_breach_attempts") or [],
         breach_notice_acknowledgement=data.get("breach_notice_acknowledgement"),
+        escalation_notice=data.get("escalation_notice"),
+        escalation_attempts=data.get("escalation_attempts") or [],
     )
 
 

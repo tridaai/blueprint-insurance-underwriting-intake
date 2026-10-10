@@ -63,6 +63,7 @@ from .insights import (
     digest_trend,
     dispatch_overview,
     follow_through_digest,
+    follow_through_escalation_days,
     inbox_groups,
     insured_loss_timeline,
     next_snapshot_id,
@@ -259,6 +260,58 @@ def _dispatch_sla_breach(
         }
     else:
         record.sla_breach_notice["dispatch_status"] = entry["status"]
+    return entry
+
+
+def _escalation_snapshot(entry: dict, wait_days: int) -> dict:
+    """The escalation facts a notice carries, taken from a
+    still-waiting entry — the same projection the ops digest and
+    the queue render, so the webhook, the digest, and the queue
+    can never disagree about an escalation: the case, the first
+    call (the acknowledgement it carries), and the second rung
+    it crossed."""
+    return {
+        "submission_id": entry["submission_id"],
+        "insured_name": entry["insured_name"],
+        "broker_name": entry["broker_name"],
+        "risk_tier": entry.get("risk_tier") or "",
+        "acknowledgement": entry.get("acknowledgement"),
+        "acknowledged_age_days": entry.get("acknowledged_age_days"),
+        "escalation_window_days": 2 * wait_days,
+    }
+
+
+def _dispatch_escalation(
+    record: ApprovalRecord, snapshot: dict, detected_at: str
+) -> dict | None:
+    """One acknowledged-escalation dispatch attempt, for the
+    record's escalation ledger.
+
+    The payload is the escalation event — an acknowledged case
+    still undecided a second window later — not a packet:
+    nothing is decided, quoted, or bound by it; it tells the
+    customer's system of choice that the second rung has been
+    crossed. Returns the ledger entry, or ``None`` when no
+    webhook is configured (nothing fired, nothing recorded).
+    """
+    payload = {
+        "event": "acknowledged_escalation",
+        "status": "awaiting_underwriter",
+        "detected_at": detected_at,
+        **snapshot,
+    }
+    entry = _post_webhook(payload, len(record.escalation_attempts) + 1)
+    if entry is None:
+        return None
+    record.escalation_attempts.append(entry)
+    if record.escalation_notice is None:
+        record.escalation_notice = {
+            "first_observed_at": detected_at,
+            **snapshot,
+            "dispatch_status": entry["status"],
+        }
+    else:
+        record.escalation_notice["dispatch_status"] = entry["status"]
     return entry
 
 
@@ -1277,6 +1330,169 @@ class SubmissionService:
             "submission_id": submission_id,
             "notice": record.sla_breach_notice,
             "attempts": record.sla_breach_attempts,
+        }
+
+    def notify_acknowledged_escalations(
+        self, now: datetime | None = None
+    ) -> dict:
+        """Fire the ``acknowledged_escalation`` webhook for cases
+        on the second rung.
+
+        The first rung told the customer's system of choice that
+        a case breached; an operator acknowledged the case — the
+        call happened — and a second follow-through window later
+        the file still has not moved. Every in-app surface flags
+        that (the ops digest's still-waiting section, the queue's
+        escalated acknowledgements), but until now nothing left
+        the building. This is the telling, through the same
+        output-routing seam as approvals and breaches
+        (``ACTION_WEBHOOK_URL``, HMAC-signed when
+        ``ACTION_WEBHOOK_SECRET`` is set): the first time the
+        still-waiting projection observes a case past the second
+        rung, one ``acknowledged_escalation`` event is POSTed and
+        the notice is recorded on the record — the record of the
+        notice is the dedupe, one firing per acknowledgement
+        episode (an acknowledgement is recorded once, so one
+        episode per record), however often the check runs. A
+        failed firing is a ledger entry on the record's
+        escalation ledger, retryable by an operator (see
+        :meth:`retry_escalation_notice`); its exhaustion joins
+        the dispatch worklist beside the breach notices'.
+
+        The crossing is computed from the still-waiting
+        projection at call time — there is no timer in the
+        service; an operator (or a scheduler hitting the
+        endpoint) runs the check. With no webhook configured
+        nothing fires and nothing is recorded: the escalations
+        are reported as observed-but-unannounced, so configuring
+        the webhook later still announces them.
+        """
+        from .insights import (
+            _acknowledged_still_waiting,
+            _exhausted_breach_notices,
+        )
+
+        now = now or datetime.now(timezone.utc)
+        detected_at = now.isoformat(timespec="seconds")
+        store = self._get_store()
+        records = store.all_records()
+        wait_days = follow_through_escalation_days()
+        acknowledged = _exhausted_breach_notices(
+            records,
+            now,
+            env_int("DISPATCH_ATTEMPT_BUDGET", 8),
+            acknowledged=True,
+        )
+        escalated = [
+            entry
+            for entry in _acknowledged_still_waiting(
+                acknowledged, now, wait_days
+            )
+            if entry["escalated"]
+        ]
+        by_id = {r.result.submission_id: r for r in records}
+        fired: list[dict] = []
+        already_notified: list[str] = []
+        unannounced: list[str] = []
+        for entry in escalated:
+            record = by_id.get(entry["submission_id"])
+            if record is None:
+                continue
+            if record.escalation_notice is not None:
+                already_notified.append(entry["submission_id"])
+                continue
+            attempt = _dispatch_escalation(
+                record, _escalation_snapshot(entry, wait_days), detected_at
+            )
+            if attempt is None:
+                unannounced.append(entry["submission_id"])
+                continue
+            store.save(record)
+            fired.append(
+                {
+                    "submission_id": entry["submission_id"],
+                    "dispatch_status": attempt["status"],
+                }
+            )
+        return {
+            "generated_at": detected_at,
+            "escalations": len(escalated),
+            "fired": fired,
+            "already_notified": already_notified,
+            "unannounced_no_webhook": unannounced,
+        }
+
+    def retry_escalation_notice(self, submission_id: str) -> dict:
+        """Retry a failed acknowledged-escalation dispatch.
+
+        The notice fired once (see
+        :meth:`notify_acknowledged_escalations`) and the receiver
+        did not take it; the retry is a new attempt on the
+        record's escalation ledger carrying the original
+        escalation snapshot (the crossing that was observed, at
+        the acknowledgement age it was observed — a retry does
+        not rewrite the episode with today's age). Only a notice
+        whose latest attempt failed has anything to retry. The
+        queue case itself is untouched — output routing never
+        changes a case's state.
+        """
+        store = self._get_store()
+        record = store.get(submission_id)
+        if record is None:
+            raise KeyError(
+                f"Unknown submission_id: {submission_id} (analyze it first)"
+            )
+        notice = record.escalation_notice
+        if notice is None:
+            raise ValueError(
+                f"No escalation notice has fired for {submission_id} — "
+                "nothing to retry (run the escalation check first)"
+            )
+        if not record.escalation_attempts or (
+            record.escalation_attempts[-1]["status"] != "failed"
+        ):
+            raise ValueError(
+                f"Escalation notice for {submission_id} is not in a "
+                f"failed state (status: {notice.get('dispatch_status')}) "
+                "— nothing to retry"
+            )
+        snapshot = {
+            key: notice[key]
+            for key in (
+                "submission_id",
+                "insured_name",
+                "broker_name",
+                "risk_tier",
+                "acknowledgement",
+                "acknowledged_age_days",
+                "escalation_window_days",
+            )
+        }
+        entry = _dispatch_escalation(
+            record, snapshot, notice["first_observed_at"]
+        )
+        if entry is None:
+            raise ValueError(
+                "ACTION_WEBHOOK_URL is not configured — the failed "
+                "escalation notice cannot be retried until it is set"
+            )
+        store.save(record)
+        return {
+            "submission_id": submission_id,
+            "notice": record.escalation_notice,
+            "attempts": record.escalation_attempts,
+        }
+
+    def acknowledged_escalation(self, submission_id: str) -> dict | None:
+        """The escalation notice + delivery ledger for one
+        submission, or None when the submission is unknown."""
+        record = self._get_store().get(submission_id)
+        if record is None:
+            return None
+        return {
+            "submission_id": submission_id,
+            "notice": record.escalation_notice,
+            "attempts": record.escalation_attempts,
         }
 
     def acknowledge_exhausted_breach_notice(

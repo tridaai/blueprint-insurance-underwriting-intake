@@ -1002,6 +1002,52 @@ def retry_sla_breach(submission_id: str) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@app.post("/queue/escalation-notifications", dependencies=_AUTH)
+def notify_acknowledged_escalations() -> dict:
+    """Run the acknowledged-escalation check: the first time an
+    acknowledged-but-still-waiting case is observed past the
+    second rung (twice the follow-through window), fire one signed
+    ``acknowledged_escalation`` webhook through the output-routing
+    seam and record the notice on the record (the record is the
+    dedupe — one firing per acknowledgement episode, and
+    re-running the check never re-fires). With no
+    ACTION_WEBHOOK_URL configured, escalations are reported as
+    observed-but-unannounced and nothing is recorded."""
+    return service.notify_acknowledged_escalations()
+
+
+@app.get(
+    "/submissions/{submission_id}/acknowledged-escalation",
+    dependencies=_AUTH,
+)
+def acknowledged_escalation(submission_id: str) -> dict:
+    """The acknowledged-escalation notice for one submission and
+    its own delivery ledger (separate from the breach ledger: a
+    different event). ``notice`` is null until an escalation check
+    has fired for it."""
+    view = service.acknowledged_escalation(submission_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="Submission not analyzed yet.")
+    return view
+
+
+@app.post(
+    "/submissions/{submission_id}/acknowledged-escalation/retry",
+    dependencies=_AUTH,
+)
+def retry_acknowledged_escalation(submission_id: str) -> dict:
+    """Retry a failed acknowledged-escalation dispatch: a new
+    attempt on the escalation ledger, carrying the original
+    escalation snapshot. The queue case itself is never changed
+    by output routing."""
+    try:
+        return service.retry_escalation_notice(submission_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.get("/submissions/{submission_id}/dispatch", dependencies=_AUTH)
 def dispatch_ledger(submission_id: str) -> dict:
     """The approval-webhook delivery ledger for one submission:

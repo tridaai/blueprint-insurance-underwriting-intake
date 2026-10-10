@@ -1806,6 +1806,85 @@ def _exhausted_breach_notices(
     return entries
 
 
+def _exhausted_escalation_notices(
+    records: list[ApprovalRecord],
+    now: datetime,
+    attempt_budget: int,
+) -> list[dict]:
+    """Acknowledged-escalation notices that exhausted their own
+    delivery ledger.
+
+    The second rung has its own ledger (see
+    ``ApprovalRecord.escalation_attempts``), read exactly the
+    way the breach notices' ledger is read (see
+    :func:`_exhausted_breach_notices`): the ledger has spent the
+    shared attempt budget, the latest attempt still failed, and
+    the case is still awaiting a decision. The event is a
+    different one, and the entries keep the difference visible:
+    a breach exhaustion means **nobody was told**; an escalation
+    exhaustion means the case was told about, acknowledged, left
+    waiting past the second window — and the escalation that
+    said so is the thing that never landed. The acknowledgement
+    the escalation carried rides on the entry, so the worklist
+    shows the whole chain: told, called, still waiting, and the
+    escalation undelivered.
+
+    Each entry ages from the escalation's first observation,
+    bucketed on the queue's day buckets, oldest first — the
+    breach entries' shape, so the two lists read alike.
+    """
+    entries: list[dict] = []
+    for record in records:
+        notice = record.escalation_notice
+        attempts = record.escalation_attempts or []
+        if not notice or not attempts:
+            continue
+        if record.result.status != "awaiting_underwriter":
+            continue
+        last = attempts[-1]
+        if last.get("status") != "failed" or len(attempts) < attempt_budget:
+            continue
+        entry = history_entry(record)
+        first_at = _parse_timestamp(attempts[0].get("attempted_at") or "")
+        observed = _parse_timestamp(notice.get("first_observed_at") or "")
+        anchor = observed or first_at
+        age_days = (
+            max(0, (now.date() - anchor.date()).days)
+            if anchor is not None
+            else None
+        )
+        entries.append(
+            {
+                "submission_id": record.result.submission_id,
+                "insured_name": entry["insured_name"],
+                "broker_name": entry["broker_name"],
+                "notice_kind": "acknowledged_escalation",
+                "risk_tier": notice.get("risk_tier")
+                or record.result.triage.risk_tier,
+                "acknowledgement": notice.get("acknowledgement"),
+                "acknowledged_age_days": notice.get(
+                    "acknowledged_age_days"
+                ),
+                "first_observed_at": notice.get("first_observed_at") or "",
+                "attempts": len(attempts),
+                "attempts_remaining": 0,
+                "first_attempt_at": attempts[0].get("attempted_at") or "",
+                "last_attempt_at": last.get("attempted_at") or "",
+                "last_http_status": last.get("http_status"),
+                "last_error": last.get("error"),
+                "notice_age_days": age_days,
+                "notice_age_bucket": (
+                    _age_bucket(age_days) if age_days is not None else None
+                ),
+                "_sort": anchor or datetime.max.replace(tzinfo=timezone.utc),
+            }
+        )
+    entries.sort(key=lambda e: (e["_sort"], e["submission_id"]))
+    for entry in entries:
+        entry.pop("_sort", None)
+    return entries
+
+
 def dispatch_overview(
     records: list[ApprovalRecord],
     now: datetime | None = None,
@@ -1848,6 +1927,14 @@ def dispatch_overview(
     longer silently rotting — but the worked ones stay visible
     with their acknowledgement, because "we called" is a claim
     the record should be able to show.
+
+    The second rung's notices join this same worklist when
+    their own ledger exhausts (see
+    :func:`_exhausted_escalation_notices`): an exhausted
+    ``acknowledged_escalation`` is the same operational shape —
+    a signed event that spent its attempts on a case still
+    awaiting a decision — so it is worked from the same surface
+    in its own list, not from a new one.
     """
     now = now or datetime.now(timezone.utc)
     if stuck_age_hours is None:
@@ -1933,6 +2020,9 @@ def dispatch_overview(
     acknowledged_notices = _exhausted_breach_notices(
         records, now, attempt_budget, acknowledged=True
     )
+    exhausted_escalations = _exhausted_escalation_notices(
+        records, now, attempt_budget
+    )
     notice_buckets: dict[str, list[str]] = {
         label: [] for label, _, _ in QUEUE_AGE_BUCKETS
     }
@@ -1970,6 +2060,8 @@ def dispatch_overview(
         "exhausted_breach_count": len(exhausted_notices),
         "acknowledged_breach_notices": acknowledged_notices,
         "acknowledged_breach_count": len(acknowledged_notices),
+        "exhausted_escalation_notices": exhausted_escalations,
+        "exhausted_escalation_count": len(exhausted_escalations),
         "exhausted_breach_age_buckets": [
             {
                 "bucket": label,
