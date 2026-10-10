@@ -241,7 +241,19 @@ The markings are also **digested into the inbox**
 insureds — answered, partially answered, still outstanding, and
 the notes no resubmission has reached yet — oldest outstanding
 first, so the loop that has been open longest is the one the
-underwriter sees first.
+underwriter sees first. An open loop also **ages**: a note whose
+loop has been open at least `FOLLOW_THROUGH_ESCALATION_DAYS`
+(default 14) is flagged **escalated** — the note's own flag, not
+an SLA breach, since the case may be decided while the note rots.
+
+All of it composes into one **ops digest** (`GET /ops/digest`,
+and a console panel): the surfaces that rot quietly — approval
+dispatches stuck failing with retries left, queue cases past
+their SLA budget, follow-through still outstanding (escalated
+ones named), and calibration proposals nearing or past their
+evidence expiry — under one composed headline with the entries
+behind it. Computed at read time, never sent; reading it retries
+nothing, refreshes nothing, and decides nothing.
 
 **Renewals** — when an insured submits again, the new run diffs
 itself against the insured's most recent stored submission, in code:
@@ -332,13 +344,23 @@ scan against the store as it stands — renewed in place with a
 fresh snapshot when the evidence still carries a one-sided move,
 **withdrawn** with the reason recorded when it no longer does —
 and every refresh lands on the proposal's audit list with the
-stale snapshot it replaced. And acceptance is no longer one-way:
-either settings record can be **reverted**
-(`POST /calibration/settings/revert`,
+stale snapshot it replaced. An operator facing a fortnight of
+expired drafts refreshes them in **one sweep**
+(`POST /calibration/proposals/refresh-expired`): each draft's
+scan still re-runs individually, and the report lists renewals
+and withdrawals side by side — the sweep decides nothing. And
+acceptance is no longer one-way: either settings record can be
+**reverted** (`POST /calibration/settings/revert`,
 `POST /queue/sla/settings/revert`), restoring its latest change's
 prior value as a *new* history entry naming the proposal it
-undoes — the record is append-only, so the way back is itself
-auditable.
+undoes — or **restored to any prior history entry's state**
+(`POST /calibration/settings/restore`,
+`POST /queue/sla/settings/restore`, body `history_index`): the
+values as of that entry, written as one audited change naming
+the entry restored to, however many dimensions move — so a bad
+*sequence* of accepts is undone in one decision, not one revert
+per change. The record is append-only either way, so the way
+back is itself auditable — and a restore can itself be reverted.
 
 **Multi-line submissions** — a broker often submits the whole
 account at once, so intake accepts a bundle (`lines` on the
@@ -500,6 +522,8 @@ load-bearing ones:
 | `API_KEY` | optional `X-API-Key` gate for the API | off |
 | `QUEUE_SLA_DAYS_ELEVATED` / `_HIGH` / `_MODERATE` / `_LOW` | queue SLA budget in days by risk tier (base values — an accepted SLA proposal's settings record overrides per tier) | 2 / 3 / 5 / 7 |
 | `PROPOSAL_EXPIRY_DAYS` | days a drafted calibration proposal (threshold or SLA budget) stays decidable before its evidence is stale and it must be refreshed | `14` |
+| `FOLLOW_THROUGH_ESCALATION_DAYS` | days a status note's follow-through loop may stay open before the digest flags it escalated | `14` |
+| `OPS_DIGEST_PROPOSAL_EXPIRY_WARNING_DAYS` | days before a live proposal's evidence expiry at which the ops digest lists it as nearing expiry | `3` |
 | `DATABASE_URL` | PostgreSQL DSN — store, checkpoints, pgvector | unset → in-memory test doubles |
 | `S3_BUCKET` / `S3_ENDPOINT_URL` / `S3_REGION` | document object storage (S3-compatible) | unset → documents inline only |
 | `CHECKPOINTS` | gate checkpointing `on`/`off` | `on` |

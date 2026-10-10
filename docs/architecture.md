@@ -530,6 +530,31 @@ numbers on the submission and its loss records. Line aliases fold too
   proposal — revert is itself a change, so the audit trail is
   append-only end to end, and reverting a revert is just the
   same rule one level down.
+- **Round 10 gives operations one worklist, and settings a full
+  way back.** (1) The ops digest (`insights.ops_digest`,
+  `GET /ops/digest`): the four rotting-quietly projections —
+  `dispatch_overview`'s stuck failures, `queue_aging`'s breaches
+  (against the budgets in force), the follow-through digest's
+  outstanding entries, and the proposals' expiry state — composed
+  into one read with a deterministic headline. It is a pure
+  composition of existing projections, so the digest can never
+  disagree with the screen each surface came from. (2)
+  Follow-through ages: an open loop past
+  `FOLLOW_THROUGH_ESCALATION_DAYS` is flagged escalated *in the
+  digest itself* (one flag, read by both the inbox and the ops
+  digest) — deliberately not an SLA breach: the note and the case
+  have different clocks. (3) The refresh-all sweep
+  (`proposals.refresh_expired_proposals`) is a loop over the
+  per-proposal refresh, never a bulk path around it — each
+  draft's audit entry is written by the same code that writes a
+  single refresh. (4) Point-in-history restore:
+  `_values_as_of` replays the environment base through the
+  history to any entry — flat entries and the `changes`-carrying
+  entries (restores, and reverts of restores) alike — and the
+  restore appends one entry naming its target, so recovery from
+  a mis-tuned sequence is one audited decision; `_revert_settings_change`
+  learned the `changes` shape, which makes a restore revertible
+  by the same rule as everything else.
 - **Synthetic data only**, enforced socially (CONTRIBUTING) rather
   than technically — a real deployment must add data governance.
 
