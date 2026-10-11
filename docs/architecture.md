@@ -589,7 +589,12 @@ numbers on the submission and its loss records. Line aliases fold too
   proves nothing — and candidate rows carrying the moved set
   against the budget in force, flagged `proposal_ready` exactly
   when `_best_sla_candidate` would draft from it. The report and
-  the proposal scan are two reads of one evidence base.
+  the proposal scan are two reads of one evidence base. The
+  console's calibration panel renders that same report as
+  per-tier tables — budget and source, the wait distribution,
+  and every candidate row's breach counts and decision splits
+  with the in-force row marked — so the tables an operator
+  reads are the report itself, not a second computation.
   (2) A breach notice's ledger is a different event from an
   approval ledger, so exhaustion is computed from the notice's
   own attempts (`_exhausted_breach_notices`): budget spent, last

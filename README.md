@@ -664,7 +664,12 @@ plus the cases each candidate would move against the budget in
 force, marked `proposal_ready` when that moved set is exactly
 the one-sided evidence a proposal would be drafted from — so a
 human can read why a proposal exists, or why none does, without
-re-deriving it. Read-only, like the trigger calibration.
+re-deriving it. Read-only, like the trigger calibration. The
+console's calibration panel renders the report as per-tier
+tables — each tier's budget and source, its decided-wait
+distribution, and every candidate row's breach counts and
+decision splits, the in-force row marked — beside the
+proposal-ready summary.
 
 The report is no longer only readable, though. An operator can
 **draft from a row** (`POST /queue/sla/calibration/draft`, body
