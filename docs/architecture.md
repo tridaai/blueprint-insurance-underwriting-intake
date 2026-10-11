@@ -308,6 +308,39 @@ and the result carries the recommendation plus the reasons. Nothing
 acts on it. It exists so an adopting team can see, case by case,
 what a future autonomy policy would have to be comfortable with.
 
+### 4.11 Duplicate detection flags; it never merges
+
+`duplicates.py` compares stored submissions pairwise, in code —
+no model call. The score is a weighted sum over the fields the
+intake schema actually carries (insured name, class, line,
+effective date, revenue, requested limit; the schema has no
+street address or ZIP, so no address signal is scored and the
+policy block on every finding says so). Name similarity
+dominates and gates: names are normalised deterministically
+(case, punctuation, legal-entity suffixes, and word order set
+aside; tokens compared fuzzily so "Vineyards" meets "Vineyard"),
+and below the gate a pair is not scored at all. Findings land in
+a review queue with the field-by-field evidence; the human's
+verdict is stored per pair on a service document, so a dismissed
+pair (the common case is a renewal) never re-opens. Neither
+submission record is written by detection or by resolution.
+
+### 4.12 The final decision is a separate, append-only record
+
+The gate decision judges the drafted packet (approve / reject).
+What the desk ultimately did with the risk — bound, declined,
+not taken up — is a different fact, recorded by
+`service.record_final_decision` as an append-only entry on the
+store record and projected onto the result. A correction appends
+a superseding entry; the history is the audit. `agreement.py`
+reads the current entry per record against the triage outcome:
+in-appetite expects bound, out-of-appetite expects declined,
+borderline carries no expectation, and not-taken-up is never
+decisive (the broker walked away — that neither confirms nor
+refutes triage). The report is counts per band and per tier,
+with the agreement rate computed over decisive pairs only and a
+small-sample note that fires below ten of them.
+
 ## 5. Data model
 
 Pydantic throughout (`schemas.py`). The boundaries that matter:

@@ -297,6 +297,30 @@ default 25), costed from the backend's own usage, and reported
 separately from the rules verdicts it never rewrites. Offline it
 reports itself unavailable and calls nothing.
 
+The same risk arriving twice — through two brokers, under
+slightly different names, with different submission ids — is
+caught by a **duplicate pass over the stored submissions**
+(`GET /duplicates`): pairs are scored in code from the stored
+fields, with insured-name similarity (deterministically
+normalised — suffixes, punctuation, and word order set aside) as
+the dominant term and a hard gate, so two genuinely different
+insureds never flag on figures alone. Every finding carries its
+field-by-field evidence and the policy it was scored under; a
+human confirms or dismisses it (`POST /duplicates/resolve`,
+actor + reason required), a dismissal is remembered per pair,
+and detection itself never merges, blocks, or alters either
+submission. The sample corpus carries a designed cross-broker
+pair (SUB-1015 / SUB-1016) and a near-miss (SUB-1017) that must
+not flag. And because the gate decision only judges the drafted
+packet, the desk's **final outcome** is captured separately
+(`POST /submissions/{id}/final-decision`): bound, declined, or
+not taken up, with the deciding underwriter, the date, and an
+optional reason code — append-only, a correction superseding
+rather than editing. `GET /decisions/agreement` then reads
+triage against outcome, per outcome band and per risk tier:
+in-appetite risks that declined, out-of-appetite risks that
+bound anyway, as plain counts with an honest small-sample note.
+
 The queue itself now runs against an **SLA**: every awaiting item
 in `/queue` carries a budget by risk tier — elevated 2 days, high
 3, moderate 5, low 7 (`QUEUE_SLA_DAYS_<TIER>` to tune; the budget
@@ -1122,6 +1146,9 @@ src/underwriting_agent/
   screening.py      prompt-injection screening of broker text
   diagnosis.py      risk diagnosis over computed evidence
   diffing.py        renewal diff vs the insured's last submission
+  duplicates.py     cross-broker duplicate pass over stored
+                    submissions (code-scored, human-resolved)
+  agreement.py      triage-vs-final-decision agreement counts
   tools_agent.py    the bounded diagnosis tool loop
   options.py        next-step proposals, scored in code
   model_backends.py mock / OpenAI / Anthropic / Ollama backends
