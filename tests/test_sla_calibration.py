@@ -240,3 +240,51 @@ def test_calibration_endpoint(client):
     ]
     assert body["budgets"]["moderate"] == 5
     assert "Read-only" in body["note"]
+
+
+# ---------------------------------------------------------------------------
+# Empty history, and the console's per-tier tables
+# ---------------------------------------------------------------------------
+
+
+def test_an_empty_history_reports_a_valid_empty_report():
+    report = sla_budget_calibration([], BUDGETS)
+    assert report["decided_cases_weighed"] == 0
+    assert [t["tier"] for t in report["tiers"]] == [
+        "elevated", "high", "moderate", "low",
+    ]
+    for tier_block in report["tiers"]:
+        assert tier_block["decided_cases"] == 0
+        assert tier_block["waits"] == {
+            "min": None, "p50": None, "p75": None, "p90": None,
+            "max": None, "mean": None,
+        }
+        # The budget in force is still a row in its own sweep.
+        assert tier_block["at_current"]["is_current"] is True
+        assert tier_block["at_current"]["breached"] == 0
+        assert all(
+            not r["proposal_ready"] for r in tier_block["sweeps"]
+        )
+
+
+def test_console_renders_the_reports_per_tier_tables(client):
+    # The report's per-tier tables are the console's rendering of
+    # the same response the endpoint serves: the panel reads the
+    # report's tiers and draws each tier's budget (with its
+    # source), its decided-wait distribution, and its sweep rows
+    # with breach counts and decision splits — not only the
+    # proposal-ready summary above them.
+    res = client.get("/")
+    assert res.status_code == 200
+    html = res.text
+    assert "Per-tier tables" in html
+    for hook in (
+        "decided_cases_weighed",
+        "budget_source",
+        "breached_decisions",
+        "moved_vs_current",
+        "p50",
+        "p90",
+    ):
+        assert hook in html, hook
+    assert "Moved vs in force" in html
