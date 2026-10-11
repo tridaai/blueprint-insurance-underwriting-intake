@@ -38,7 +38,9 @@ def test_console_is_served(client):
 
 def test_samples_and_guidelines_endpoints(client):
     samples = client.get("/samples").json()
-    assert len(samples) == 14
+    # 17 since the duplicate-detection round added the designed
+    # cross-broker pair (SUB-1015/1016) and its near-miss (SUB-1017).
+    assert len(samples) == 17
     guidelines = client.get("/guidelines").json()
     assert any(g["id"] == "UW-GEN-04" for g in guidelines)
 

@@ -647,5 +647,125 @@
     "submission_id": "SUB-1014",
     "submitted_at": "2026-10-08",
     "years_in_business": 14
+  },
+  {
+    "broker_email_text": "Property submission for Kestrel Ridge Vineyards \u2014 winery, tasting room and cold-storage barn on one location. Sprinklered throughout; loss runs attached.",
+    "broker_name": "Harborline Brokers",
+    "class_of_business": "winery and vineyard operations",
+    "documents": [
+      {
+        "doc_type": "application",
+        "document_id": "sub1015-app",
+        "fields": {
+          "insured_name": "Kestrel Ridge Vineyards LLC",
+          "line_of_business": "property",
+          "requested_limit": "3000000",
+          "revenue": "6400000"
+        },
+        "raw_text": "ACORD application: Kestrel Ridge Vineyards LLC, commercial property \u2014 winery, tasting room and cold-storage barn. Revenue 6400000."
+      },
+      {
+        "doc_type": "loss runs",
+        "document_id": "sub1015-lr",
+        "fields": {
+          "loss_history_present": "yes"
+        },
+        "raw_text": "Carrier loss runs, 2023-2026: one hail claim of $18,500 in 2024, closed."
+      }
+    ],
+    "effective_date_requested": "2026-12-01",
+    "insured_name": "Kestrel Ridge Vineyards LLC",
+    "line_of_business": "property",
+    "losses": [
+      {
+        "amount_incurred": 18500,
+        "date": "2024-06-11",
+        "description": "Hail damage to barn roof",
+        "status": "closed"
+      }
+    ],
+    "notes": "Single location, sprinklered; crush pad equipment included in values.",
+    "prior_carrier": "Granite State Insurance",
+    "requested_deductible": "25000",
+    "requested_limit": "3000000",
+    "revenue": 6400000,
+    "submission_id": "SUB-1015",
+    "submitted_at": "2026-10-07",
+    "years_in_business": 14
+  },
+  {
+    "broker_email_text": "Please find the property submission for Kestrel Ridge Vineyard, LLC. One location \u2014 winery and storage barn, sprinklered. Prior carrier loss runs to follow.",
+    "broker_name": "Meridian Wholesale Brokers",
+    "class_of_business": "winery and vineyard operations",
+    "documents": [
+      {
+        "doc_type": "application",
+        "document_id": "sub1016-app",
+        "fields": {
+          "insured_name": "Kestrel Ridge Vineyard, LLC",
+          "line_of_business": "property",
+          "requested_limit": "3000000",
+          "revenue": "6550000"
+        },
+        "raw_text": "ACORD application: Kestrel Ridge Vineyard, LLC, commercial property \u2014 winery, tasting room and cold-storage barn. Revenue 6550000."
+      }
+    ],
+    "effective_date_requested": "2026-12-15",
+    "insured_name": "Kestrel Ridge Vineyard, LLC",
+    "line_of_business": "property",
+    "losses": [
+      {
+        "amount_incurred": 18500,
+        "date": "2024-06-11",
+        "description": "Hail damage \u2014 barn roof",
+        "status": "closed"
+      }
+    ],
+    "notes": "Winery account referred by the insured's accountant; values per the attached application.",
+    "prior_carrier": "Granite State Insurance",
+    "requested_deductible": "25000",
+    "requested_limit": "3000000",
+    "revenue": 6550000,
+    "submission_id": "SUB-1016",
+    "submitted_at": "2026-10-09",
+    "years_in_business": 14
+  },
+  {
+    "broker_email_text": "Property submission for Alder Creek Storage Partners \u2014 two self-storage buildings, fenced and gated, manager on site.",
+    "broker_name": "Gulf Coast Marine Brokers",
+    "class_of_business": "self storage facilities",
+    "documents": [
+      {
+        "doc_type": "application",
+        "document_id": "sub1017-app",
+        "fields": {
+          "insured_name": "Alder Creek Storage Partners LLC",
+          "line_of_business": "property",
+          "requested_limit": "6000000",
+          "revenue": "9800000"
+        },
+        "raw_text": "ACORD application: Alder Creek Storage Partners LLC, commercial property, two self-storage buildings. Revenue 9800000."
+      },
+      {
+        "doc_type": "loss runs",
+        "document_id": "sub1017-lr",
+        "fields": {
+          "loss_history_present": "yes"
+        },
+        "raw_text": "Carrier loss runs, 2023-2026: no losses reported in the period."
+      }
+    ],
+    "effective_date_requested": "2026-12-01",
+    "insured_name": "Alder Creek Storage Partners LLC",
+    "line_of_business": "property",
+    "losses": [],
+    "notes": "Two buildings built 2016 and 2019; climate-controlled units in building two.",
+    "prior_carrier": "Sentinel Mutual",
+    "requested_deductible": "50000",
+    "requested_limit": "6000000",
+    "revenue": 9800000,
+    "submission_id": "SUB-1017",
+    "submitted_at": "2026-10-09",
+    "years_in_business": 9
   }
 ]

@@ -46,8 +46,10 @@ def test_samples_are_valid_and_complete():
     from underwriting_agent.samples import load_sample_submissions, sample_submission_models
 
     raw = load_sample_submissions()
-    assert len(raw) == 14
+    # 17 since the duplicate-detection round added the designed
+    # cross-broker pair (SUB-1015/1016) and its near-miss (SUB-1017).
+    assert len(raw) == 17
     models = sample_submission_models()  # every sample validates against the schema
     ids = [m.submission_id for m in models]
-    assert len(set(ids)) == 14
+    assert len(set(ids)) == 17
     assert "SUB-1011" in ids and "SUB-1012" in ids  # the adversarial pair
