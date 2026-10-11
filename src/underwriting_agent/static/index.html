@@ -140,6 +140,21 @@
       <div id="sla-calibration" style="margin-top:10px"></div>
     </section>
     <section>
+      <h2>Guideline corpus &amp; versions</h2>
+      <div id="corpus" class="empty">Loading…</div>
+      <div class="row" style="margin-top:10px"><button id="register-corpus">Snapshot the in-force corpus</button>
+      <span class="note" id="corpus-status">A snapshot keeps the corpus text under its version, immutably — the same version with different text is refused, never overwritten.</span></div>
+      <div class="row" style="margin-top:6px"><input id="corpus-submission" type="text" placeholder="Submission id — its guidelines as it triaged" style="flex:1">
+      <button id="corpus-triaged">As triaged</button></div>
+      <div id="corpus-triaged-out" style="margin-top:10px"></div>
+      <div class="row" style="margin-top:6px"><label class="note">From <select id="corpus-from"></select></label>
+      <label class="note">to <select id="corpus-to"></select></label>
+      <button id="corpus-diff-btn">Diff versions</button>
+      <button id="corpus-provider">Provider cross-check on moved lines</button></div>
+      <div id="corpus-diff-out" style="margin-top:10px"></div>
+      <div id="corpus-provider-out" style="margin-top:10px"></div>
+    </section>
+    <section>
       <h2>How it works</h2>
       <p class="note">extract → ingest (computed facts) → injection screen → triage (rules + LLM cross-check) → guideline retrieval → diagnosis (bounded tool loop) → scored options → draft letter + packet → self-verify → independent review → guardrails → <strong>underwriter gate</strong>. Code computes the numbers; the model does language work; the human decides.</p>
     </section>
@@ -1308,6 +1323,108 @@ async function decide(path) {
   $('gate-section').style.display = 'none';
 }
 
+async function loadCorpus() {
+  try {
+    const res = await fetch('/guidelines/snapshots', {headers: headers()});
+    if (!res.ok) throw new Error('none');
+    const body = await res.json();
+    const snaps = body.snapshots || [];
+    $('corpus').innerHTML = snaps.length
+      ? `<p class="note">Corpus in force: <strong>${esc(body.current_version)}</strong>. Kept snapshots — a version's text, once kept, is never overwritten:</p>
+         <table><thead><tr><th>Version</th><th>Guidelines</th><th>Content hash</th><th>Kept at</th></tr></thead><tbody>
+         ${snaps.map(s => `<tr><td>${esc(s.version)}${s.version === body.current_version ? ' (in force)' : ''}</td><td>${esc(s.guideline_count)}</td><td><code>${esc(String(s.content_hash).slice(0, 12))}…</code></td><td>${esc(s.registered_at)}</td></tr>`).join('')}
+         </tbody></table>`
+      : '<span class="empty">No corpus snapshots kept yet.</span>';
+    const fill = sel => {
+      const current = sel.value;
+      sel.innerHTML = snaps.map(s => `<option value="${esc(s.version)}">${esc(s.version)}</option>`).join('');
+      if (snaps.some(s => s.version === current)) sel.value = current;
+    };
+    fill($('corpus-from')); fill($('corpus-to'));
+    if (snaps.length) { $('corpus-from').value = snaps[snaps.length - 1].version; $('corpus-to').value = body.current_version; }
+  } catch (e) {
+    $('corpus').innerHTML = '<span class="empty">Corpus snapshots unavailable.</span>';
+  }
+}
+
+async function registerCorpus() {
+  try {
+    const res = await fetch('/guidelines/snapshots', {method: 'POST', headers: headers()});
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || ('Error ' + res.status));
+    $('corpus-status').textContent = body.created
+      ? `Kept: corpus ${body.version} snapshotted (${body.guideline_count} guidelines).`
+      : `Already kept: corpus ${body.version} is on record with this exact text.`;
+    loadCorpus();
+  } catch (e) {
+    $('corpus-status').textContent = 'Snapshot refused: ' + esc(e.message || e);
+  }
+}
+
+async function corpusAsTriaged() {
+  const id = $('corpus-submission').value.trim();
+  const box = $('corpus-triaged-out');
+  if (!id) { box.innerHTML = '<span class="empty">Enter a submission id first.</span>'; return; }
+  try {
+    const res = await fetch(`/submissions/${encodeURIComponent(id)}/guidelines-as-triaged`, {headers: headers()});
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || ('Error ' + res.status));
+    box.innerHTML = `<h3>${esc(body.submission_id)} — as triaged under ${esc(body.triaged_under)}</h3>
+      <p class="note">${esc(body.note)}</p>
+      ${(body.guidelines || []).map(g => `<p><strong>[${esc(g.guideline_id)}] ${esc(g.title)}</strong> <span class="note">(source: ${esc(g.source)})</span></p><pre>${esc(g.text)}</pre>`).join('') || '<p class="note">No guidelines were cited by this run.</p>'}`;
+  } catch (e) {
+    box.innerHTML = '<span class="empty">As-triaged read unavailable: ' + esc(e.message || e) + '</span>';
+  }
+}
+
+async function corpusDiff() {
+  const box = $('corpus-diff-out');
+  const from = $('corpus-from').value, to = $('corpus-to').value;
+  if (!from || !to) { box.innerHTML = '<span class="empty">Two kept versions are needed for a diff.</span>'; return; }
+  try {
+    const res = await fetch(`/guidelines/snapshots/diff?from_version=${encodeURIComponent(from)}&to_version=${encodeURIComponent(to)}`, {headers: headers()});
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || ('Error ' + res.status));
+    const lineList = (lines, mark) => lines.map(l => `<div>${mark} ${esc(l)}</div>`).join('');
+    box.innerHTML = `<h3>Corpus diff — ${esc(body.from_version)} → ${esc(body.to_version)}</h3>
+      <p class="note">Added: ${esc((body.added || []).join(', ') || 'none')} · Removed: ${esc((body.removed || []).join(', ') || 'none')} · Unchanged: ${esc(body.unchanged_count)}</p>
+      ${(body.changed || []).map(c => `<p><strong>[${esc(c.guideline_id)}] ${esc(c.title)}</strong></p><pre>${lineList(c.removed_lines, '−')}${lineList(c.added_lines, '+')}</pre>`).join('') || '<p class="note">No guideline text changed between these versions.</p>'}`;
+  } catch (e) {
+    box.innerHTML = '<span class="empty">Diff unavailable: ' + esc(e.message || e) + '</span>';
+  }
+}
+
+async function corpusProviderImpact() {
+  const box = $('corpus-provider-out');
+  box.innerHTML = '<span class="empty">Running the rules report, then the provider pass…</span>';
+  try {
+    const res = await fetch('/guidelines/change-impact/provider', {method: 'POST', headers: headers(), body: JSON.stringify({})});
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || ('Error ' + res.status));
+    const r = body.rules || {}, p = body.provider || {};
+    let html = `<h3>Change impact — provider pass</h3>
+      <p class="note">Rules report (unchanged by this pass): ${esc(r.checked ?? 0)} checked, <strong>${esc(r.moved_count ?? 0)} moved</strong> under corpus ${esc(r.guidelines_version || '')}.</p>`;
+    if (!p.available) {
+      html += `<p class="note">Provider pass unavailable: ${esc(p.reason || '')}</p>`;
+    } else {
+      const u = p.usage || {};
+      html += `<p class="note">Provider: ${esc(p.backend)}${p.model ? ' · ' + esc(p.model) : ''} — cross-checked ${esc(p.lines_cross_checked)} of ${esc(p.lines_moved)} moved line(s) (cap ${esc(p.cap)}). Usage: ${esc(u.calls ?? 0)} call(s), ${esc(u.input_tokens ?? 0)} in / ${esc(u.output_tokens ?? 0)} out tokens, est. cost ${u.estimated_cost_usd == null ? 'n/a' : '$' + esc(u.estimated_cost_usd)}.</p>`;
+      if ((p.checks || []).length) {
+        html += `<table><thead><tr><th>Line</th><th>Recorded</th><th>Rules now</th><th>Model</th><th>Agrees with</th><th>Resolution</th></tr></thead><tbody>
+          ${p.checks.map(c => `<tr><td>${esc(c.line_submission_id)}</td><td>${esc(c.recorded_outcome)} / ${esc(c.recorded_tier)}</td><td>${esc(c.rules_outcome)} / ${esc(c.rules_tier)}</td><td>${c.error ? 'error: ' + esc(c.error) : c.llm_outcome ? `${esc(c.llm_outcome)} / ${esc(c.llm_tier)} (${esc(c.llm_confidence)})` : 'no usable reply'}</td><td>${esc(c.agrees_with || '—')}</td><td>${esc(c.cross_check_resolution || '—')}</td></tr>`).join('')}
+          </tbody></table>`;
+      }
+      if ((p.lines_over_cap || []).length) {
+        html += `<p class="note">Past the cap, not cross-checked: ${esc(p.lines_over_cap.map(o => o.line_submission_id).join(', '))}.</p>`;
+      }
+      html += `<p class="note">${esc(p.note || '')}</p>`;
+    }
+    box.innerHTML = html;
+  } catch (e) {
+    box.innerHTML = '<span class="empty">Provider pass unavailable: ' + esc(e.message || e) + '</span>';
+  }
+}
+
 $('analyze').addEventListener('click', analyze);
 $('approve').addEventListener('click', () => decide('approve'));
 $('reject').addEventListener('click', () => decide('reject'));
@@ -1321,6 +1438,10 @@ $('preview-prune-drafting').addEventListener('click', previewPruneDraftingEvents
 $('retry-due').addEventListener('click', retryDue);
 $('notify-breaches').addEventListener('click', notifyBreaches);
 $('notify-escalations').addEventListener('click', notifyEscalations);
+$('register-corpus').addEventListener('click', registerCorpus);
+$('corpus-triaged').addEventListener('click', corpusAsTriaged);
+$('corpus-diff-btn').addEventListener('click', corpusDiff);
+$('corpus-provider').addEventListener('click', corpusProviderImpact);
 loadSamples();
 loadEvals();
 loadInbox();
@@ -1329,6 +1450,7 @@ loadDispatch();
 loadOpsDigest();
 loadDraftingRetention();
 loadCalibration();
+loadCorpus();
 </script>
 </body>
 </html>
