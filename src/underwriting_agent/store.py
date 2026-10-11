@@ -104,6 +104,17 @@ class ApprovalRecord:
     # Older payloads predate both fields.
     escalation_notice: dict | None = None
     escalation_attempts: list[dict] = field(default_factory=list)
+    # The underwriter's FINAL outcomes on this submission (see
+    # service.record_final_decision): an append-only list of
+    # {decision, decided_by, decided_on, reason_code, note,
+    # recorded_at, supersedes} — bound / declined / not_taken_up.
+    # The gate decision (approved/rejected) judges the drafted
+    # packet; these entries record what the desk ultimately did
+    # with the risk. A correction never edits an entry: it appends
+    # one whose ``supersedes`` names the entry it replaces, so the
+    # current decision is the last entry and the history is the
+    # audit. Older payloads predate it and load empty.
+    final_decisions: list[dict] = field(default_factory=list)
 
 
 def history_entry(record: ApprovalRecord) -> dict:
@@ -178,6 +189,7 @@ def _record_to_dict(record: ApprovalRecord) -> dict:
         "breach_notice_acknowledgement": record.breach_notice_acknowledgement,
         "escalation_notice": record.escalation_notice,
         "escalation_attempts": record.escalation_attempts,
+        "final_decisions": record.final_decisions,
     }
 
 
@@ -203,6 +215,7 @@ def _record_from_dict(data: dict) -> ApprovalRecord:
         breach_notice_acknowledgement=data.get("breach_notice_acknowledgement"),
         escalation_notice=data.get("escalation_notice"),
         escalation_attempts=data.get("escalation_attempts") or [],
+        final_decisions=data.get("final_decisions") or [],
     )
 
 

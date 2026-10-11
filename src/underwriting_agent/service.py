@@ -34,7 +34,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from .agreement import FINAL_DECISIONS
+from .agreement import triage_agreement as compute_triage_agreement
 from .autonomy import recommend_autonomy
+from .duplicates import (
+    FINDINGS_DOCUMENT,
+    duplicate_policy,
+    find_candidate_pairs,
+)
 from .bundles import (
     blocking_lines as bundle_blocking_lines,
     bundle_citations,
@@ -1726,6 +1733,223 @@ class SubmissionService:
     def scorecard(self, kind: str, name: str) -> dict | None:
         """One party's scorecard (``kind`` is "insured" or "broker")."""
         return scorecard(self._get_store().all_records(), kind, name)
+
+    # ------------------------------------------------------------------
+    # Cross-broker duplicate detection (see duplicates.py)
+    # ------------------------------------------------------------------
+
+    def duplicate_findings(self) -> dict:
+        """Possible-duplicate pairs across the stored submissions.
+
+        The match pass is computed on read over the store (the
+        scorecard idiom): every pair above the policy threshold is
+        a finding, scored in code from the stored fields, with its
+        field-by-field evidence and the policy it was scored
+        under. A pair a human already resolved keeps its stored
+        status — a dismissal is remembered per pair, so the same
+        pair never re-enters the open queue; a pair whose fields
+        later change enough to stop scoring simply stops being a
+        candidate, and its stored resolution stays on the document
+        if it ever scores again. Detection writes nothing: neither
+        submission is merged, blocked, or altered by being flagged.
+        """
+        store = self._get_store()
+        policy = duplicate_policy()
+        document = store.get_document(FINDINGS_DOCUMENT) or {}
+        resolutions = document.get("resolutions", {})
+        findings = []
+        for candidate in find_candidate_pairs(store.all_records(), policy):
+            finding = dict(candidate)
+            resolution = resolutions.get(candidate["pair_key"])
+            finding["status"] = resolution["status"] if resolution else "open"
+            finding["resolution"] = resolution
+            finding["policy"] = policy
+            findings.append(finding)
+        counts = {"open": 0, "confirmed": 0, "dismissed": 0}
+        for finding in findings:
+            counts[finding["status"]] += 1
+        return {"findings": findings, "counts": counts, "policy": policy}
+
+    def resolve_duplicate(
+        self, pair_key: str, actor: str, decision: str, reason: str
+    ) -> dict:
+        """Record a human's verdict on a possible-duplicate finding.
+
+        ``decision`` is ``confirmed`` (the pair is one risk,
+        submitted twice) or ``dismissed`` (two submissions, not a
+        duplicate — the common case is a renewal). Actor and reason
+        are both required: the resolution is the memory the queue
+        trusts, and an unexplained memory cannot be audited. The
+        verdict is stored on the findings document; neither
+        submission record is touched. Re-resolving with the same
+        verdict returns the stored resolution unchanged; changing
+        a verdict appends the earlier one to the entry's history.
+        """
+        if decision not in ("confirmed", "dismissed"):
+            raise ValueError(
+                f"Unknown duplicate verdict: {decision!r} "
+                "(expected 'confirmed' or 'dismissed')"
+            )
+        if not actor:
+            raise ValueError("An actor (the reviewing underwriter) is required")
+        if not reason or not reason.strip():
+            raise ValueError(
+                "A reason is required — the resolution is the memory "
+                "that keeps this pair out of the queue"
+            )
+        store = self._get_store()
+        candidates = {
+            finding["pair_key"]: finding
+            for finding in find_candidate_pairs(store.all_records())
+        }
+        if pair_key not in candidates:
+            raise KeyError(f"Unknown duplicate pair: {pair_key}")
+        document = store.get_document(FINDINGS_DOCUMENT) or {}
+        resolutions = document.get("resolutions", {})
+        existing = resolutions.get(pair_key)
+        if existing and existing["status"] == decision:
+            finding = dict(candidates[pair_key])
+            finding["status"] = existing["status"]
+            finding["resolution"] = existing
+            return finding
+        entry = {
+            "status": decision,
+            "actor": actor,
+            "reason": reason,
+            "decided_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "history": (
+                (existing.get("history") or [])
+                + [
+                    {
+                        "status": existing["status"],
+                        "actor": existing["actor"],
+                        "reason": existing["reason"],
+                        "decided_at": existing["decided_at"],
+                    }
+                ]
+                if existing
+                else []
+            ),
+        }
+        resolutions[pair_key] = entry
+        document["resolutions"] = resolutions
+        store.save_document(FINDINGS_DOCUMENT, document)
+        finding = dict(candidates[pair_key])
+        finding["status"] = decision
+        finding["resolution"] = entry
+        return finding
+
+    # ------------------------------------------------------------------
+    # Final underwriter decisions + triage agreement (see agreement.py)
+    # ------------------------------------------------------------------
+
+    def record_final_decision(
+        self,
+        submission_id: str,
+        decision: str,
+        actor: str,
+        decided_on: str | None = None,
+        reason_code: str = "",
+        note: str = "",
+    ) -> AgentResult:
+        """Record the underwriter's final outcome on a submission.
+
+        The gate decision (approve / reject) judges the drafted
+        packet; this records what the desk ultimately did with the
+        risk — ``bound``, ``declined``, or ``not_taken_up`` — with
+        the deciding underwriter, the date decided, and an optional
+        reason code. The entry is appended to the record's
+        append-only ``final_decisions`` history and projected onto
+        the result; a correction is a new entry whose
+        ``supersedes`` names the entry it replaces, never an edit,
+        so what the desk believed at any point stays readable.
+        """
+        if decision not in FINAL_DECISIONS:
+            raise ValueError(
+                f"Unknown final decision: {decision!r} "
+                f"(expected one of {', '.join(FINAL_DECISIONS)})"
+            )
+        if not actor:
+            raise ValueError(
+                "An actor (the deciding underwriter) is required"
+            )
+        decided_on = (
+            decided_on or datetime.now(timezone.utc).date().isoformat()
+        )
+        try:
+            datetime.fromisoformat(decided_on)
+        except ValueError:
+            raise ValueError(
+                f"decided_on must be an ISO date, got {decided_on!r}"
+            ) from None
+        store = self._get_store()
+        record = store.get(submission_id)
+        if record is None:
+            raise KeyError(
+                f"Unknown submission_id: {submission_id} (analyze it first)"
+            )
+        previous = record.final_decisions[-1] if record.final_decisions else None
+        entry = {
+            "decision": decision,
+            "decided_by": actor,
+            "decided_on": decided_on,
+            "reason_code": reason_code or None,
+            "note": note or None,
+            "recorded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "supersedes": (
+                {
+                    "decision": previous["decision"],
+                    "decided_by": previous["decided_by"],
+                    "decided_on": previous["decided_on"],
+                }
+                if previous
+                else None
+            ),
+        }
+        record.final_decisions.append(entry)
+        record.result.final_decision = entry["decision"]
+        record.result.final_decided_by = entry["decided_by"]
+        record.result.final_decided_on = entry["decided_on"]
+        record.result.final_reason_code = entry["reason_code"]
+        store.save(record)
+        return record.result
+
+    def final_decisions(self) -> dict:
+        """Every stored submission's current final decision.
+
+        One row per submission that has one: the decision, who
+        decided, when, the reason code, and how many superseded
+        entries stand behind it. Submissions with no recorded
+        outcome are absent — absence is the honest state, not a
+        default.
+        """
+        rows = []
+        for record in self._get_store().all_records():
+            if not record.final_decisions:
+                continue
+            current = record.final_decisions[-1]
+            rows.append(
+                {
+                    "submission_id": record.result.submission_id,
+                    "insured_name": record.result.insured_name,
+                    "decision": current["decision"],
+                    "decided_by": current["decided_by"],
+                    "decided_on": current["decided_on"],
+                    "reason_code": current.get("reason_code"),
+                    "superseded_count": len(record.final_decisions) - 1,
+                    "triage_outcome": record.result.triage.outcome,
+                    "risk_tier": record.result.triage.risk_tier,
+                }
+            )
+        rows.sort(key=lambda row: row["submission_id"])
+        return {"decisions": rows, "count": len(rows)}
+
+    def triage_agreement(self) -> dict:
+        """Triage-vs-decision agreement over the recorded outcomes:
+        per outcome band and per risk tier, how the desk's final
+        decisions landed against intake's view (see agreement.py
+        for the stated expectations and the small-sample note)."""
+        return compute_triage_agreement(self._get_store().all_records())
 
     def loss_timeline(self, insured_name: str) -> dict | None:
         """One insured's loss-development timeline: their stored

@@ -44,6 +44,8 @@ from .schemas import (
     CalibrationLabelRenameRequest,
     CalibrationSnapshotRequest,
     DecisionRequest,
+    DuplicateResolveRequest,
+    FinalDecisionRequest,
     ProposalDecisionRequest,
     ProviderImpactRequest,
     SettingsRestoreRequest,
@@ -1254,6 +1256,85 @@ def reject(submission_id: str, request: DecisionRequest) -> AgentResult:
     try:
         return service.reject(
             submission_id, reviewer=_decision_actor(request), reason=request.reason or ""
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post(
+    "/submissions/{submission_id}/final-decision",
+    response_model=AgentResult,
+    dependencies=_AUTH,
+)
+def record_final_decision(
+    submission_id: str, request: FinalDecisionRequest
+) -> AgentResult:
+    """Record the underwriter's FINAL outcome on a submission —
+    bound / declined / not_taken_up — with the deciding
+    underwriter, the date, and an optional reason code. This is
+    bookkeeping of the desk's decision, not the gate: the gate
+    approves the drafted packet, this records what ultimately
+    happened to the risk. A correction is a superseding entry,
+    never an edit (the history is the audit)."""
+    try:
+        return service.record_final_decision(
+            submission_id,
+            decision=request.decision,
+            actor=_decision_actor(request),
+            decided_on=request.decided_on,
+            reason_code=request.reason_code or "",
+            note=request.note or "",
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/decisions", dependencies=_AUTH)
+def final_decisions() -> dict:
+    """Every stored submission's current final decision (bound /
+    declined / not_taken_up), with who decided, when, and how
+    many superseded entries stand behind it."""
+    return service.final_decisions()
+
+
+@app.get("/decisions/agreement", dependencies=_AUTH)
+def triage_agreement() -> dict:
+    """Triage-vs-decision agreement: per triage outcome band and
+    per risk tier, how the desk's final decisions landed against
+    intake's view — out-of-appetite risks that bound anyway,
+    in-appetite risks that declined — as plain counts, with the
+    stated expectations and an honest small-sample note."""
+    return service.triage_agreement()
+
+
+@app.get("/duplicates", dependencies=_AUTH)
+def duplicate_findings() -> dict:
+    """Possible-duplicate pairs across the stored submissions:
+    the same insured risk arriving twice (typically through two
+    brokers, under variant names). Scored in code from the stored
+    fields, each finding with its field-by-field evidence and the
+    policy it was scored under. Flagging only — detection never
+    merges, blocks, or alters either submission."""
+    return service.duplicate_findings()
+
+
+@app.post("/duplicates/resolve", dependencies=_AUTH)
+def resolve_duplicate(request: DuplicateResolveRequest) -> dict:
+    """Record a human's verdict on a possible-duplicate finding:
+    confirmed (one risk, submitted twice) or dismissed (not a
+    duplicate — e.g. a renewal), with actor and reason. The
+    verdict is remembered per pair, so a dismissed pair stays out
+    of the queue. Neither submission is touched."""
+    try:
+        return service.resolve_duplicate(
+            pair_key=request.pair_key,
+            actor=_decision_actor(request),
+            decision=request.decision,
+            reason=request.reason,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -523,6 +523,18 @@ class AgentResult(BaseModel):
     # always carried who decided and why; it now carries when, in
     # the same field, on every surface that reports the decision.
     decided_at: Optional[str] = None
+    # The underwriter's FINAL outcome on the submission, when one
+    # has been recorded (see service.record_final_decision): the
+    # gate decision above approves or rejects the drafted packet;
+    # this is what the desk ultimately did with the risk —
+    # bound | declined | not_taken_up. The full append-only history
+    # (including superseded entries) lives on the store record;
+    # these fields project the current entry, the way decided_at
+    # projects the gate decision. None until one is recorded.
+    final_decision: Optional[str] = None
+    final_decided_by: Optional[str] = None
+    final_decided_on: Optional[str] = None  # ISO date the desk decided
+    final_reason_code: Optional[str] = None
     dispatch_status: Optional[str] = None  # sent | failed | None
     dispatch_attempts: list[DispatchAttempt] = Field(default_factory=list)
     external_action_taken: bool = False
@@ -719,6 +731,45 @@ class ProposalDecisionRequest(BaseModel):
     reviewer: Optional[str] = None
     accept: bool = False
     note: Optional[str] = None
+
+    def actor_name(self) -> Optional[str]:
+        return self.actor or self.approver or self.reviewer
+
+
+class FinalDecisionRequest(BaseModel):
+    """An underwriter's final outcome on a submission (see
+    ``service.record_final_decision``): the decision itself
+    (``bound`` | ``declined`` | ``not_taken_up``), who decided,
+    the date it was decided (ISO date; defaults to today), and an
+    optional reason code (``price``, ``terms``, ``capacity``,
+    ``broker_withdrew`` … — recorded as given, not enumerated, so
+    a desk's own codes survive)."""
+
+    actor: Optional[str] = None
+    approver: Optional[str] = None
+    reviewer: Optional[str] = None
+    decision: str
+    decided_on: Optional[str] = None
+    reason_code: Optional[str] = None
+    note: Optional[str] = None
+
+    def actor_name(self) -> Optional[str]:
+        return self.actor or self.approver or self.reviewer
+
+
+class DuplicateResolveRequest(BaseModel):
+    """A human's resolution of a possible-duplicate finding (see
+    ``service.resolve_duplicate``): who resolved it, the verdict
+    (``confirmed`` | ``dismissed``), and the reason — required,
+    because a dismissal is the memory that keeps the pair out of
+    the queue, and an unexplained memory cannot be audited."""
+
+    actor: Optional[str] = None
+    approver: Optional[str] = None
+    reviewer: Optional[str] = None
+    pair_key: str
+    decision: str
+    reason: str
 
     def actor_name(self) -> Optional[str]:
         return self.actor or self.approver or self.reviewer
