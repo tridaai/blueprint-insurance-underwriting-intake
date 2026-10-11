@@ -1,10 +1,8 @@
 <p align="center">
-  <img src="assets/tridaai-logo.png" alt="Trida AI" width="360">
+  <img src="https://trida.ai/logos-rounded/trida-rounded.png" alt="Trida AI" width="96">
 </p>
 
-# Trida AI
-
-## Blueprint — Insurance Underwriting Submission Intake Agent
+# Blueprint — Insurance Underwriting Submission Intake Agent
 
 A working prototype of the agent a specialty-lines underwriting team
 actually needs at intake: a broker submission arrives (email +
@@ -22,6 +20,12 @@ The promise is precise, and it is enforced in code, not in prompts:
 
 Everything is synthetic data. There is no real insurer, broker, or
 submission anywhere in this repository.
+
+<p align="center">
+  <a href="https://trida.ai/blog/insurance-underwriting-intake-agent-blueprint">
+    <img src="https://geeytzpdwvjojoie.public.blob.vercel-storage.com/blog/1791673945094-cover.webp" alt="Insurance Underwriting Intake Agent Blueprint" width="600">
+  </a>
+</p>
 
 **Deep-dive:** [Insurance Underwriting Intake Agent Blueprint](https://trida.ai/blog/insurance-underwriting-intake-agent-blueprint) — how the agent works, where it stops, and what the evals actually prove.
 
