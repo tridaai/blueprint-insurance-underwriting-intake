@@ -1050,6 +1050,38 @@ numbers on the submission and its loss records. Line aliases fold too
    lines named with their movement and reasons, plus what the
    bundle roll-up would become — never as one flattened pass over
    the bundle payload, which would be fiction.
+   The corpus text itself is **snapshotted per version**
+   (`corpus.py`): registering the corpus under its version keeps
+   the full text in the store, immutably — the same version with
+   different text is an explicit `CorpusVersionConflict`, never a
+   silent overwrite (edited text is a new version). The corpus
+   reads pin the in-force corpus before quoting it. With a
+   snapshot kept, attribution for a submission that triaged under
+   an older version quotes the line **as it read then** beside
+   today's (`guideline_line_then`), `GET
+   /submissions/{id}/guidelines-as-triaged` quotes a submission's
+   cited guidelines from its version's snapshot (falling back —
+   named as such — to the text stored on the record when no
+   snapshot is kept for that version), and `GET
+   /guidelines/snapshots/diff` diffs two kept versions line by
+   line. Snapshots are evidence, not configuration: triage always
+   reads the live corpus.
+   The change-impact report also has an opt-in **provider pass**
+   (`POST /guidelines/change-impact/provider`,
+   `retriage.provider_change_impact`): it re-runs only the model
+   cross-check — the graph's independent classify call over the
+   same computed facts — on the lines the rules report moves, and
+   no others. The pass is bounded (`PROVIDER_IMPACT_MAX_LINES`,
+   default 25; lines past the cap are named, not dropped), costed
+   from the backend's own usage totals with the telemetry price
+   table, and reported in its own section: the model's verdict,
+   which side it agrees with (judged on outcome, the cross-check's
+   own terms, with tier agreement beside it), and the resolution
+   the policy would reach. The rules section is returned exactly
+   as the rules-only report computes it — the model never rewrites
+   it. With the offline mock configured the pass reports itself
+   unavailable and makes no calls, the same refusal the LLM eval
+   pack makes; nothing is substituted for a model that did not run.
 3. **Your intake adapter** — map your inbox/portal feed to
    `SubmissionInput`.
 4. **Your output route** — point `ACTION_WEBHOOK_URL` at your work

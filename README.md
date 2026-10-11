@@ -280,6 +280,22 @@ missing element, the loss-history line behind a tier move).
 Bundles are re-triaged **per line** — the affected lines are
 named with their own movement, never flattened into one pass over
 the bundle payload.
+The corpus text is **kept per version**: `POST
+/guidelines/snapshots` snapshots the in-force corpus into the
+store, immutably — re-registering a version with different text is
+refused as a conflict, because a version names one text forever
+(edited text is a new version). So a move on a submission that
+triaged under an older version quotes the guideline line **as it
+read then** beside today's, `GET
+/submissions/{id}/guidelines-as-triaged` shows an auditor the
+exact text in force at triage time, and `GET
+/guidelines/snapshots/diff` diffs two kept versions line by line.
+For a second opinion on exactly the moved lines, **`POST
+/guidelines/change-impact/provider`** re-runs only the model
+cross-check on them — bounded (`PROVIDER_IMPACT_MAX_LINES`,
+default 25), costed from the backend's own usage, and reported
+separately from the rules verdicts it never rewrites. Offline it
+reports itself unavailable and calls nothing.
 
 The queue itself now runs against an **SLA**: every awaiting item
 in `/queue` carries a budget by risk tier — elevated 2 days, high
