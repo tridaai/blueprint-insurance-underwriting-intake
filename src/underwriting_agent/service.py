@@ -3217,17 +3217,143 @@ class SubmissionService:
             load_proposals(self._get_store()), keep
         )
 
+    # ------------------------------------------------------------------
+    # Guideline corpus snapshots (corpus.py)
+    # ------------------------------------------------------------------
+
+    def register_corpus_snapshot(self, guidelines=None, version=None) -> dict:
+        """Keep the guideline corpus text under its version.
+
+        Idempotent for identical text; a version re-registered with
+        different text raises ``CorpusVersionConflict`` — a version
+        names one text forever (see ``corpus.py``). ``guidelines`` /
+        ``version`` default to the in-force corpus; a caller (or a
+        test simulating a corpus revision) may register another
+        corpus under its own version explicitly.
+        """
+        from .corpus import register_snapshot
+
+        snapshot, created = register_snapshot(
+            self._get_store(), guidelines, version
+        )
+        return {**snapshot, "created": created}
+
+    def corpus_snapshots(self) -> dict:
+        """Every kept corpus snapshot's metadata, current first.
+
+        Reading the surface pins the in-force corpus first (the same
+        ensure the change-impact report performs), so the version
+        results are being stamped with today is always among them.
+        """
+        from .corpus import load_snapshots, register_snapshot, snapshot_metadata
+
+        store = self._get_store()
+        register_snapshot(store)
+        snapshots = load_snapshots(store)
+        return {
+            "current_version": GUIDELINES_VERSION,
+            "snapshots": [
+                snapshot_metadata(snapshots[version])
+                for version in sorted(snapshots, reverse=True)
+            ],
+        }
+
+    def corpus_snapshot(self, version: str) -> dict | None:
+        """One kept snapshot in full (text included), or None."""
+        from .corpus import get_snapshot, register_snapshot
+
+        store = self._get_store()
+        register_snapshot(store)
+        return get_snapshot(store, version)
+
+    def corpus_diff(self, from_version: str, to_version: str) -> dict | None:
+        """Line-level text diff between two kept snapshots, or None
+        when either version has no snapshot kept."""
+        from .corpus import diff_snapshots, get_snapshot, register_snapshot
+
+        store = self._get_store()
+        register_snapshot(store)
+        old = get_snapshot(store, from_version)
+        new = get_snapshot(store, to_version)
+        if old is None or new is None:
+            return None
+        return diff_snapshots(old, new)
+
+    def guideline_as_triaged(
+        self, submission_id: str, guideline_id: str | None = None
+    ) -> dict | None:
+        """The guidelines a submission cites, quoted as they read
+        under the version it triaged under (None: unknown record)."""
+        from .corpus import guideline_texts_as_triaged, register_snapshot
+
+        store = self._get_store()
+        register_snapshot(store)
+        record = store.get(submission_id)
+        if record is None:
+            return None
+        return guideline_texts_as_triaged(store, record, guideline_id)
+
+    def _corpus_snapshot_map(self, store) -> dict:
+        """Kept snapshots as version → guidelines, for attribution.
+
+        Pins the in-force corpus first: the version results are
+        stamped with today is registered before anything quotes it.
+        A kept version whose text no longer matches the in-force
+        corpus raises ``CorpusVersionConflict`` here — the corpus
+        was edited without a version bump, and the audit surfaces
+        fail loudly rather than quote unattributable text.
+        """
+        from .corpus import load_snapshots, register_snapshot
+
+        register_snapshot(store)
+        return {
+            version: snapshot.get("guidelines", [])
+            for version, snapshot in load_snapshots(store).items()
+        }
+
     def guideline_change_impact(self, classifier=None) -> dict:
         """Which awaiting submissions would re-triage differently
         under the current guidelines/rules (``retriage.py``).
 
-        Report only — the store is read, never written. ``classifier``
-        lets a caller (or a test) simulate a changed rule set.
+        Report only — the store is read, never written (beyond the
+        corpus snapshot registration every corpus read performs).
+        ``classifier`` lets a caller (or a test) simulate a changed
+        rule set. Moves on submissions that triaged under an older
+        kept corpus version quote the guideline line as it read
+        then, beside today's.
         """
         from .retriage import guideline_change_impact
 
+        store = self._get_store()
         return guideline_change_impact(
-            self._get_store().all_records(), classifier=classifier
+            store.all_records(),
+            classifier=classifier,
+            snapshots=self._corpus_snapshot_map(store),
+        )
+
+    def guideline_change_impact_provider(
+        self, cap: int | None = None, classifier=None
+    ) -> dict:
+        """The change-impact report plus the provider second pass.
+
+        Opt-in: re-runs only the model cross-check on the lines the
+        rules report moves (bounded by ``cap`` /
+        ``PROVIDER_IMPACT_MAX_LINES``, costed, reported separately —
+        see ``retriage.provider_change_impact``). The backend
+        resolves exactly as ``analyze`` resolves it (injected, else
+        ``MODEL_BACKEND``); with the offline mock the pass reports
+        itself unavailable and makes no calls.
+        """
+        from .retriage import provider_change_impact
+
+        store = self._get_store()
+        backend = self.backend or get_backend()
+        return provider_change_impact(
+            store.all_records(),
+            backend,
+            classifier=classifier,
+            snapshots=self._corpus_snapshot_map(store),
+            cap=cap,
         )
 
     def audit_rows(self) -> list[dict]:

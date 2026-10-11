@@ -45,6 +45,7 @@ from .schemas import (
     CalibrationSnapshotRequest,
     DecisionRequest,
     ProposalDecisionRequest,
+    ProviderImpactRequest,
     SettingsRestoreRequest,
     SnapshotPruneRequest,
     SlaCalibrationDraftRequest,
@@ -248,6 +249,94 @@ def guidelines_change_impact() -> dict:
     submissions' outcome or tier would move. Report only; nothing
     stored is changed by reading it."""
     return service.guideline_change_impact()
+
+
+@app.post("/guidelines/change-impact/provider", dependencies=_AUTH)
+def guidelines_change_impact_provider(request: ProviderImpactRequest) -> dict:
+    """The change-impact report plus the opt-in provider pass:
+    re-runs only the model cross-check on the lines the rules
+    report moves — bounded by the request's cap (or
+    PROVIDER_IMPACT_MAX_LINES), costed from the backend's own usage
+    totals, and reported separately from the rules verdicts. With
+    no real provider configured the pass reports itself
+    unavailable and makes no calls; the rules report stands either
+    way. Report only; nothing stored is changed."""
+    return service.guideline_change_impact_provider(cap=request.cap)
+
+
+@app.post("/guidelines/snapshots", dependencies=_AUTH)
+def register_guideline_snapshot() -> dict:
+    """Keep the in-force guideline corpus text under its version —
+    immutably. Re-registering identical text is an idempotent
+    no-op; the same version carrying different text is a conflict
+    (409): a version names one text forever, so edited text is a
+    new version."""
+    from .corpus import CorpusVersionConflict
+
+    try:
+        return service.register_corpus_snapshot()
+    except CorpusVersionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/guidelines/snapshots", dependencies=_AUTH)
+def guideline_snapshots() -> dict:
+    """Every kept corpus snapshot's metadata (version, content
+    hash, when kept, guideline count) — the versions change-impact
+    attribution can quote as they read then."""
+    return service.corpus_snapshots()
+
+
+@app.get("/guidelines/snapshots/diff", dependencies=_AUTH)
+def guideline_snapshot_diff(
+    from_version: str = Query(...), to_version: str = Query(...)
+) -> dict:
+    """Line-level text diff between two kept corpus snapshots:
+    which guidelines were added or removed, and for each changed
+    guideline the exact lines that left and entered. 404 when
+    either version has no snapshot kept."""
+    diff = service.corpus_diff(from_version, to_version)
+    if diff is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "no corpus snapshot kept for one of "
+                f"{from_version!r} / {to_version!r}"
+            ),
+        )
+    return diff
+
+
+@app.get("/guidelines/snapshots/{version}", dependencies=_AUTH)
+def guideline_snapshot(version: str) -> dict:
+    """One kept corpus snapshot in full — the guideline text as it
+    read under that version. 404 when no snapshot is kept for it."""
+    snapshot = service.corpus_snapshot(version)
+    if snapshot is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no corpus snapshot kept for version {version!r}",
+        )
+    return snapshot
+
+
+@app.get(
+    "/submissions/{submission_id}/guidelines-as-triaged", dependencies=_AUTH
+)
+def guidelines_as_triaged(
+    submission_id: str, guideline_id: str | None = Query(None)
+) -> dict:
+    """The guidelines this submission cites, quoted as they read
+    under the corpus version it triaged under — from that version's
+    kept snapshot, or (named as such) from the triage record itself
+    when no snapshot is kept for the version. 404 for an unknown
+    submission."""
+    report = service.guideline_as_triaged(submission_id, guideline_id)
+    if report is None:
+        raise HTTPException(
+            status_code=404, detail=f"unknown submission {submission_id!r}"
+        )
+    return report
 
 
 @app.get("/guidelines/diff-trigger-calibration", dependencies=_AUTH)

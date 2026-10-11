@@ -644,6 +644,15 @@ class FollowThroughWorkedRequest(BaseModel):
         return self.actor or self.approver or self.reviewer
 
 
+class ProviderImpactRequest(BaseModel):
+    """The opt-in provider pass over the change-impact moved set
+    (see ``service.guideline_change_impact_provider``): an optional
+    per-call cap on the moved lines cross-checked, overriding
+    ``PROVIDER_IMPACT_MAX_LINES`` for this call."""
+
+    cap: Optional[int] = None
+
+
 class CalibrationSnapshotRequest(BaseModel):
     """An operator's keep of the SLA calibration report (see
     ``service.snapshot_sla_calibration``): who is keeping it,
