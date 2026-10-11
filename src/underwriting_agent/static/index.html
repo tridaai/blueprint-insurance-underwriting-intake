@@ -155,6 +155,18 @@
       <div id="corpus-provider-out" style="margin-top:10px"></div>
     </section>
     <section>
+      <h2>Duplicates &amp; final decisions</h2>
+      <div id="duplicates" class="empty">Loading…</div>
+      <div class="row" style="margin-top:6px"><input id="dup-reason" type="text" placeholder="Resolution reason — required, kept with the verdict (e.g. 'Renewal of SUB-1001')" style="flex:1"></div>
+      <div id="agreement" style="margin-top:12px"></div>
+      <div class="row" style="margin-top:10px"><input id="final-submission" type="text" placeholder="Submission id">
+      <select id="final-decision"><option value="bound">bound</option><option value="declined">declined</option><option value="not_taken_up">not taken up</option></select>
+      <input id="final-reason-code" type="text" placeholder="Reason code (optional)">
+      <button id="record-final">Record final decision</button></div>
+      <div class="row" style="margin-top:6px"><button id="refresh-duplicates">Refresh</button>
+      <span class="note" id="final-status">The gate approves the packet; a final decision records what the desk ultimately did with the risk. Detection flags pairs for a human — it never merges, blocks, or alters a submission — and a dismissal is remembered per pair.</span></div>
+    </section>
+    <section>
       <h2>How it works</h2>
       <p class="note">extract → ingest (computed facts) → injection screen → triage (rules + LLM cross-check) → guideline retrieval → diagnosis (bounded tool loop) → scored options → draft letter + packet → self-verify → independent review → guardrails → <strong>underwriter gate</strong>. Code computes the numbers; the model does language work; the human decides.</p>
     </section>
@@ -1298,6 +1310,7 @@ async function analyze() {
   $('run-status').textContent = 'Done — awaiting underwriter.';
   render(result);
   loadInbox();
+  loadDuplicates();
   loadQueue();
   loadDispatch();
   loadOpsDigest();
@@ -1316,6 +1329,7 @@ async function decide(path) {
   $('gate-status').textContent = `Recorded: ${body.status} by ${body.decided_by}` + (body.decided_at ? ` at ${body.decided_at}` : '') + (body.dispatch_status ? ` · webhook ${body.dispatch_status}` : '') + '.';
   render(body);
   loadInbox();
+  loadDuplicates();
   loadQueue();
   loadDispatch();
   loadOpsDigest();
@@ -1425,6 +1439,71 @@ async function corpusProviderImpact() {
   }
 }
 
+async function loadDuplicates() {
+  try {
+    const [dupRes, agrRes] = await Promise.all([
+      fetch('/duplicates', {headers: headers()}),
+      fetch('/decisions/agreement', {headers: headers()})
+    ]);
+    const dup = await dupRes.json();
+    const findings = dup.findings || [];
+    $('duplicates').innerHTML = findings.length
+      ? `<p class="note">Possible duplicates — scored in code from the stored fields (threshold ${esc(dup.policy.threshold)}, name gate ${esc(dup.policy.name_gate)}). Open ${esc(dup.counts.open)} · confirmed ${esc(dup.counts.confirmed)} · dismissed ${esc(dup.counts.dismissed)}.</p>
+         ${findings.map(f => `<div style="margin-top:8px"><strong>${esc(f.submission_ids.join(' ↔ '))}</strong> — score <strong>${esc(f.score)}</strong> ${pill(f.status, f.status === 'open' ? 'warn' : '')}
+           <div class="note">${esc(f.insured_names.join(' / '))} · brokers: ${esc(f.context.broker_left)} / ${esc(f.context.broker_right)}${f.context.different_brokers ? ' (different brokers)' : ''}</div>
+           <table><thead><tr><th>Field</th><th>Left</th><th>Right</th><th>Similarity</th><th>Points</th></tr></thead><tbody>
+           ${f.evidence.map(e => `<tr><td>${esc(e.field)}</td><td>${esc(e.left ?? '—')}</td><td>${esc(e.right ?? '—')}</td><td>${e.similarity === null ? '—' : esc(e.similarity)}</td><td>${esc(e.points)}</td></tr>`).join('')}
+           </tbody></table>
+           ${f.resolution ? `<div class="note">${esc(f.resolution.status)} by ${esc(f.resolution.actor)} — ${esc(f.resolution.reason)}</div>` : `<div class="row" style="margin-top:4px"><button data-dup-confirm="${esc(f.pair_key)}">Confirm duplicate</button><button data-dup-dismiss="${esc(f.pair_key)}">Dismiss</button></div>`}
+           </div>`).join('')}`
+      : '<span class="empty">No pairs score above the duplicate threshold.</span>';
+    document.querySelectorAll('[data-dup-confirm]').forEach(btn =>
+      btn.addEventListener('click', () => resolveDuplicate(btn.getAttribute('data-dup-confirm'), 'confirmed')));
+    document.querySelectorAll('[data-dup-dismiss]').forEach(btn =>
+      btn.addEventListener('click', () => resolveDuplicate(btn.getAttribute('data-dup-dismiss'), 'dismissed')));
+    const agr = await agrRes.json();
+    const bandRow = (name, r) => `<tr><td>${esc(name)}</td><td>${esc(r.decided)}</td><td>${esc(r.bound)}</td><td>${esc(r.declined)}</td><td>${esc(r.not_taken_up)}</td><td>${esc(r.agreed)}</td><td>${esc(r.disagreed)}</td></tr>`;
+    $('agreement').innerHTML = agr.decided_total
+      ? `<p class="note"><strong>Triage vs final decision</strong> — ${esc(agr.decided_total)} decision(s) recorded; decisive ${esc(agr.decisive)}, agreed ${esc(agr.agreed)}, disagreed ${esc(agr.disagreed)}${agr.agreement_rate !== null ? `, agreement ${esc(Math.round(agr.agreement_rate * 100))}%` : ''}. ${esc(agr.note)}</p>
+         <table><thead><tr><th>Triage band</th><th>Decided</th><th>Bound</th><th>Declined</th><th>Not taken up</th><th>Agreed</th><th>Disagreed</th></tr></thead><tbody>
+         ${Object.entries(agr.by_outcome_band).map(([name, r]) => bandRow(name, r)).join('')}
+         </tbody></table>
+         <table style="margin-top:6px"><thead><tr><th>Risk tier</th><th>Decided</th><th>Bound</th><th>Declined</th><th>Not taken up</th></tr></thead><tbody>
+         ${Object.entries(agr.by_risk_tier).map(([name, r]) => `<tr><td>${esc(name)}</td><td>${esc(r.decided)}</td><td>${esc(r.bound)}</td><td>${esc(r.declined)}</td><td>${esc(r.not_taken_up)}</td></tr>`).join('')}
+         </tbody></table>`
+      : '<span class="empty">No final decisions recorded yet — record one below and the agreement table appears.</span>';
+  } catch (e) {
+    $('duplicates').innerHTML = '<span class="empty">Duplicate findings unavailable.</span>';
+  }
+}
+
+async function resolveDuplicate(pairKey, decision) {
+  const actor = $('actor').value.trim();
+  if (!actor) { $('final-status').textContent = 'Enter the underwriter name in the gate panel first — a verdict is kept under its maker.'; return; }
+  const reason = $('dup-reason').value.trim();
+  if (!reason) { $('final-status').textContent = 'A resolution reason is required — it is the memory that keeps a dismissed pair out of the queue.'; return; }
+  const res = await fetch('/duplicates/resolve', {method: 'POST', headers: headers(), body: JSON.stringify({pair_key: pairKey, actor, decision, reason})});
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('final-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('final-status').textContent = `${pairKey}: ${body.status} by ${body.resolution.actor}.`;
+  loadDuplicates();
+}
+
+async function recordFinalDecision() {
+  const actor = $('actor').value.trim();
+  if (!actor) { $('final-status').textContent = 'Enter the underwriter name in the gate panel first — a final decision is kept under its decider.'; return; }
+  const submissionId = $('final-submission').value.trim();
+  if (!submissionId) { $('final-status').textContent = 'Enter a submission id first.'; return; }
+  const res = await fetch(`/submissions/${submissionId}/final-decision`, {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({actor, decision: $('final-decision').value, reason_code: $('final-reason-code').value.trim() || null})
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { $('final-status').textContent = 'Error ' + res.status + ': ' + (body.detail || ''); return; }
+  $('final-status').textContent = `${submissionId}: final decision ${body.final_decision} by ${body.final_decided_by} on ${body.final_decided_on}.`;
+  loadDuplicates();
+}
+
 $('analyze').addEventListener('click', analyze);
 $('approve').addEventListener('click', () => decide('approve'));
 $('reject').addEventListener('click', () => decide('reject'));
@@ -1442,6 +1521,8 @@ $('register-corpus').addEventListener('click', registerCorpus);
 $('corpus-triaged').addEventListener('click', corpusAsTriaged);
 $('corpus-diff-btn').addEventListener('click', corpusDiff);
 $('corpus-provider').addEventListener('click', corpusProviderImpact);
+$('refresh-duplicates').addEventListener('click', loadDuplicates);
+$('record-final').addEventListener('click', recordFinalDecision);
 loadSamples();
 loadEvals();
 loadInbox();
@@ -1451,6 +1532,7 @@ loadOpsDigest();
 loadDraftingRetention();
 loadCalibration();
 loadCorpus();
+loadDuplicates();
 </script>
 </body>
 </html>
