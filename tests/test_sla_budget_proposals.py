@@ -11,6 +11,8 @@ against the budgets that record resolves.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from underwriting_agent.proposals import (
@@ -183,13 +185,16 @@ def test_open_tier_and_rejected_direction_bind_the_scan():
 
 
 def test_acceptance_writes_sla_settings_and_the_queue_uses_them():
+    seven_days_ago = (
+        datetime.now(timezone.utc) - timedelta(days=7)
+    ).date().isoformat()
     store = _store_with(
         [
             _record("M-OK", "2026-09-25", "2026-10-03T10:00:00+00:00"),
-            # Awaiting, submitted Oct 1: at the real clock (Oct 10)
-            # it is 9 days old — past the 5-day moderate budget,
-            # inside a raised 10-day one.
-            _record("M-WAIT", "2026-10-01", None, status="awaiting_underwriter"),
+            # Awaiting, submitted 7 days before the real clock the
+            # queue reads — past the 5-day moderate budget, inside a
+            # raised 10-day one, whatever day the suite runs.
+            _record("M-WAIT", seven_days_ago, None, status="awaiting_underwriter"),
         ]
     )
     service = SubmissionService(store=store, checkpointer=False)
