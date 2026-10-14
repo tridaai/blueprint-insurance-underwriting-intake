@@ -18,9 +18,6 @@ The promise is precise, and it is enforced in code, not in prompts:
 - **The agent never declines on its own.** It drafts a decline
   *rationale*; the underwriter makes the decline decision.
 
-Everything is synthetic data. There is no real insurer, broker, or
-submission anywhere in this repository.
-
 <p align="center">
   <a href="https://trida.ai/blog/insurance-underwriting-intake-agent-blueprint">
     <img src="https://geeytzpdwvjojoie.public.blob.vercel-storage.com/blog/1791673945094-cover.webp" alt="Insurance Underwriting Intake Agent Blueprint" width="600">
@@ -1199,7 +1196,7 @@ honest full list.
 
 ## Limitations
 
-- Synthetic guidelines, appetite matrix, and authority limits — a
+- The guidelines, appetite matrix, and authority limits are a
   teaching model of underwriting rules, not a real carrier's.
 - The offline fallback composes template drafts; it demonstrates the
   plumbing and the guardrails, not model quality.
