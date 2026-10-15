@@ -16,6 +16,7 @@ the ops digest's snapshot counts on the advisory discipline.
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timezone
 
 import pytest
 
@@ -251,7 +252,13 @@ def test_the_digest_counts_ride_the_note_repairs():
             refusals=[_refusal(steered=False, checks=["no_bind_language"])],
         ),
     ]
-    digest = ops_digest(records)
+    # Pin the clock inside the follow-through window: the digest
+    # ages the fixture note (drafted 2026-10-01) against `now`, and
+    # unpinned this test time-bombs the day the note ages into an
+    # escalation and total_attention picks it up.
+    digest = ops_digest(
+        records, now=datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
+    )
     counts = digest["counts"]
     assert counts["status_note_repaired"] == 1
     assert counts["status_note_refusals"] == 1
